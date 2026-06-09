@@ -1,0 +1,28 @@
+# Node / pnpm
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+
+# Build output
+dist/
+coverage/
+.vitest/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Hardhat / Ignition (artifacts & cache; deployment journals are intentionally NOT ignored)
+artifacts/
+cache/
+.deployments-tmp/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+*.log

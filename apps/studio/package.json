@@ -1,0 +1,26 @@
+{
+  "name": "@redeploy/studio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Visual tool: drag-and-drop authoring of contract connections and configuration (emits spec files) plus a deployment inspector. React + React Flow added by its feature ticket.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}

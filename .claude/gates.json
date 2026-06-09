@@ -2,29 +2,59 @@
   "_README": "PROJECT ADAPTER. This is the ONLY file you must fill in per project. The generic agents/hooks read it. Leave a value as an empty string to mark a gate 'not configured' (it will be skipped, not failed). See docs/GETTING_STARTED.md and docs/PROMPTS.md.",
 
   "project": {
-    "name": "",
-    "language": "",
-    "packageManager": ""
+    "name": "reDeploy",
+    "language": "TypeScript + Solidity",
+    "packageManager": "pnpm"
   },
 
   "modules": [
     {
-      "name": "example-core",
+      "name": "contracts",
+      "path": "contracts",
+      "description": "Foundry project: sample interconnected Solidity contracts used as deployment fixtures. Solidity 0.8.28.",
+      "owner": ""
+    },
+    {
+      "name": "core",
       "path": "packages/core",
-      "description": "What lives here. Workers assigned to this module must not edit outside `path`.",
+      "description": "@redeploy/core — deployment engine over Hardhat Ignition: declarative spec, dependency resolution/ordering, idempotent journal-based resume. Base package; introduce no cycles.",
+      "owner": ""
+    },
+    {
+      "name": "config",
+      "path": "packages/config",
+      "description": "@redeploy/config — post-deployment configuration: declarative steps, resumable partial configuration, config-state idempotency. Builds on core.",
+      "owner": ""
+    },
+    {
+      "name": "verify",
+      "path": "packages/verify",
+      "description": "@redeploy/verify — source/bytecode verification (Etherscan/Sourcify) + on-chain assertion that live configuration matches the declared spec.",
+      "owner": ""
+    },
+    {
+      "name": "reader",
+      "path": "packages/reader",
+      "description": "@redeploy/reader — read-only library exposing deployment + config state via a typed API to external systems. Builds on core.",
+      "owner": ""
+    },
+    {
+      "name": "studio",
+      "path": "apps/studio",
+      "description": "@redeploy/studio — visual tool (React + React Flow): drag-and-drop authoring of connections/config (emits spec files) + deployment inspector (reads via reader).",
       "owner": ""
     }
   ],
 
   "gates": {
-    "_note": "Exact shell commands for this repo. Run from repo root. Empty string = skip.",
-    "install": "",
-    "build": "",
-    "lint": "",
-    "typecheck": "",
-    "test": "",
-    "test_affected": "",
-    "coverage": "",
+    "_note": "Exact shell commands for this repo. Run from repo root. Empty string = skip. TS via pnpm/vitest, Solidity via forge. test_affected currently runs the full suite (pnpm has no cheap affected filter here); refine later. TS lint (eslint) and slither are not wired yet — see the tooling ticket.",
+    "install": "pnpm install",
+    "build": "pnpm -r build && (cd contracts && forge build)",
+    "lint": "(cd contracts && forge fmt --check)",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test && (cd contracts && forge test)",
+    "test_affected": "pnpm -r test && (cd contracts && forge test)",
+    "coverage": "pnpm -r coverage",
     "coverage_threshold": 80,
     "e2e": "",
     "security": ""
@@ -33,7 +63,7 @@
   "review": {
     "lenses": ["correctness", "tests", "security", "performance"],
     "consensus": "all",
-    "_consensus_note": "'all' = every lens must approve; or an integer = that many approvals required.",
+    "_consensus_note": "'all' = every lens must approve; or an integer = that many approvals required. Solidity work leans hard on the security lens (reentrancy/access/overflow).",
     "skills": []
   },
 
@@ -42,8 +72,8 @@
     "worker_model": "sonnet",
     "explorer_model": "haiku",
     "reviewer_model": "opus",
-    "max_parallel_workers": 3,
-    "_note": "Opus to coordinate/review, Sonnet to build, Haiku to explore. Lower max_parallel_workers if review/merge is your bottleneck."
+    "max_parallel_workers": 2,
+    "_note": "Opus to coordinate/review, Sonnet to build, Haiku to explore. Start at 2 parallel workers; raise only when review+merge keeps up."
   },
 
   "merge": {

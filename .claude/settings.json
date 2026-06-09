@@ -32,7 +32,18 @@
       "Bash(git status)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
-      "Bash(git worktree:*)"
+      "Bash(git worktree:*)",
+      "Bash(git add:*)",
+      "Bash(git checkout:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm -r:*)",
+      "Bash(pnpm --filter:*)",
+      "Bash(forge build:*)",
+      "Bash(forge test:*)",
+      "Bash(forge fmt:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh label:*)",
+      "Bash(gh auth status)"
     ]
   }
 }
