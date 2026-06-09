@@ -23,6 +23,9 @@ cache/
 .env.*
 !.env.example
 
+# Claude Code local settings (runtime permission grants land here, not in the tracked settings.json)
+.claude/settings.local.json
+
 # Editor / OS
 .DS_Store
 *.log
