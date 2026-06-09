@@ -35,7 +35,7 @@ Entry format:
   runtime approval, plus a minimal `deny` list (force-push, `rm -rf`, reading `.env*`). reDeploy's committed
   `.claude/settings.json` (59 allow / 4 deny) is the tested reference. To commit it cleanly despite the
   runtime rewrite, stage via the git index (`git hash-object -w` + `git update-index --cacheinfo`).
-- Status: implemented in reDeploy (commit 0bb3ff6); ready to promote upstream as a PR.
+- Status: PR — upstream robercano/ai-project-orchestrator#1 (reDeploy reference commit 0bb3ff6).
 
 ### (B) Empty repo can't pass gates until a skeleton exists
 - Type: docs
@@ -45,7 +45,7 @@ Entry format:
   workspace first for the pilot to work.
 - Proposed change: Add a "bootstrap first" note: either scaffold a minimal buildable skeleton before wiring
   real gate commands, or keep gates empty (skip) until a bootstrap task lands. Make the ordering explicit.
-- Status: open
+- Status: PR — upstream robercano/ai-project-orchestrator#2.
 
 ### Reusable backlog seeder + GitHub Issues as the ticket source
 - Type: feature
@@ -54,7 +54,7 @@ Entry format:
   labels, skipped existing titles) to bulk-create a module-labeled backlog. The template doesn't provide this.
 - Proposed change: Ship an optional, generic `seed-issues.sh` example (labels per module from `gates.json`,
   idempotent create) and mention GitHub Issues as a first-class ticket source in `USAGE.md`.
-- Status: open
+- Status: PR — upstream robercano/ai-project-orchestrator#3.
 
 ### `test_affected` has no cheap pnpm-workspace equivalent
 - Type: docs
@@ -63,7 +63,7 @@ Entry format:
   "affected since base" filter without extra tooling. We set `test_affected` = full test suite as a stopgap.
 - Proposed change: Add per-stack guidance for `test_affected` (turbo/nx, `pnpm --filter "...[origin/main]"`,
   Foundry, etc.) and note that "= full test" is an acceptable starting point.
-- Status: open
+- Status: filed — upstream issue robercano/ai-project-orchestrator#4.
 
 ### Worked TS + Solidity (Foundry + Hardhat) adapter as a reference example
 - Type: info
@@ -72,7 +72,7 @@ Entry format:
   Solidity pnpm monorepo (vitest + forge gates, 6-module map). `PROMPTS.md` #8 mentions onboarding new stacks
   but ships no concrete non-JS example.
 - Proposed change: Add a sanitized TS+Solidity adapter snippet to the docs (or an `examples/` dir).
-- Status: open
+- Status: filed — upstream issue robercano/ai-project-orchestrator#6.
 
 ### (C) Concurrent config-file write safety under parallel subagents (re: anthropics/claude-code#29217)
 - Type: info
@@ -103,4 +103,4 @@ Entry format:
   index-bypass commit trick for `settings.json`; (4) **residual risk:** an implementer's `git add -A` can stage
   a grant-drifted `settings.json` into its PR — add an implementer instruction to never stage
   `.claude/settings*.json`, or a pre-commit guard.
-- Status: probe complete; ready to promote upstream as an issue (doc + mitigation guidance).
+- Status: filed — upstream issue robercano/ai-project-orchestrator#5 (doc + mitigation guidance).
