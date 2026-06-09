@@ -1,6 +1,36 @@
 {
-  "_README": "Generic harness settings. The hooks call .claude/scripts/gate.sh, which reads commands from .claude/gates.json — so you usually DON'T edit this file per project; you edit gates.json. Enable/disable hooks here as you see fit.",
-
+  "permissions": {
+    "allow": [
+      "Read(//**)",
+      "Bash(bash .claude/scripts/gate.sh:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git worktree:*)",
+      "Bash(cast --version)",
+      "Bash(npm --version)",
+      "Bash(solc --version)",
+      "Bash(git --version)",
+      "Bash(gh auth *)",
+      "Bash(pnpm --version)",
+      "Bash(yarn --version)",
+      "Bash(npx --no-install hardhat --version)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm -r build)",
+      "Bash(pnpm -r typecheck)",
+      "Bash(pnpm -r test)",
+      "Bash(forge build *)",
+      "Bash(forge test *)",
+      "Bash(forge fmt *)",
+      "Bash(echo \"fmt exit: $?\")",
+      "Bash(pnpm --filter @redeploy/core coverage)",
+      "Bash(chmod +x /home/rcano/Development/thesolidchain/reDeploy/.claude/scripts/seed-issues.sh)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -24,26 +54,5 @@
       }
     ]
   },
-
-  "permissions": {
-    "allow": [
-      "Read(//**)",
-      "Bash(bash .claude/scripts/gate.sh:*)",
-      "Bash(git status)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git worktree:*)",
-      "Bash(git add:*)",
-      "Bash(git checkout:*)",
-      "Bash(pnpm install:*)",
-      "Bash(pnpm -r:*)",
-      "Bash(pnpm --filter:*)",
-      "Bash(forge build:*)",
-      "Bash(forge test:*)",
-      "Bash(forge fmt:*)",
-      "Bash(gh issue:*)",
-      "Bash(gh label:*)",
-      "Bash(gh auth status)"
-    ]
-  }
+  "_README": "Generic harness settings. The hooks call .claude/scripts/gate.sh, which reads commands from .claude/gates.json — so you usually DON'T edit this file per project; you edit gates.json. Enable/disable hooks here as you see fit."
 }
