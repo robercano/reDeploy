@@ -5,63 +5,32 @@ import {Test} from "forge-std/Test.sol";
 import {Token} from "../src/Token.sol";
 import {Vault} from "../src/Vault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
-// ---------------------------------------------------------------------------
-// Malicious reentrant depositor — attempts reentrant deposit inside
-// the ERC20 transferFrom hook by overriding transferFrom via a fake token.
-// We test reentrancy through a surrogate fake-token approach below.
-// ---------------------------------------------------------------------------
-
-/// @dev Attacker contract that attempts a reentrant withdraw during the
-///      token.transfer() callback triggered by a first withdraw call.
-///      We use a real Token and fake the reentrancy by calling withdraw
-///      from within a helper that simulates an ERC20 transfer hook.
-contract ReentrancyAttacker {
-    Vault public vault;
-    Token public token;
-    bool private _attacking;
-
-    constructor(address vault_, address token_) {
-        vault = Vault(vault_);
-        token = Token(token_);
-    }
-
-    /// @dev Arm the attacker, approve vault, and attempt a deposit followed
-    ///      by a reentrant withdraw.  Because ERC20.transfer is not
-    ///      reentrant-hookable in the standard OZ impl we instead call
-    ///      withdraw a second time directly here to confirm the guard blocks it.
-    function attack(uint256 amount) external {
-        // Deposit first so we have balance.
-        token.approve(address(vault), amount);
-        vault.deposit(amount);
-
-        // Now attempt to call withdraw twice in the same call stack.
-        // The second call should be blocked by ReentrancyGuard.
-        _attacking = true;
-        vault.withdraw(amount);
-    }
-
-    /// @dev Called by Vault's nonReentrant via normal flow — we try to call
-    ///      withdraw again recursively. In practice nonReentrant blocks this.
-    receive() external payable {
-        if (_attacking) {
-            _attacking = false;
-            vault.withdraw(1);
-        }
-    }
-}
-
-/// @dev A minimal ERC20 stub whose `transferFrom` re-enters `vault.deposit`
-///      so we can verify the ReentrancyGuard blocks the inner call.
+/// @dev Minimal ERC20 stub that re-enters the Vault it is wired to: during
+///      `transferFrom` (the deposit path) or `transfer` (the withdraw path),
+///      depending on the armed attack mode. The vault is wired via setVault()
+///      after deployment so token and vault reference EACH OTHER — the inner
+///      call hits the very vault whose nonReentrant lock is held.
 contract MaliciousToken is IERC20 {
+    enum Attack {
+        None,
+        OnTransferFrom,
+        OnTransfer
+    }
+
     Vault public vault;
-    address public owner;
+    Attack public attack;
     mapping(address => uint256) private _bal;
     mapping(address => mapping(address => uint256)) private _allowance;
 
-    constructor(address vault_) {
+    function setVault(address vault_) external {
         vault = Vault(vault_);
-        owner = msg.sender;
+    }
+
+    function setAttack(Attack attack_) external {
+        attack = attack_;
     }
 
     function mint(address to, uint256 amount) external {
@@ -75,6 +44,11 @@ contract MaliciousToken is IERC20 {
     function transfer(address to, uint256 amount) external override returns (bool) {
         _bal[msg.sender] -= amount;
         _bal[to] += amount;
+        if (attack == Attack.OnTransfer) {
+            attack = Attack.None;
+            // Re-enter the vault mid-withdraw — nonReentrant must block this.
+            vault.withdraw(1);
+        }
         return true;
     }
 
@@ -83,13 +57,14 @@ contract MaliciousToken is IERC20 {
         override
         returns (bool)
     {
-        // Re-enter vault.deposit here.
-        // nonReentrant should block this inner call.
         _allowance[from][msg.sender] -= amount;
         _bal[from] -= amount;
         _bal[to] += amount;
-        // Attempt reentrant deposit — should revert.
-        vault.deposit(1);
+        if (attack == Attack.OnTransferFrom) {
+            attack = Attack.None;
+            // Re-enter the vault mid-deposit — nonReentrant must block this.
+            vault.deposit(1);
+        }
         return true;
     }
 
@@ -323,7 +298,7 @@ contract VaultTest is Test {
 
         vm.startPrank(user);
         token.approve(address(vault), 1e18);
-        vm.expectRevert(); // OZ Pausable: EnforcedPause
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         vault.deposit(1e18);
         vm.stopPrank();
     }
@@ -339,7 +314,7 @@ contract VaultTest is Test {
         vault.pause();
 
         vm.prank(user);
-        vm.expectRevert(); // OZ Pausable: EnforcedPause
+        vm.expectRevert(Pausable.EnforcedPause.selector);
         vault.withdraw(500e18);
     }
 
@@ -410,28 +385,40 @@ contract VaultTest is Test {
     // Reentrancy guard
     // ------------------------------------------------------------------
 
-    /// @dev Verify that a malicious token attempting reentrant deposit during
-    ///      transferFrom is blocked by ReentrancyGuard.
-    function test_ReentrancyGuardBlocksReentrantDeposit() public {
-        // Deploy vault with a malicious token.
-        MaliciousToken malToken = new MaliciousToken(address(0)); // placeholder vault
-        // We need a vault built on the malicious token.
-        vm.prank(admin);
-        Vault malVault = new Vault(address(malToken));
-        // Wire the malicious token to point at the real vault.
-        malToken = new MaliciousToken(address(malVault));
-
-        // Rebuild vault pointing to the wired malToken.
+    /// @dev Build a (malicious token, vault) pair that reference each other,
+    ///      funded and approved for this test contract.
+    function _wireMaliciousVault() private returns (MaliciousToken malToken, Vault malVault) {
+        malToken = new MaliciousToken();
         vm.prank(admin);
         malVault = new Vault(address(malToken));
+        malToken.setVault(address(malVault));
 
-        // Give the test contract some malicious tokens.
         malToken.mint(address(this), 1_000e18);
         malToken.approve(address(malVault), type(uint256).max);
+    }
 
-        // Calling deposit should trigger the reentrant deposit inside
-        // MaliciousToken.transferFrom, which nonReentrant should block.
-        vm.expectRevert(); // OZ ReentrancyGuard: ReentrancyGuardReentrantCall
+    /// @dev A malicious token re-entering deposit() during transferFrom must be
+    ///      blocked by the guard of the SAME vault (asserted via the specific
+    ///      ReentrancyGuardReentrantCall selector — a bare expectRevert would
+    ///      also pass on unrelated failures).
+    function test_ReentrancyGuardBlocksReentrantDeposit() public {
+        (MaliciousToken malToken, Vault malVault) = _wireMaliciousVault();
+
+        malToken.setAttack(MaliciousToken.Attack.OnTransferFrom);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
         malVault.deposit(100e18);
+    }
+
+    /// @dev A malicious token re-entering withdraw() during the payout transfer
+    ///      must be blocked by the guard.
+    function test_ReentrancyGuardBlocksReentrantWithdraw() public {
+        (MaliciousToken malToken, Vault malVault) = _wireMaliciousVault();
+
+        // Benign deposit first so there is a balance to withdraw.
+        malVault.deposit(100e18);
+
+        malToken.setAttack(MaliciousToken.Attack.OnTransfer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        malVault.withdraw(50e18);
     }
 }
