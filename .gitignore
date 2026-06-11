@@ -12,6 +12,7 @@ coverage/
 contracts/out/
 contracts/cache/
 contracts/broadcast/
+.cache/
 
 # Hardhat / Ignition (artifacts & cache; deployment journals are intentionally NOT ignored)
 artifacts/
