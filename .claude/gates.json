@@ -50,7 +50,7 @@
     "_note": "Exact shell commands for this repo. Run from repo root. Empty string = skip. TS via pnpm/vitest, Solidity via forge. test_affected currently runs the full suite (pnpm has no cheap affected filter here); refine later. TS lint (eslint) and slither are not wired yet — see the tooling ticket.",
     "install": "pnpm install",
     "build": "pnpm -r build && (cd contracts && forge build)",
-    "lint": "(cd contracts && forge fmt --check)",
+    "lint": "pnpm -r lint && pnpm exec solhint 'contracts/src/**/*.sol' 'contracts/test/**/*.sol' && (cd contracts && forge fmt --check)",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && (cd contracts && forge test)",
     "test_affected": "pnpm -r test && (cd contracts && forge test)",
