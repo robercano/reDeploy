@@ -89,14 +89,12 @@ auto-expire after **7 days** — re-arm at session start by asking: *"set up the
 cron"*. For tighter cadence during an active work session, additionally run
 `/loop 5m check reDeploy for new issues and PR comments`.
 
-Re-arm spec (what the cron job does, `CronCreate` schedule `6,21,36,51 * * * *`):
-1. Read ISO-8601 cursor from `.claude/state/notify-cursor` (missing → 30 min ago). Capture `now` first.
-2. Query with `gh` (at `~/.local/bin`): new issues (`repos/…/issues?since=`, drop `.pull_request != null`),
-   PR review comments (`pulls/comments?since=`), issue-comments on PRs (`issues/comments?since=`, keep
-   `html_url ~ /pull/`), and reviews on open PRs (`pulls/<n>/reviews`, `submitted_at > cursor`).
-3. Write `now` to the cursor file regardless of findings.
-4. Nothing new → reply one line and stop. New items → summarize (number, author, gist, link) and ask
-   whether to act (address PR comments / start an issue) — never start implementation unprompted.
+Re-arm spec (`CronCreate` schedule `6,21,36,51 * * * *`): the cron prompt runs
+`bash .claude/scripts/notify-poll.sh` — pre-approved in `.claude/settings.json`, so it never blocks on a
+permission prompt. The script reads/advances the cursor and prints the four sections (issues, PR review
+comments, issue-comments on PRs, PR reviews) as JSON; the cron prompt then either replies one line
+("No new GitHub activity on reDeploy.") or summarizes the items (number, author, gist, link) and asks
+whether to act (address PR comments / start an issue) — never starting implementation unprompted.
 
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface
