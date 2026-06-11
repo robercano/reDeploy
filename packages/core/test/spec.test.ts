@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validateSpec } from "../src/spec/validate.js";
+import { LITERAL_MAX_DEPTH } from "../src/spec/schema.js";
 import type { DeploymentSpec } from "../src/spec/types.js";
 
 // ---------------------------------------------------------------------------
@@ -516,6 +517,95 @@ describe("validateSpec — large graph (stack overflow safety)", () => {
     if (!result.ok) {
       const cycleErrors = result.errors.filter((e) => e.code === "CYCLE");
       expect(cycleErrors.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Literal nesting depth — DoS / stack-overflow safety
+// ---------------------------------------------------------------------------
+
+describe("validateSpec — literal nesting depth safety", () => {
+  /**
+   * Build an array nested `depth` levels deep using an iterative loop.
+   * At depth 0 this is the scalar 42; at depth 1 it is [42]; at depth 2 it
+   * is [[42]], and so on.  We never recurse here to avoid a stack overflow in
+   * the test builder itself.
+   */
+  function buildNestedArray(depth: number): unknown {
+    let current: unknown = 42;
+    for (let i = 0; i < depth; i++) {
+      current = [current];
+    }
+    return current;
+  }
+
+  it("rejects a deeply nested literal (50_000 levels) without throwing", () => {
+    // Build an array nested 50_000 deep using an iterative loop — never recurse.
+    const deepValue = buildNestedArray(50_000);
+    const spec = {
+      version: 1,
+      contracts: [
+        {
+          id: "c",
+          contract: "C",
+          args: [{ kind: "literal", value: deepValue }],
+        },
+      ],
+    };
+
+    // Must not throw (the documented contract of validateSpec).
+    let result!: ReturnType<typeof validateSpec>;
+    expect(() => {
+      result = validateSpec(spec);
+    }).not.toThrow();
+
+    // Must return a structured rejection with INVALID_SHAPE.
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const shapeErrors = result.errors.filter((e) => e.code === "INVALID_SHAPE");
+      expect(shapeErrors.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("accepts a literal nested just within the depth cap (depth 10)", () => {
+    // Depth 10 is well within LITERAL_MAX_DEPTH (32), so it should pass.
+    expect(10).toBeLessThanOrEqual(LITERAL_MAX_DEPTH);
+    const nestedValue = buildNestedArray(10);
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "c",
+          contract: "C",
+          args: [{ kind: "literal", value: nestedValue }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a literal at exactly LITERAL_MAX_DEPTH + 1 levels", () => {
+    // One level beyond the cap should be cleanly rejected.
+    const tooDeep = buildNestedArray(LITERAL_MAX_DEPTH + 1);
+    let result!: ReturnType<typeof validateSpec>;
+    expect(() => {
+      result = validateSpec({
+        version: 1,
+        contracts: [
+          {
+            id: "c",
+            contract: "C",
+            args: [{ kind: "literal", value: tooDeep }],
+          },
+        ],
+      });
+    }).not.toThrow();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const shapeErrors = result.errors.filter((e) => e.code === "INVALID_SHAPE");
+      expect(shapeErrors.length).toBeGreaterThan(0);
     }
   });
 });

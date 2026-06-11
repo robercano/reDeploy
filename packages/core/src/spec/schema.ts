@@ -13,8 +13,41 @@ import type { ContractArg, ContractEntry, DeploymentSpec, LiteralValue } from ".
 // ---------------------------------------------------------------------------
 
 /**
- * Lazy recursive schema for LiteralValue.
- * Accepts: string | number | boolean | null | LiteralValue[]
+ * Maximum nesting depth allowed for literal array values.
+ * Inputs deeper than this cap are rejected with a clean structured error
+ * rather than causing a stack overflow in zod's recursive descent.
+ */
+export const LITERAL_MAX_DEPTH = 32;
+
+/**
+ * Iteratively measure the maximum nesting depth of a literal value using an
+ * explicit stack — no recursion so adversarial deeply-nested inputs cannot
+ * cause a stack overflow here.
+ *
+ * A scalar (non-array) has depth 0. A one-level array like `[1, 2]` has depth
+ * 1. `[[1]]` has depth 2, and so on.
+ */
+function measureLiteralDepth(value: unknown): number {
+  let maxDepth = 0;
+  // Each entry is [node, currentDepth].
+  const stack: Array<[unknown, number]> = [[value, 0]];
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop()!;
+    if (depth > maxDepth) {
+      maxDepth = depth;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+  return maxDepth;
+}
+
+/**
+ * Scalar schema for LiteralValue leaf nodes.
+ * Accepts: string | number | boolean | null
  */
 const literalScalarSchema: z.ZodType<string | number | boolean | null> = z.union([
   z.string(),
@@ -23,10 +56,34 @@ const literalScalarSchema: z.ZodType<string | number | boolean | null> = z.union
   z.null(),
 ]);
 
-// We use z.lazy for the recursive array variant.
-const literalValueSchema: z.ZodType<LiteralValue> = z.lazy(() =>
-  z.union([literalScalarSchema, z.array(literalValueSchema)]),
+// Internal lazy recursive schema for LiteralValue (no depth bound).
+// The depth bound is enforced by literalValueSchema below BEFORE this schema
+// is allowed to recurse into user input.
+const literalValueSchemaBase: z.ZodType<LiteralValue> = z.lazy(() =>
+  z.union([literalScalarSchema, z.array(literalValueSchemaBase)]),
 );
+
+/**
+ * LiteralValue schema with an iterative depth guard.
+ *
+ * The superRefine runs an iterative (non-recursive) depth walk before
+ * handing off to zod's recursive descent. Inputs nested beyond
+ * LITERAL_MAX_DEPTH are rejected with a clean INVALID_SHAPE message
+ * instead of crashing with a RangeError.
+ */
+const literalValueSchema: z.ZodType<LiteralValue> = z
+  .unknown()
+  .superRefine((val, ctx) => {
+    const depth = measureLiteralDepth(val);
+    if (depth > LITERAL_MAX_DEPTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Literal value exceeds maximum nesting depth of ${LITERAL_MAX_DEPTH}`,
+      });
+      return z.NEVER;
+    }
+  })
+  .pipe(literalValueSchemaBase) as z.ZodType<LiteralValue>;
 
 // ---------------------------------------------------------------------------
 // Contract argument discriminated union

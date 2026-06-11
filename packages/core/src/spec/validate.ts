@@ -107,7 +107,7 @@ function collectCrossFieldErrors(spec: DeploymentSpec): SpecError[] {
               message: `Contract "${entry.id}" references itself in args`,
             });
           } else if (!allIds.has(arg.contract)) {
-            // Missing ref — guard prototype pollution: only report if key is own
+            // Missing ref — Set.has() is pollution-safe; no extra own-key guard needed.
             errors.push({
               path: argPath,
               code: "MISSING_REF",
@@ -303,7 +303,27 @@ function detectCycles(spec: DeploymentSpec): SpecError[] {
  */
 export function validateSpec(input: unknown): ValidateResult {
   // --- Phase 1: Zod shape validation ----------------------------------------
-  const parseResult = deploymentSpecSchema.safeParse(input);
+  // We wrap safeParse in a try/catch because zod's recursive descent on
+  // pathological inputs (e.g. extremely deeply nested arrays) can throw a
+  // V8 RangeError ("Maximum call stack size exceeded") that safeParse does
+  // NOT convert to a ZodError. The depth-bound in schema.ts (LITERAL_MAX_DEPTH)
+  // prevents most such cases; this catch is the last-resort safety net so that
+  // validateSpec never throws on untrusted input.
+  let parseResult: ReturnType<typeof deploymentSpecSchema.safeParse>;
+  try {
+    parseResult = deploymentSpecSchema.safeParse(input);
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          path: "",
+          code: "INVALID_SHAPE",
+          message: "spec could not be parsed (too deeply nested or malformed)",
+        },
+      ],
+    };
+  }
 
   if (!parseResult.success) {
     // Convert all zod issues to SpecErrors
