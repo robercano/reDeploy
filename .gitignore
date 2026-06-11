@@ -1,0 +1,36 @@
+# Node / pnpm
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+
+# Build output
+dist/
+coverage/
+.vitest/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+.cache/
+
+# Hardhat / Ignition (artifacts & cache; deployment journals are intentionally NOT ignored)
+artifacts/
+cache/
+.deployments-tmp/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code local settings (runtime permission grants land here, not in the tracked settings.json)
+.claude/settings.local.json
+
+# Claude Code runtime state (notification poll cursor, durable cron jobs)
+.claude/state/
+.claude/scheduled_tasks.json
+
+# Editor / OS
+.DS_Store
+*.log
