@@ -140,10 +140,13 @@ function buildCreationOrder(entries: readonly ContractEntry[]): ContractEntry[] 
     if (deg === 0) queue.push(id);
   }
 
+  // head is an O(1) cursor into queue — avoids O(N) Array.shift() per dequeue,
+  // keeping the overall sort at O(V+E) as documented above.
+  let head = 0;
   const result: ContractEntry[] = [];
-  while (queue.length > 0) {
-    // Non-null assertion safe: queue only contains ids from idToEntry
-    const id = queue.shift()!;
+  while (head < queue.length) {
+    // Non-null assertion safe: head is always < queue.length in this loop
+    const id = queue[head++]!;
     const entry = idToEntry.get(id);
     if (entry === undefined) {
       // Validator guarantees all ids exist; this path should never be reached
