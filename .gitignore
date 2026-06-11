@@ -34,3 +34,7 @@ cache/
 # Editor / OS
 .DS_Store
 *.log
+
+# Foundry deps (fetched via forge install --no-git; re-fetch on fresh clones)
+contracts/lib/
+lib/
