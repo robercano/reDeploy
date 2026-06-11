@@ -55,6 +55,27 @@ implementer ──done──▶ gates (build/lint/types/test/coverage via gate.s
                      PR / merge (per gates.json merge.policy)
 ```
 
+## Ticket → PR → merge (the standing loop)
+1. **Plan** — GitHub Issues are the backlog: planned conversationally (then seeded via
+   `.claude/scripts/seed-issues.sh`) or added manually. Label with `module:*` / `type:*`.
+2. **Build** — "Work issue #N": the orchestrator scopes, implementers build in isolated worktrees,
+   reviewer lenses gate, `gate.sh` gates must be green.
+3. **PR** — created with `.claude/scripts/bot-gh.sh pr create …` so the PR author is the **bot machine
+   account** (token in `.env` → `REDEPLOY_BOT_TOKEN`), not the repo owner. GitHub hard-blocks PR authors
+   from approving their own PRs — bot authorship is what makes a formal human Approve possible. Only PR
+   creation uses the bot; commits, pushes and everything else stay on the owner's account.
+4. **Review** — the owner reviews on GitHub. New review comments are picked up by the notification poll
+   (below) or by asking *"address the comments on PR #N"*. Fixes go through the same
+   implementer → reviewer loop on the same branch; pushing updates the PR in place.
+5. **Merge** — owner approves; merge per `gates.json.merge`; clean up the worktree (see below).
+
+### Notifications (new issues / PR comments)
+A **durable Claude Code cron** polls `robercano/reDeploy` every ~15 min while Claude Code is running:
+new issues and new PR comments/reviews since the cursor in `.claude/state/notify-cursor` (gitignored)
+are summarized in the session, with an offer to kick the orchestrator. Durable cron jobs auto-expire
+after **7 days** — re-arm by asking: *"set up the reDeploy notification cron"*. For tighter cadence
+during an active work session, additionally run `/loop 5m check reDeploy for new issues and PR comments`.
+
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface
   at PR time. Cleanest/auditable.

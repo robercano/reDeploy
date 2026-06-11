@@ -26,6 +26,10 @@ cache/
 # Claude Code local settings (runtime permission grants land here, not in the tracked settings.json)
 .claude/settings.local.json
 
+# Claude Code runtime state (notification poll cursor, durable cron jobs)
+.claude/state/
+.claude/scheduled_tasks.json
+
 # Editor / OS
 .DS_Store
 *.log
