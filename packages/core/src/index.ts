@@ -1,9 +1,15 @@
-export const name = "@redeploy/core";
+// Declarative deployment spec — types, schema, and validation
+export type {
+  RefArg,
+  LiteralArg,
+  LiteralScalar,
+  LiteralValue,
+  ContractArg,
+  ContractEntry,
+  DeploymentSpec,
+} from "./spec/types.js";
 
-/**
- * Placeholder export so the package builds and tests green before the
- * deployment engine lands. Replace with the real Ignition-backed API.
- */
-export function placeholder(): string {
-  return name;
-}
+export { contractArgSchema, contractEntrySchema, deploymentSpecSchema } from "./spec/schema.js";
+
+export type { SpecError, SpecErrorCode, ValidateResult } from "./spec/validate.js";
+export { validateSpec } from "./spec/validate.js";
