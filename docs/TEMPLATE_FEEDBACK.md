@@ -85,6 +85,9 @@ Entry format:
   one free generically-named machine account is ToS-allowed and reusable across repos; classic PAT —
   fine-grained can't target other personal accounts' repos) + a USAGE.md "PR feedback loop" section
   (ticket → PR → review-comments-via-orchestrator → merge, plus cron//loop polling with a cursor file).
+  Follow-up learning (reDeploy fce0356): an INLINE polling command (loops, `$()`, redirects) never matches
+  a permission rule → every cron firing blocks on approval. Ship `notify-poll.sh` (repo derived from the
+  git remote) and pre-approve that one command in `settings.json`.
 - Status: PR — upstream robercano/ai-project-orchestrator#7 (reDeploy reference: bot-gh.sh + USAGE.md
   on branch chore/orchestrator-setup).
 
