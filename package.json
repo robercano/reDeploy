@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Hardhat Ignition-based deployment system: declarative deploy/config, idempotent resume, verification, reader library, and a visual authoring/inspection studio.",
+  "type": "module",
   "packageManager": "pnpm@10.33.4",
   "engines": {
     "node": ">=20"
@@ -15,7 +16,11 @@
     "lint": "pnpm -r --if-present lint"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "typescript-eslint": "^8.61.0",
+    "solhint": "^5.2.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]
