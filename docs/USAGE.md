@@ -61,7 +61,7 @@ implementer ──done──▶ gates (build/lint/types/test/coverage via gate.s
 2. **Build** — "Work issue #N": the orchestrator scopes, implementers build in isolated worktrees,
    reviewer lenses gate, `gate.sh` gates must be green.
 3. **PR** — created with `.claude/scripts/bot-gh.sh pr create …` so the PR author is the **bot machine
-   account** (token in `.env` → `REDEPLOY_BOT_TOKEN`), not the repo owner. GitHub hard-blocks PR authors
+   account** (token in `.env` → `GH_BOT_TOKEN`), not the repo owner. GitHub hard-blocks PR authors
    from approving their own PRs — bot authorship is what makes a formal human Approve possible. Only PR
    creation uses the bot; commits, pushes and everything else stay on the owner's account.
 4. **Review** — the owner reviews on GitHub. New review comments are picked up by the notification poll
@@ -69,12 +69,34 @@ implementer ──done──▶ gates (build/lint/types/test/coverage via gate.s
    implementer → reviewer loop on the same branch; pushing updates the PR in place.
 5. **Merge** — owner approves; merge per `gates.json.merge`; clean up the worktree (see below).
 
+### One-time setup: the bot machine account (~10 min, human-only)
+1. Create a **free** GitHub account for the bot. GitHub ToS allows exactly **one** free machine account
+   alongside your personal account — so name it generically (e.g. `<you>-assistant-bot`) and **reuse it
+   across all your repos**, adding it as a collaborator wherever it should open PRs.
+2. From the owner account: repo **Settings → Collaborators →** invite the bot with **write** access;
+   accept the invite as the bot.
+3. As the bot: **Settings → Developer settings → Personal access tokens → Tokens (classic)** → generate
+   with `repo` scope. Classic, not fine-grained — fine-grained PATs can't reliably target repos owned by
+   *another* personal account.
+4. Put it in `.env` (gitignored) as `GH_BOT_TOKEN=…`. Verify with:
+   `.claude/scripts/bot-gh.sh api user --jq .login` → should print the bot's username.
+
 ### Notifications (new issues / PR comments)
-A **durable Claude Code cron** polls `robercano/reDeploy` every ~15 min while Claude Code is running:
+A **Claude Code cron** polls `robercano/reDeploy` every ~15 min while Claude Code is running:
 new issues and new PR comments/reviews since the cursor in `.claude/state/notify-cursor` (gitignored)
-are summarized in the session, with an offer to kick the orchestrator. Durable cron jobs auto-expire
-after **7 days** — re-arm by asking: *"set up the reDeploy notification cron"*. For tighter cadence
-during an active work session, additionally run `/loop 5m check reDeploy for new issues and PR comments`.
+are summarized in the session, with an offer to kick the orchestrator. Cron jobs are session-scoped and
+auto-expire after **7 days** — re-arm at session start by asking: *"set up the reDeploy notification
+cron"*. For tighter cadence during an active work session, additionally run
+`/loop 5m check reDeploy for new issues and PR comments`.
+
+Re-arm spec (what the cron job does, `CronCreate` schedule `6,21,36,51 * * * *`):
+1. Read ISO-8601 cursor from `.claude/state/notify-cursor` (missing → 30 min ago). Capture `now` first.
+2. Query with `gh` (at `~/.local/bin`): new issues (`repos/…/issues?since=`, drop `.pull_request != null`),
+   PR review comments (`pulls/comments?since=`), issue-comments on PRs (`issues/comments?since=`, keep
+   `html_url ~ /pull/`), and reviews on open PRs (`pulls/<n>/reviews`, `submitted_at > cursor`).
+3. Write `now` to the cursor file regardless of findings.
+4. Nothing new → reply one line and stop. New items → summarize (number, author, gist, link) and ask
+   whether to act (address PR comments / start an issue) — never start implementation unprompted.
 
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface

@@ -74,6 +74,20 @@ Entry format:
 - Proposed change: Add a sanitized TS+Solidity adapter snippet to the docs (or an `examples/` dir).
 - Status: filed — upstream issue robercano/ai-project-orchestrator#6.
 
+### (D) Owner-authored PRs can't be formally approved + no PR-feedback/notification loop
+- Type: feature
+- Tier: generic
+- Evidence: With `pr-per-agent`, agents create PRs via the owner's `gh` auth → GitHub hard-blocks PR
+  authors from approving their own PRs, so the "Sprint demo" checkpoint can never produce a formal
+  Approve (hit on robercano/reDeploy#14). USAGE.md also documented nothing about how review comments
+  flow back into the implementer loop, or how the agent learns of new tickets/comments unprompted.
+- Proposed change: Ship `bot-gh.sh` (gh wrapper as a bot machine account, `GH_BOT_TOKEN` in `.env`;
+  one free generically-named machine account is ToS-allowed and reusable across repos; classic PAT —
+  fine-grained can't target other personal accounts' repos) + a USAGE.md "PR feedback loop" section
+  (ticket → PR → review-comments-via-orchestrator → merge, plus cron//loop polling with a cursor file).
+- Status: PR — upstream robercano/ai-project-orchestrator#7 (reDeploy reference: bot-gh.sh + USAGE.md
+  on branch chore/orchestrator-setup).
+
 ### (C) Concurrent config-file write safety under parallel subagents (re: anthropics/claude-code#29217)
 - Type: info
 - Tier: generic
