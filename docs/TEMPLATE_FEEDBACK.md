@@ -88,8 +88,22 @@ Entry format:
   Follow-up learning (reDeploy fce0356): an INLINE polling command (loops, `$()`, redirects) never matches
   a permission rule → every cron firing blocks on approval. Ship `notify-poll.sh` (repo derived from the
   git remote) and pre-approve that one command in `settings.json`.
+- Follow-up (2026-06-16): the bot needs **per-repo collaborator access**, and this bites silently. Opening
+  the #8 PR in a *second, private* repo (`ai-project-orchestrator` itself) failed with the opaque
+  `GraphQL: Could not resolve to a Repository with the name '<owner>/<repo>'` — the bot simply couldn't see
+  the private repo because it had only ever been added to reDeploy. `bot-gh.sh`'s header notes "add it as a
+  collaborator (write) on each repo" (setup step 2), but nothing enforces or surfaces it: the failure reads
+  like a typo'd repo name, not a missing grant. Fix needed two API calls — `PUT repos/<r>/collaborators/<bot>
+  -f permission=push` (owner auth) then accept the invite as the bot (`PATCH user/repository_invitations/<id>`
+  with the bot token).
+- Proposed change (follow-up): (1) add a **preflight to `bot-gh.sh`** — when args contain `--repo OWNER/NAME`
+  (or a `pr create` in a repo cwd), do a cheap `gh repo view` with the bot token first and, on failure, print
+  the exact collaborator-grant + invite-accept commands instead of letting the opaque GraphQL error surface;
+  (2) document the per-repo "invite + accept" one-time step (and the gh recipe) in the USAGE.md PR-feedback
+  section, not only in the script header.
 - Status: PR — upstream robercano/ai-project-orchestrator#7 (reDeploy reference: bot-gh.sh + USAGE.md
-  on branch chore/orchestrator-setup).
+  on branch chore/orchestrator-setup). Follow-up (collaborator preflight + docs): **open** — not yet
+  promoted; #7 already merged, so this needs a fresh upstream PR/issue.
 
 ### (C) Concurrent config-file write safety under parallel subagents (re: anthropics/claude-code#29217)
 - Type: info
@@ -121,3 +135,77 @@ Entry format:
   a grant-drifted `settings.json` into its PR — add an implementer instruction to never stage
   `.claude/settings*.json`, or a pre-commit guard.
 - Status: filed — upstream issue robercano/ai-project-orchestrator#5 (doc + mitigation guidance).
+
+---
+
+> **emdash feature-comparison batch (filed 2026-06-12).** Entries (E)–(H) were surfaced by comparing this
+> headless harness against [emdash](https://github.com/generalaction/emdash) (YC W26, Apache-2.0 desktop GUI
+> for agents-in-worktrees) while driving the template downstream on reDeploy. Thesis: the two are
+> **complementary** — emdash as a visual cockpit, this harness as the autonomous engine.
+
+### (E) No server-side gate enforcement — ship a CI workflow that runs gates.json on PRs
+- Type: feature
+- Tier: generic
+- Evidence: The harness enforces gates locally (`settings.json` hooks + `gate.sh`, plus the orchestrator
+  running them before opening a PR), but **nothing enforces gates at the GitHub PR level** — the template
+  ships no `.github/workflows/`. Downstream (reDeploy), a PR merged with an *empty* status-check rollup: the
+  only thing between a red gate and `main` was the orchestrator remembering to run `gate.sh`. emdash treats
+  **GitHub Actions as the source of truth** for pre-merge checks (it only *monitors* check runs), so any
+  visual front-end over this harness expects server-side checks to exist.
+- Proposed change: Ship a generated `.github/workflows/gates.yml` (+ a `PROMPTS.md` entry to draft it from
+  `gates.json`) that runs each gate (`build`/`lint`/`typecheck`/`test`/`coverage`) on `pull_request`,
+  mirroring the local gate commands — generate the job matrix from `gates.json` `modules` so it stays a
+  config edit, not hand-maintained YAML. Document **branch protection (required checks)** as the enforcement
+  teeth, and enforce `coverage_threshold` in CI.
+- Status: filed — upstream issue robercano/ai-project-orchestrator#8.
+
+### (F) Per-worktree setup/teardown lifecycle so isolated workers can run all gates
+- Type: feature
+- Tier: generic
+- Evidence: Implementers and the test-runner work in **isolated git worktrees**, but a fresh worktree lacks
+  toolchain state that lives outside the tree — freshly installed `node_modules`, or Foundry libs pulled by
+  `forge install`. Downstream (reDeploy), worktree workers **could not run the `forge` gate** until a one-time
+  `forge install` was done by hand in the main checkout; the orchestrator had to run the full forge suite
+  itself *after* the fact, defeating in-worktree gating. emdash handles this with per-worktree lifecycle
+  scripts in `.emdash.json` (`scripts.setup`/`run`/`teardown`).
+- Proposed change: Add an optional **per-worktree lifecycle** to the adapter — e.g. `gates.json` →
+  `worktree.setup`/`worktree.teardown`, or a `settings.json` hook on worktree create/remove — that bootstraps
+  a worktree on creation (install deps, `forge install`, link shared caches) and tears down on removal. Makes
+  *"every gate runs in isolation"* actually true.
+- Status: filed — upstream issue robercano/ai-project-orchestrator#9.
+
+### (G) Evaluate an optional visual cockpit (emdash) as a front-end over the headless pipeline
+- Type: info
+- Tier: generic
+- Evidence: This harness is **headless/CLI-first** (code-defined fan-out, gate-as-code, adversarial multi-lens
+  review, cron poll + scheduled wakeups). emdash covers the *overlapping* layer — "run N agents in worktrees +
+  diff/review/merge UX" — with a polished desktop GUI, ~27 providers, SSH/SFTP remote, scheduled automations,
+  and GitHub-check surfacing. But emdash has **no role-based orchestration, no local gate enforcement, no
+  adversarial review, and no headless mode** — so the two are complementary, not substitutes.
+- Proposed change: Spike whether emdash (or similar) can sit on top of the **same worktrees** as a visual
+  front-end while this harness stays the autonomous engine. Document the integration seam (both drive git
+  worktrees — pick one driver per session to avoid clutter), what must exist for checks to show up in such a
+  GUI (depends on (E) — server-side gates), and what the harness keeps that the GUI can't replace
+  (gates-as-code, defined roles, adversarial review, headless autonomy). Outcome is a `docs/` decision note,
+  not necessarily an integration.
+- Status: filed — upstream issue robercano/ai-project-orchestrator#10.
+
+### (H) Self-host: a self-adapter + fixture target so the template can iterate on itself
+- Type: feature
+- Tier: generic
+- Evidence: The template drives a *target* project via the adapter (`gates.json` + `CLAUDE.md`). To improve the
+  harness **using** the harness, the orchestrator repo must become its own target (the bootstrap/chicken-and-egg
+  problem). Two things make it tractable: (1) **worktree isolation already breaks the immediate cycle** —
+  implementers edit candidate `.claude/` files on a branch in a worktree while the driving session keeps the
+  definitions it loaded at start; (2) **self-hosting promotion** — harness `vN` drives the change producing
+  `vN+1`, then you restart the session to adopt it (like a compiler compiling its successor); agent/`settings`/
+  hook changes only take effect on a *fresh* session, so they need a smoke test that launches a sub-session in
+  the candidate worktree.
+- Proposed change: Ship a **self-adapter** so the repo dogfoods itself — its own `gates.json` over the harness
+  artifacts (`lint`: shellcheck `.claude/scripts/*.sh` + `node --check` on workflows + markdownlint docs;
+  `build`/`typecheck`: JSON-schema-validate `gates.json`, parse-check `settings.json`; `test`: a smoke harness
+  running `feature-fanout.js` against a tiny checked-in **fixture target repo** under `examples/`, asserting a
+  scope→implement→review loop yields a green PR — validating end-to-end **without infinite regress**).
+  Optionally a **pinned known-good engine** copy (tag/submodule) to launch the driving session, so a broken
+  candidate can't brick the driver mid-loop.
+- Status: filed — upstream issue robercano/ai-project-orchestrator#11.
