@@ -20,6 +20,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@nomicfoundation/ignition-core": "0.15.15",
     "zod": "4.4.3"
   },
   "devDependencies": {

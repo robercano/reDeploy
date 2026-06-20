@@ -13,3 +13,9 @@ export { contractArgSchema, contractEntrySchema, deploymentSpecSchema } from "./
 
 export type { SpecError, SpecErrorCode, ValidateResult } from "./spec/validate.js";
 export { validateSpec } from "./spec/validate.js";
+
+// Spec compiler — converts a validated DeploymentSpec into an Ignition module
+export type { CompileOptions, CompiledModule } from "./compile/compile.js";
+export { compileSpec } from "./compile/compile.js";
+export type { CompileErrorCode } from "./compile/errors.js";
+export { CompileError } from "./compile/errors.js";
