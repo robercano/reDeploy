@@ -81,20 +81,39 @@ implementer ──done──▶ gates (build/lint/types/test/coverage via gate.s
 4. Put it in `.env` (gitignored) as `GH_BOT_TOKEN=…`. Verify with:
    `.claude/scripts/bot-gh.sh api user --jq .login` → should print the bot's username.
 
-### Notifications (new issues / PR comments)
-A **Claude Code cron** polls `robercano/reDeploy` every ~15 min while Claude Code is running:
-new issues and new PR comments/reviews since the cursor in `.claude/state/notify-cursor` (gitignored)
-are summarized in the session, with an offer to kick the orchestrator. Cron jobs are session-scoped and
-auto-expire after **7 days** — re-arm at session start by asking: *"set up the reDeploy notification
-cron"*. For tighter cadence during an active work session, additionally run
-`/loop 5m check reDeploy for new issues and PR comments`.
+### Autonomous PR loop (notifications → merge → iterate)
+A **Claude Code cron** drives `robercano/reDeploy` every ~15 min while Claude Code is running. Your
+workflow is: **add issues → review PRs → give feedback → the agent fixes → you Approve → the agent merges
+and moves on**. Your GitHub **Approve is the only human gate**; everything downstream of it is automatic.
 
-Re-arm spec (`CronCreate` schedule `6,21,36,51 * * * *`): the cron prompt runs
-`bash .claude/scripts/notify-poll.sh` — pre-approved in `.claude/settings.json`, so it never blocks on a
-permission prompt. The script reads/advances the cursor and prints the four sections (issues, PR review
-comments, issue-comments on PRs, PR reviews) as JSON; the cron prompt then either replies one line
-("No new GitHub activity on reDeploy.") or summarizes the items (number, author, gist, link) and asks
-whether to act (address PR comments / start an issue) — never starting implementation unprompted.
+Each tick the cron does exactly this, in order:
+1. **Poll** — `bash .claude/scripts/notify-poll.sh` prints new issues / PR comments / reviews since the
+   cursor in `.claude/state/notify-cursor` (gitignored), plus a cursor-independent **open-PR status**
+   section (per PR: latest owner review, CI rollup, mergeable). Summarizes new items (number, author, gist,
+   link).
+2. **Merge** — `bash .claude/scripts/merge-ready.sh` merges every open PR you've **APPROVED** that is
+   **mergeable** and **CI-green**, then deletes the branch. Safety: it merges only if your approval was
+   submitted **at/after the PR's last commit** — so a free private repo (no branch protection to dismiss
+   stale approvals) still never auto-merges commits you haven't seen. **Pushing a new commit after you
+   approve requires a re-approval.** Reports each PR merged or why it was skipped.
+3. **Address feedback** — for any open PR with unanswered review feedback from you (`CHANGES_REQUESTED` or
+   review comments since the last push), runs the orchestrator → implementer → reviewer loop on the **same
+   branch** and pushes (updates the PR in place). It does not merge here — the next tick's step 2 will, once
+   you re-approve.
+4. **Advance** — **only when there are zero open PRs** (all merged), picks the lowest-numbered open issue
+   labelled `module:*` that has no `feat/issue-<n>-*` branch yet and kicks the orchestrator on it
+   (scope → plan → implement → bot PR). This serializes work — one issue in flight at a time — so the loop
+   stays bounded and cheap.
+5. If nothing is actionable, replies one line: *"No actionable reDeploy activity on reDeploy."*
+
+The cron never **approves** PRs (only you do) and never starts a new issue while a PR is open. Both scripts
+run as the bot via `GH_BOT_TOKEN` (a write collaborator) and are pre-approved in `.claude/settings.json`, so
+the cron runs headless without permission prompts or a separate owner `gh auth login`.
+
+Cron jobs are session-scoped and auto-expire after **7 days** — re-arm at session start by asking: *"set up
+the reDeploy PR-loop cron"*. For a tighter cadence during an active session, additionally run
+`/loop 5m run the reDeploy PR loop`. Re-arm spec: `CronCreate` schedule `6,21,36,51 * * * *`, with the cron
+prompt encoding steps 1–5 above.
 
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface

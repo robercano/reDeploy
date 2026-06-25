@@ -8,6 +8,11 @@ set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Authenticate as the bot (a read-capable collaborator) so the cron runs headless
+# without a separate owner `gh auth login`. Same token merge-ready.sh uses.
+if [ -f "$root/.env" ]; then set -a; . "$root/.env"; set +a; fi
+: "${GH_BOT_TOKEN:?GH_BOT_TOKEN not set — add it to .env (see .env.example)}"
+export GH_TOKEN="$GH_BOT_TOKEN"
 repo="robercano/reDeploy"
 state_dir="$root/.claude/state"
 cursor_file="$state_dir/notify-cursor"
@@ -33,6 +38,23 @@ echo "=== reviews on open PRs ==="
 for n in $(gh pr list -R "$repo" --json number -q '.[].number'); do
   gh api "repos/$repo/pulls/$n/reviews" \
     --jq "[.[] | select(.submitted_at > \"$cursor\") | {pr:$n,user:.user.login,state:.state,body:.body,submitted:.submitted_at,url:.html_url}]"
+done
+
+# Standing status of EVERY open PR (cursor-independent): merge-readiness is a
+# state, not an event — an approval may have landed a tick ago and CI only just
+# gone green. The cron uses this to decide which PRs need feedback addressed;
+# merge-ready.sh acts on the approved+green ones.
+echo "=== open pr status ==="
+for n in $(gh pr list -R "$repo" --state open --json number -q '.[].number'); do
+  gh pr view "$n" -R "$repo" --json number,title,author,baseRefName,isDraft,mergeable,reviews,statusCheckRollup \
+    --jq '{
+      pr: .number, title: .title, author: .author.login, base: .baseRefName, draft: .isDraft, mergeable: .mergeable,
+      ownerReview: ([.reviews[] | select(.author.login=="robercano")] | sort_by(.submittedAt) | last | .state // "none"),
+      checks: ([.statusCheckRollup[]? | (.conclusion // .state)] | {
+        failing: (map(select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT")) | length),
+        pending: (map(select(. == "PENDING" or . == "QUEUED" or . == "IN_PROGRESS" or . == null)) | length),
+        total: length })
+    }'
 done
 
 echo "$now" > "$cursor_file"
