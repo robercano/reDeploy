@@ -32,6 +32,8 @@
       "Bash(bash .claude/scripts/gate.sh:*)",
       "Bash(bash .claude/scripts/notify-poll.sh)",
       "Bash(.claude/scripts/notify-poll.sh)",
+      "Bash(bash .claude/scripts/merge-ready.sh)",
+      "Bash(.claude/scripts/merge-ready.sh)",
 
       "Bash(git status:*)",
       "Bash(git diff:*)",
