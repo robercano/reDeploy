@@ -62,6 +62,20 @@ Scope it, show me the plan, and wait for my approval before writing code.
 Approve the plan, let one implementer run in its worktree, watch the reviewers gate it, review the PR. Then
 read [`USAGE.md`](USAGE.md) to scale up, and [`TOKEN_BUDGET.md`](TOKEN_BUDGET.md) before you go parallel.
 
+## CI gates & enforcement
+`.github/workflows/gates.yml` re-runs every `gates.json` gate as a per-gate PR check (build, lint, typecheck,
+test, coverage, security) — the server-side mirror of the local hooks. It's adapter-driven; configure
+`gates.json`, not the YAML.
+
+**Enforcement on this repo is convention-based, not hard.** `robercano/reDeploy` is a **private repo on a free
+plan**, where GitHub gates *required status checks* (the branch-protection setting that blocks merge on a red
+check) behind a paid plan. So the checks **run and are visible on every PR, but a red check does not block
+merge** — treat red as blocking by convention and don't merge until the checks are green. The orchestrator also
+runs the same gates locally *before* opening a PR, so CI here is a visible backstop rather than the sole gate.
+
+To get hard enforcement later: make the repo public (free), or upgrade to GitHub Pro/Team, then add a branch
+protection rule on `main` requiring the gate checks (they appear in the picker only after running once).
+
 ## Verification checklist
 - [ ] `CLAUDE.md` describes the project and lists modules.
 - [ ] `.claude/gates.json` has real commands; `gate.sh build|lint|test` behave correctly.

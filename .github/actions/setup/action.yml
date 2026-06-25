@@ -1,0 +1,47 @@
+name: Adapter setup
+description: >
+  Toolchain setup + dependency install, driven entirely by .claude/gates.json so the
+  same workflow works on any downstream repo without hand-edited YAML. Reads
+  project.packageManager / project.language / gates.coverage_threshold, sets up the
+  matching toolchain, runs the `install` gate, and exports COVERAGE_THRESHOLD.
+
+runs:
+  using: composite
+  steps:
+    # Read the adapter. `node` is preinstalled on GitHub runners, so this works even
+    # before any toolchain setup — same dependency gate.sh already relies on.
+    - id: adapter
+      shell: bash
+      run: |
+        gates=".claude/gates.json"
+        read_json() { node -e "try{const g=require('./$gates');process.stdout.write(String($1||''))}catch(e){process.stdout.write('')}"; }
+        pm="$(read_json "g.project&&g.project.packageManager")"
+        lang="$(read_json "g.project&&g.project.language")"
+        thr="$(read_json "g.gates&&g.gates.coverage_threshold")"
+        echo "package-manager=$pm" >> "$GITHUB_OUTPUT"
+        echo "language=$lang"      >> "$GITHUB_OUTPUT"
+        # Export the threshold so coverage gate commands can read $COVERAGE_THRESHOLD.
+        [ -n "$thr" ] && echo "COVERAGE_THRESHOLD=$thr" >> "$GITHUB_ENV"
+        echo "adapter: packageManager='$pm' language='$lang' coverage_threshold='$thr'"
+
+    # --- JavaScript/TypeScript toolchain (the common case) -------------------------
+    - if: contains(fromJSON('["pnpm","npm","yarn"]'), steps.adapter.outputs.package-manager)
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - if: steps.adapter.outputs.package-manager == 'pnpm'
+      shell: bash
+      run: corepack enable
+
+    # --- Solidity / Foundry toolchain ----------------------------------------------
+    # reDeploy is TypeScript + Solidity, so the `install` gate fetches the (gitignored)
+    # Foundry deps via `forge install` and the build/lint/test gates call `forge`.
+    # Both need `forge`/`cast` on PATH BEFORE the install step below runs.
+    - if: contains(steps.adapter.outputs.language, 'olidity')
+      uses: foundry-rs/foundry-toolchain@v1
+
+    # Install dependencies via the adapter's `install` gate (skips cleanly if empty).
+    - name: Install dependencies
+      shell: bash
+      run: bash .claude/scripts/gate.sh install
