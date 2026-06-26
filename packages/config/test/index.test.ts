@@ -578,21 +578,53 @@ describe("validateConfig — failure modes", () => {
 
   // --- Multiple errors collected ---
 
-  it("collects multiple errors in a single pass (never fail-fast)", () => {
+  // Shape phase (Zod) collects all structural errors across steps in one pass —
+  // it does NOT stop at the first malformed step. Note: when shape validation
+  // fails the cross-field phase (duplicate ids, missing refs) is skipped; those
+  // are separate phases that run only on a structurally valid spec.
+  it("shape phase collects INVALID_SHAPE errors from two independently malformed steps", () => {
+    // Both steps have an empty-string target, which violates setX.target min(1).
+    // Zod iterates every array element, so both failures are collected.
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        { kind: "setX", id: "s1", target: "", function: "f" },
+        { kind: "setX", id: "s2", target: "", function: "g" },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    const errors = (result as { ok: false; errors: ConfigError[] }).errors;
+    // Exactly two errors, one per malformed step.
+    expect(errors).toHaveLength(2);
+    expect(errors.every((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    const paths = errors.map((e) => e.path);
+    expect(paths).toContain("steps[0].target");
+    expect(paths).toContain("steps[1].target");
+  });
+
+  // Cross-field phase collects all cross-field errors across steps in one pass —
+  // a DUPLICATE_STEP_ID and a MISSING_REF in the same (shape-valid) config are
+  // both returned together, never short-circuiting after the first finding.
+  it("cross-field phase collects DUPLICATE_STEP_ID and MISSING_REF together", () => {
+    // step1 appears twice (duplicate) and the second occurrence also references
+    // an unknown deployed contract (missing ref). Both errors are collected.
     const result = validateConfig(
       {
         version: 1,
         steps: [
-          // empty-string target causes INVALID_SHAPE
-          { kind: "setX", id: "s1", target: "", function: "f" },
-          // duplicate id
-          { kind: "setX", id: "s1", target: "c", function: "g" },
+          { kind: "setX", id: "step1", target: "knownContract", function: "f" },
+          { kind: "setX", id: "step1", target: "unknownContract", function: "g" },
         ],
       },
+      new Set(["knownContract"]),
     );
     expect(result.ok).toBe(false);
     const errors = (result as { ok: false; errors: ConfigError[] }).errors;
-    expect(errors.length).toBeGreaterThan(0);
+    // Exactly two errors: one for duplicate id, one for the missing ref.
+    expect(errors).toHaveLength(2);
+    const codes = errors.map((e) => e.code);
+    expect(codes).toContain("DUPLICATE_STEP_ID");
+    expect(codes).toContain("MISSING_REF");
   });
 
   it("collects multiple MISSING_REF errors from different steps", () => {
