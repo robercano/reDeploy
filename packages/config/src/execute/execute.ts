@@ -15,17 +15,19 @@
  * RESUME SEMANTICS (at-least-once per step)
  * ==========================================
  *
- *   1. Before executing, we read the journal to learn which steps are already
- *      complete (from a previous run).
- *   2. We iterate spec.steps IN ORDER.
- *   3. Steps whose id is already in the journal are SKIPPED — the executor is
- *      never called for them again.
- *   4. For each remaining step we:
- *        a. Resolve all refs to addresses (throws UNKNOWN_REF on unknown ids).
+ *   1. Build a safe Map<string,string> from own-enumerable entries of
+ *      deployedAddresses (defence-in-depth against prototype-key mis-reads).
+ *   2. Validate the spec (fail fast — INVALID_SPEC if any ref is unknown).
+ *   3. Read the journal to learn which steps are already complete (from a
+ *      previous run).
+ *   4. Iterate spec.steps IN ORDER. Steps already in the journal are SKIPPED.
+ *   5. For each remaining step:
+ *        a. Resolve all refs to addresses via the safe Map (throws UNKNOWN_REF
+ *           on unknown or prototype-key ids).
  *        b. Build a resolved ConfigCall.
  *        c. Call executor.execute(call) and await it.
  *        d. ONLY on success: append a completion record to the journal.
- *   5. If the executor throws, the error propagates immediately. The journal
+ *   6. If the executor throws, the error propagates immediately. The journal
  *      retains only the steps that completed before the failure. Re-running
  *      with the same stateDir resumes from the first un-journaled step.
  *
@@ -37,18 +39,18 @@
  * STEP-KIND → ConfigCall MAPPING
  * ================================
  *
- *   setX      → target  = deployedAddresses[step.target]
+ *   setX      → target  = safeAddresses.get(step.target)
  *               function = step.function
  *               args     = step.args (each ref resolved to its address)
  *
- *   grantRole → target  = deployedAddresses[step.target]
+ *   grantRole → target  = safeAddresses.get(step.target)
  *               function = "grantRole"
  *               role     = step.role
  *               args     = [resolvedAccountAddress]
  *
- *   wire      → target  = deployedAddresses[step.into]
+ *   wire      → target  = safeAddresses.get(step.into)
  *               function = step.function
- *               args     = [deployedAddresses[step.source]]
+ *               args     = [safeAddresses.get(step.source)]
  */
 
 import { validateConfig } from "../steps/validate.js";
@@ -75,19 +77,23 @@ export type { ConfigExecErrorCode } from "./errors.js";
  * Resolve a single ConfigArg to a ResolvedArg.
  *
  * - Literal args pass through unchanged.
- * - Ref args are looked up in `deployedAddresses`; throws UNKNOWN_REF if the
- *   id is not present.
+ * - Ref args are looked up in `safeAddresses` (a Map built from own-enumerable
+ *   entries of deployedAddresses at the start of applyConfig); throws
+ *   UNKNOWN_REF if the id is absent from the Map. Using a Map makes the lookup
+ *   intrinsically safe: prototype keys such as "constructor", "__proto__", and
+ *   "toString" are never present in the Map and therefore always throw
+ *   UNKNOWN_REF, even if they somehow bypassed upstream validation.
  */
 function resolveArg(
   arg: ConfigArg,
-  deployedAddresses: Record<string, string>,
+  safeAddresses: Map<string, string>,
   contextLabel: string,
 ): ResolvedArg {
   if (arg.kind === "literal") {
     return arg.value as ResolvedArg;
   }
   // arg.kind === "ref"
-  const address = deployedAddresses[arg.contract];
+  const address = safeAddresses.get(arg.contract);
   if (address === undefined) {
     throw new ConfigExecError(
       "UNKNOWN_REF",
@@ -100,13 +106,17 @@ function resolveArg(
 /**
  * Resolve a named contract id to its deployed address.
  * Throws UNKNOWN_REF if not found.
+ *
+ * Uses `safeAddresses` (a Map built from own-enumerable entries of
+ * deployedAddresses) so prototype keys ("constructor", "__proto__",
+ * "toString", etc.) are never matched and always raise UNKNOWN_REF.
  */
 function resolveContractId(
   id: string,
-  deployedAddresses: Record<string, string>,
+  safeAddresses: Map<string, string>,
   contextLabel: string,
 ): string {
-  const address = deployedAddresses[id];
+  const address = safeAddresses.get(id);
   if (address === undefined) {
     throw new ConfigExecError(
       "UNKNOWN_REF",
@@ -121,18 +131,22 @@ function resolveContractId(
  *
  * All refs in the step are resolved to addresses before this function returns.
  * Throws ConfigExecError("UNKNOWN_REF") for any unresolvable ref.
+ *
+ * @param safeAddresses - A Map built exclusively from own-enumerable entries of
+ *   deployedAddresses (see applyConfig). Using a Map rather than the raw
+ *   Record prevents prototype-key mis-resolution.
  */
 function buildConfigCall(
   step: ConfigStep,
-  deployedAddresses: Record<string, string>,
+  safeAddresses: Map<string, string>,
 ): ConfigCall {
   const stepLabel = `step "${step.id}" (${step.kind})`;
 
   switch (step.kind) {
     case "setX": {
-      const target = resolveContractId(step.target, deployedAddresses, stepLabel);
+      const target = resolveContractId(step.target, safeAddresses, stepLabel);
       const args: ResolvedArg[] = (step.args ?? []).map((arg, i) =>
-        resolveArg(arg, deployedAddresses, `${stepLabel} args[${i}]`),
+        resolveArg(arg, safeAddresses, `${stepLabel} args[${i}]`),
       );
       return {
         stepId: step.id,
@@ -144,10 +158,10 @@ function buildConfigCall(
     }
 
     case "grantRole": {
-      const target = resolveContractId(step.target, deployedAddresses, stepLabel);
+      const target = resolveContractId(step.target, safeAddresses, stepLabel);
       const accountAddress = resolveArg(
         step.account,
-        deployedAddresses,
+        safeAddresses,
         `${stepLabel} account`,
       );
       return {
@@ -162,8 +176,8 @@ function buildConfigCall(
 
     case "wire": {
       // The `into` contract receives the call; `source` is the argument.
-      const target = resolveContractId(step.into, deployedAddresses, stepLabel);
-      const sourceAddress = resolveContractId(step.source, deployedAddresses, stepLabel);
+      const target = resolveContractId(step.into, safeAddresses, stepLabel);
+      const sourceAddress = resolveContractId(step.source, safeAddresses, stepLabel);
       return {
         stepId: step.id,
         kind: step.kind,
@@ -202,13 +216,22 @@ function buildConfigCall(
 export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyConfigResult> {
   const { spec, deployedAddresses, executor, stateDir } = options;
 
-  // --- 1. Validate the spec FIRST (fail fast) --------------------------------
+  // --- 1. Build a safe address lookup (defence-in-depth) --------------------
   //
-  // Pass Object.keys(deployedAddresses) so validateConfig can check that all
+  // Convert deployedAddresses to a Map using only own-enumerable entries.
+  // This makes all subsequent ref lookups intrinsically safe: prototype keys
+  // ("constructor", "__proto__", "toString", etc.) are never present in the
+  // Map and always raise UNKNOWN_REF rather than returning an inherited value.
+  // The Map is built once here and passed down to all resolver helpers.
+  const safeAddresses = new Map<string, string>(Object.entries(deployedAddresses));
+
+  // --- 2. Validate the spec FIRST (fail fast) --------------------------------
+  //
+  // Pass the same keys (from the Map) so validateConfig can check that all
   // refs in the spec (target, source, into, account, args refs) resolve to
   // known deployed ids. A MISSING_REF here surfaces as INVALID_SPEC, not
   // UNKNOWN_REF — the spec is considered invalid if it references unknown ids.
-  const validateResult = validateConfig(spec, Object.keys(deployedAddresses));
+  const validateResult = validateConfig(spec, [...safeAddresses.keys()]);
   if (!validateResult.ok) {
     throw new ConfigExecError(
       "INVALID_SPEC",
@@ -219,10 +242,10 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
 
   const validatedSpec: ConfigSpec = validateResult.spec;
 
-  // --- 2. Read the journal — learn which steps are already complete ----------
+  // --- 3. Read the journal — learn which steps are already complete ----------
   const alreadyCompleted = readCompletedStepIds(stateDir);
 
-  // --- 3. Execute each step in order ----------------------------------------
+  // --- 4. Execute each step in order ----------------------------------------
   const executedStepIds: string[] = [];
   const skippedStepIds: string[] = [];
 
@@ -235,8 +258,9 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
 
     // Resolve refs and build the ConfigCall.
     // UNKNOWN_REF here is defensive (INVALID_SPEC above should catch missing
-    // refs), but we keep it for correctness when deployedAddresses diverges.
-    const call = buildConfigCall(step, deployedAddresses);
+    // refs), but we keep it for correctness when deployedAddresses diverges,
+    // and to guard against prototype-key refs that bypassed validation.
+    const call = buildConfigCall(step, safeAddresses);
 
     // Execute the call. If it throws, the error propagates immediately.
     // We do NOT catch it — the journal keeps its current state so the next
@@ -254,7 +278,7 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
     alreadyCompleted.add(step.id);
   }
 
-  // --- 4. Build and return the result ----------------------------------------
+  // --- 5. Build and return the result ----------------------------------------
   const completedStepIds = validatedSpec.steps
     .map((s) => s.id)
     .filter((id) => alreadyCompleted.has(id));

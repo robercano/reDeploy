@@ -716,3 +716,193 @@ describe("ConfigExecError", () => {
     expect(err.specErrors).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test: Security — prototype-key refs are rejected end-to-end
+// ---------------------------------------------------------------------------
+
+describe("applyConfig — prototype-key ref security", () => {
+  /**
+   * Regression test: ref ids that match JavaScript prototype keys
+   * ("__proto__", "constructor", "toString") must be REJECTED by applyConfig
+   * and must never reach the executor.
+   *
+   * With the old plain-object lookup (`deployedAddresses[id]`), a ref named
+   * "constructor" would return the Object constructor function (a truthy,
+   * non-undefined value) and silently bypass the `=== undefined` guard.
+   * The safe-Map refactor makes the runtime lookup intrinsically safe: only
+   * own-enumerable entries are present in the Map, so these keys are absent
+   * and always raise UNKNOWN_REF (or INVALID_SPEC at validate time).
+   */
+  it("ref id '__proto__' is rejected — throws ConfigExecError, executor never called", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "bad-proto-step",
+          target: "token",
+          function: "setFoo",
+          args: [{ kind: "ref", contract: "__proto__" }],
+        },
+      ],
+    };
+    const executor = new FakeExecutor();
+
+    await expect(
+      applyConfig({
+        spec,
+        deployedAddresses: { token: ADDRESSES.token },
+        executor,
+        stateDir,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof ConfigExecError &&
+        (err.code === "INVALID_SPEC" || err.code === "UNKNOWN_REF"),
+    );
+
+    // Executor must never have been called
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("ref id 'constructor' is rejected — throws ConfigExecError, executor never called", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "bad-constructor-step",
+          target: "token",
+          function: "setFoo",
+          args: [{ kind: "ref", contract: "constructor" }],
+        },
+      ],
+    };
+    const executor = new FakeExecutor();
+
+    await expect(
+      applyConfig({
+        spec,
+        deployedAddresses: { token: ADDRESSES.token },
+        executor,
+        stateDir,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof ConfigExecError &&
+        (err.code === "INVALID_SPEC" || err.code === "UNKNOWN_REF"),
+    );
+
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("ref id 'toString' is rejected — throws ConfigExecError, executor never called", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "wire",
+          id: "bad-tostring-step",
+          source: "toString",
+          into: "vault",
+          function: "setToken",
+        },
+      ],
+    };
+    const executor = new FakeExecutor();
+
+    await expect(
+      applyConfig({
+        spec,
+        deployedAddresses: { vault: ADDRESSES.vault },
+        executor,
+        stateDir,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof ConfigExecError &&
+        (err.code === "INVALID_SPEC" || err.code === "UNKNOWN_REF"),
+    );
+
+    expect(executor.calls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: Journal malformed-line tolerance
+// ---------------------------------------------------------------------------
+
+describe("applyConfig — journal malformed-line tolerance", () => {
+  /**
+   * Pre-seed a config-state.jsonl file containing:
+   *   - A valid completion record for "set-fee" (should be skipped)
+   *   - A blank line            (should be silently ignored)
+   *   - A non-JSON line         (should be silently ignored)
+   *   - A JSON object missing the `id` field  (should be silently ignored)
+   *   - A JSON object with an empty string `id` (should be silently ignored)
+   *   - A valid completion record for "grant-minter" (should be skipped)
+   *
+   * Expected: applyConfig resumes from "wire-token-into-vault" only, without
+   * crashing, and the two valid completed ids are treated as already done.
+   */
+  it("skips valid completed ids and ignores blank/malformed/incomplete journal lines", async () => {
+    const stateDir = await makeTempDir();
+    const journalFile = path.join(stateDir, "config-state.jsonl");
+
+    // Pre-seed a journal with mixed valid and invalid lines
+    const preSeededContent = [
+      JSON.stringify({ id: "set-fee", kind: "setX", completedAt: "2024-01-01T00:00:00.000Z" }),
+      "",                             // blank line
+      "not valid json at all!!!",     // non-JSON line
+      JSON.stringify({ kind: "setX", completedAt: "2024-01-01T00:00:01.000Z" }),  // missing id
+      JSON.stringify({ id: "", kind: "setX", completedAt: "2024-01-01T00:00:02.000Z" }),  // empty id
+      JSON.stringify({ id: "grant-minter", kind: "grantRole", completedAt: "2024-01-01T00:00:03.000Z" }),
+    ].join("\n") + "\n";
+
+    await fs.promises.writeFile(journalFile, preSeededContent, "utf8");
+
+    const executor = new FakeExecutor();
+    const result = await applyConfig(makeOptions(threeStepSpec, executor, stateDir));
+
+    expect(result.success).toBe(true);
+    // Only "wire-token-into-vault" should have been executed
+    expect(result.executedStepIds).toEqual(["wire-token-into-vault"]);
+    // The two valid pre-seeded ids are skipped
+    expect(result.skippedStepIds).toEqual(["set-fee", "grant-minter"]);
+    // All three steps are now complete
+    expect(result.completedStepIds).toEqual(["set-fee", "grant-minter", "wire-token-into-vault"]);
+    // Executor was only called once (for the unresolved step)
+    expect(executor.calls).toHaveLength(1);
+    expect(executor.calls[0].stepId).toBe("wire-token-into-vault");
+  });
+
+  /**
+   * Regression test: JSON.parse with a `{"__proto__":{"polluted":true}}` value
+   * in a journal line must NOT pollute Object.prototype.
+   *
+   * Node.js's JSON.parse does NOT mutate __proto__ on the resulting object
+   * (it creates an own property named "__proto__" instead), so this is safe
+   * by the runtime. This test locks the property in place.
+   */
+  it("a __proto__ poisoning attempt in a journal line does not pollute Object.prototype", async () => {
+    const stateDir = await makeTempDir();
+    const journalFile = path.join(stateDir, "config-state.jsonl");
+
+    // A crafted journal line that attempts prototype pollution.
+    // Even if JSON.parse were naively applied, Node.js does NOT treat the
+    // __proto__ key as a prototype assignment.
+    const maliciousLine = '{"__proto__":{"polluted":true}}\n';
+    await fs.promises.writeFile(journalFile, maliciousLine, "utf8");
+
+    const executor = new FakeExecutor();
+    // The line has no valid `id` field, so it is ignored; the run proceeds normally.
+    await applyConfig(makeOptions(threeStepSpec, executor, stateDir));
+
+    // Object.prototype must NOT have been polluted
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+});
