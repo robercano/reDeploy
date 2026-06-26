@@ -1,9 +1,24 @@
-export const name = "@redeploy/reader";
-
 /**
- * Placeholder export so the package builds and tests green before the
- * deployment-reader API lands.
+ * @redeploy/reader — read-only deployment and configuration state API.
+ *
+ * Provides a typed, chain-free API to load deployment state (contracts,
+ * addresses, constructor args, links) and configuration step status from
+ * an on-disk deployment directory written by the reDeploy pipeline.
  */
-export function placeholder(): string {
-  return name;
-}
+
+// Public read API
+export {
+  readDeployment,
+  ReadError,
+} from "./read/reader.js";
+
+export type {
+  ReadDeploymentOptions,
+  DeploymentView,
+  ContractView,
+  ContractLinks,
+  ConfigStepStatus,
+  ArgValue,
+  BigIntValue,
+  ReadErrorCode,
+} from "./read/reader.js";

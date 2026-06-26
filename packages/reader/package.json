@@ -14,12 +14,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "pnpm --filter @redeploy/core build && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
   },
+  "dependencies": {
+    "@redeploy/core": "workspace:*",
+    "@nomicfoundation/ignition-core": "0.15.15"
+  },
   "devDependencies": {
+    "@types/node": "^22.7.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
     "@vitest/coverage-v8": "^2.1.8"
