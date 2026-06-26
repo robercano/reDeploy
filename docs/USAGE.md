@@ -115,6 +115,18 @@ the reDeploy PR-loop cron"*. For a tighter cadence during an active session, add
 `/loop 5m run the reDeploy PR loop`. Re-arm spec: `CronCreate` schedule `6,21,36,51 * * * *`, with the cron
 prompt encoding steps 1–5 above.
 
+### Adaptive cadence policy
+The PR-loop cron self-adjusts its polling frequency to avoid burning cycles when there's nothing to do:
+- **Fast (every minute, `* * * * *`)** — whenever there is **≥1 open PR or ≥1 open `module:*` issue** (work
+  is in flight: issues to drive, approvals/feedback to pick up promptly).
+- **Idle (hourly, `17 * * * *`)** — when there are **zero open PRs and zero open issues** (backlog drained).
+
+Each tick runs a **STEP 0** before the usual steps 1–5: it checks open PRs + open `module:*` issues, computes
+the desired cadence, and if the current job's schedule doesn't match, it `CronDelete`s itself and
+`CronCreate`s a replacement at the right schedule with the *same* prompt. So the loop speeds up automatically
+when you add issues / a PR opens, and falls back to hourly once everything is merged. The cron prompt is
+identical at both cadences (it carries the STEP 0 logic), so it stays stable across self-recreation.
+
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface
   at PR time. Cleanest/auditable.
