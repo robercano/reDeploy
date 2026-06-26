@@ -95,7 +95,10 @@ export interface SpecPair {
 /**
  * Parse a user-entered string into a LiteralValue.
  * - "true" / "false" → boolean
- * - decimal integer / float strings → number (hex/octal strings kept as strings)
+ * - decimal numeric strings → number ONLY when the conversion round-trips
+ *   losslessly (i.e. String(Number(s)) === s). Large integers such as uint256
+ *   values lose precision in JS Number, so they are preserved as strings.
+ *   Hex/octal strings are also kept as strings.
  * - "null"           → null
  * - anything else    → string
  * - empty string     → null
@@ -105,11 +108,18 @@ function parseLiteralValue(raw: string): LiteralValue {
   if (raw === "null") return null;
   if (raw === "true") return true;
   if (raw === "false") return false;
-  // Only convert purely decimal (no leading 0x, 0o, 0b) numeric strings to numbers
+  // Only convert purely decimal (no leading 0x, 0o, 0b) numeric strings to
+  // numbers when the conversion is lossless (round-trips back to the same string).
+  // This prevents silent precision loss for large integers (e.g. uint256 token
+  // amounts, role bitmasks) which must be preserved as strings for correct
+  // on-chain deployment.
   const trimmed = raw.trim();
   if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
     const n = Number(trimmed);
-    if (!isNaN(n)) return n;
+    if (!Number.isNaN(n) && String(n) === trimmed) return n;
+    // Lossless round-trip failed: preserve the original string so the value
+    // is deployed correctly (a string is a valid LiteralScalar).
+    return raw;
   }
   return raw;
 }
@@ -200,21 +210,24 @@ export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
   // Collect wire edges separately
   const wireSteps: ConfigStep[] = [];
 
+  // Build a lookup map for O(1) node access inside the edge loop (O(N+E) total).
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
   for (const edge of edges) {
     const data = edge.data;
     if (!data || data.edgeKind === "constructorRef") {
       // Constructor ref edge: determine argIndex from data or target handle
       const argIndex =
         data && data.edgeKind === "constructorRef" ? data.argIndex : 0;
-      const sourceNode = nodes.find((n) => n.id === edge.source);
+      const sourceNode = nodeById.get(edge.source);
       const sourceDeployId = sourceNode ? sourceNode.data.deployId : edge.source;
       if (!refEdges.has(edge.target)) {
         refEdges.set(edge.target, new Map());
       }
       refEdges.get(edge.target)!.set(argIndex, sourceDeployId);
     } else if (data.edgeKind === "wire") {
-      const sourceNode = nodes.find((n) => n.id === edge.source);
-      const targetNode = nodes.find((n) => n.id === edge.target);
+      const sourceNode = nodeById.get(edge.source);
+      const targetNode = nodeById.get(edge.target);
       const sourceId = sourceNode ? sourceNode.data.deployId : edge.source;
       const intoId = targetNode ? targetNode.data.deployId : edge.target;
       wireSteps.push({
