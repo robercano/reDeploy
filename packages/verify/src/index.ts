@@ -69,3 +69,19 @@ export type {
   SourcifyConfig,
   SourcifySubmitRequest,
 } from "./verify/clients/sourcify.js";
+
+// ---------------------------------------------------------------------------
+// Config drift detection (on-chain configuration verification)
+// ---------------------------------------------------------------------------
+export { verifyConfig, valuesEqual } from "./verify/config-drift.js";
+export type {
+  ChainReader,
+  ReadDescriptor,
+  StepDriftStatus,
+  StepDriftResult,
+  ConfigVerifyResult,
+  VerifyConfigOptions,
+} from "./verify/config-drift.js";
+
+export { ConfigVerifyError } from "./verify/config-errors.js";
+export type { ConfigVerifyErrorCode } from "./verify/config-errors.js";
