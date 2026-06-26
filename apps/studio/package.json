@@ -7,13 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:deps": "pnpm --filter @redeploy/core build && pnpm --filter @redeploy/config build",
-    "pretypecheck": "pnpm run build:deps",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
-    "pretest": "pnpm run build:deps",
     "test": "vitest run",
-    "precoverage": "pnpm run build:deps",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
