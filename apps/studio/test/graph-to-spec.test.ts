@@ -1,0 +1,504 @@
+/**
+ * graph-to-spec.test.ts
+ *
+ * Round-trip acceptance tests: construct representative graphs in code,
+ * run graphToSpec, and validate the output with the real validateSpec /
+ * validateConfig functions.
+ *
+ * ## Invalid-graph behavior (documented)
+ * The serializer is permissive: it emits whatever the graph describes, even
+ * if invalid (duplicate ids, missing refs, etc.). Validation errors are
+ * surfaced by validateSpec / validateConfig, not prevented by the serializer.
+ * Tests below assert that behavior explicitly.
+ */
+
+import { describe, it, expect } from "vitest";
+import { validateSpec } from "@redeploy/core";
+import { validateConfig } from "@redeploy/config";
+import { graphToSpec } from "../src/spec/graph-to-spec";
+import type { GraphNode, GraphEdge, ContractNodePayload } from "../src/spec/graph-to-spec";
+import type { ConstructorRefEdgeData, WireEdgeData } from "../src/spec/types";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeNode(
+  id: string,
+  deployId: string,
+  contractName: string,
+  overrides: Partial<ContractNodePayload> = {},
+): GraphNode {
+  return {
+    id,
+    data: {
+      deployId,
+      contractName,
+      args: [],
+      after: [],
+      configSteps: [],
+      ...overrides,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// (a) Deployment-only graph (no edges, no config steps)
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — deployment-only graph", () => {
+  it("produces a valid DeploymentSpec with no edges", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "ERC20Token"),
+      makeNode("n2", "registry", "Registry"),
+    ];
+    const { deployment, config } = graphToSpec(nodes, []);
+
+    expect(deployment.version).toBe(1);
+    expect(deployment.contracts).toHaveLength(2);
+    expect(deployment.contracts[0].id).toBe("token");
+    expect(deployment.contracts[1].id).toBe("registry");
+
+    const dResult = validateSpec(deployment);
+    expect(dResult.ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+  });
+
+  it("emits no args when node has empty arg slots", () => {
+    const nodes: GraphNode[] = [makeNode("n1", "token", "Token")];
+    const { deployment } = graphToSpec(nodes, []);
+    expect(deployment.contracts[0].args).toBeUndefined();
+  });
+
+  it("emits literal args for a node with literal slots", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [
+          { index: 0, kind: "literal", value: "100" },
+          { index: 1, kind: "literal", value: "true" },
+          { index: 2, kind: "literal", value: "hello" },
+          { index: 3, kind: "literal", value: "null" },
+          { index: 4, kind: "literal", value: "" },
+        ],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    const args = deployment.contracts[0].args!;
+    expect(args[0]).toEqual({ kind: "literal", value: 100 });
+    expect(args[1]).toEqual({ kind: "literal", value: true });
+    expect(args[2]).toEqual({ kind: "literal", value: "hello" });
+    expect(args[3]).toEqual({ kind: "literal", value: null });
+    expect(args[4]).toEqual({ kind: "literal", value: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (b) Inter-contract constructorRef edges
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — constructorRef edges", () => {
+  it("maps a constructorRef edge to a RefArg in the target contract", () => {
+    // token → registry arg[0]
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token"),
+      makeNode("n2", "registry", "Registry", {
+        args: [{ index: 0, kind: "literal", value: "" }],
+      }),
+    ];
+    const edgeData: ConstructorRefEdgeData = { edgeKind: "constructorRef", argIndex: 0 };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n2", data: edgeData },
+    ];
+
+    const { deployment } = graphToSpec(nodes, edges);
+
+    // registry should have a RefArg pointing at token
+    const registryEntry = deployment.contracts.find((c) => c.id === "registry")!;
+    expect(registryEntry.args).toBeDefined();
+    expect(registryEntry.args![0]).toEqual({ kind: "ref", contract: "token" });
+
+    // token should be unchanged
+    const tokenEntry = deployment.contracts.find((c) => c.id === "token")!;
+    expect(tokenEntry.args).toBeUndefined();
+
+    // Full round-trip validation
+    const dResult = validateSpec(deployment);
+    if (!dResult.ok) {
+      console.error("Validation errors:", dResult.errors);
+    }
+    expect(dResult.ok).toBe(true);
+  });
+
+  it("places ref at correct index when multiple arg slots exist", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "tokenA", "TokenA"),
+      makeNode("n2", "vault", "Vault", {
+        args: [
+          { index: 0, kind: "literal", value: "42" },
+          { index: 1, kind: "literal", value: "" },
+        ],
+      }),
+    ];
+    const edgeData: ConstructorRefEdgeData = { edgeKind: "constructorRef", argIndex: 1 };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n2", data: edgeData },
+    ];
+
+    const { deployment } = graphToSpec(nodes, edges);
+    const vaultEntry = deployment.contracts.find((c) => c.id === "vault")!;
+
+    expect(vaultEntry.args![0]).toEqual({ kind: "literal", value: 42 });
+    expect(vaultEntry.args![1]).toEqual({ kind: "ref", contract: "tokenA" });
+
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("round-trip validates with multiple inter-contract refs", () => {
+    // oracle → price, oracle → feed; vault → oracle
+    const nodes: GraphNode[] = [
+      makeNode("n1", "price", "PriceFeed"),
+      makeNode("n2", "feed", "DataFeed"),
+      makeNode("n3", "oracle", "Oracle", {
+        args: [
+          { index: 0, kind: "literal", value: "" },
+          { index: 1, kind: "literal", value: "" },
+        ],
+      }),
+      makeNode("n4", "vault", "Vault", {
+        args: [{ index: 0, kind: "literal", value: "" }],
+      }),
+    ];
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n3", data: { edgeKind: "constructorRef", argIndex: 0 } },
+      { id: "e2", source: "n2", target: "n3", data: { edgeKind: "constructorRef", argIndex: 1 } },
+      { id: "e3", source: "n3", target: "n4", data: { edgeKind: "constructorRef", argIndex: 0 } },
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, edges);
+    expect(validateSpec(deployment).ok).toBe(true);
+    expect(validateConfig(config, deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (c) Config steps: setX, grantRole, wire
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — config steps", () => {
+  it("maps a setX step to a SetXStep in the config", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-setfee",
+            functionName: "setFee",
+            args: ["100", "true"],
+          },
+        ],
+      }),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    expect(step.id).toBe("step-setfee");
+    expect(step.target).toBe("token");
+    expect(step.function).toBe("setFee");
+    expect(step.args).toEqual([
+      { kind: "literal", value: 100 },
+      { kind: "literal", value: true },
+    ]);
+  });
+
+  it("maps a grantRole step with literal account", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        configSteps: [
+          {
+            kind: "grantRole",
+            id: "step-grant",
+            role: "MINTER_ROLE",
+            accountKind: "literal",
+            accountValue: "0xdeadbeef",
+          },
+        ],
+      }),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("grantRole");
+    if (step.kind !== "grantRole") return;
+    expect(step.role).toBe("MINTER_ROLE");
+    expect(step.account).toEqual({ kind: "literal", value: "0xdeadbeef" });
+  });
+
+  it("maps a grantRole step with ref account", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "admin", "AdminContract"),
+      makeNode("n2", "token", "Token", {
+        configSteps: [
+          {
+            kind: "grantRole",
+            id: "step-grant-ref",
+            role: "ADMIN_ROLE",
+            accountKind: "ref",
+            accountValue: "admin",
+          },
+        ],
+      }),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    if (step.kind !== "grantRole") return;
+    expect(step.account).toEqual({ kind: "ref", contract: "admin" });
+  });
+
+  it("maps a wire edge to a WireStep in the config", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "oracle", "Oracle"),
+      makeNode("n2", "vault", "Vault"),
+    ];
+    const wireData: WireEdgeData = {
+      edgeKind: "wire",
+      wireStepId: "wire-1",
+      wireFunction: "setOracle",
+    };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n2", data: wireData },
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, edges);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("wire");
+    if (step.kind !== "wire") return;
+    expect(step.id).toBe("wire-1");
+    expect(step.source).toBe("oracle");
+    expect(step.into).toBe("vault");
+    expect(step.function).toBe("setOracle");
+  });
+
+  it("exercises all three config step kinds simultaneously", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "oracle", "Oracle"),
+      makeNode("n2", "registry", "Registry"),
+      makeNode("n3", "vault", "Vault", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-fee",
+            functionName: "setFee",
+            args: ["50"],
+          },
+          {
+            kind: "grantRole",
+            id: "step-admin",
+            role: "MANAGER_ROLE",
+            accountKind: "literal",
+            accountValue: "0xabc",
+          },
+        ],
+      }),
+    ];
+    const wireData: WireEdgeData = {
+      edgeKind: "wire",
+      wireStepId: "wire-oracle",
+      wireFunction: "setOracle",
+    };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n3", data: wireData },
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, edges);
+
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const kinds = cResult.spec.steps.map((s) => s.kind);
+    expect(kinds).toContain("setX");
+    expect(kinds).toContain("grantRole");
+    expect(kinds).toContain("wire");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (d) Invalid-graph behavior — documented: serializer is permissive
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — invalid graphs (permissive emit + validator surfaces errors)", () => {
+  it("emits and validator rejects: duplicate deployIds", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token"),
+      makeNode("n2", "token", "AnotherToken"), // duplicate id
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+
+    // Serializer still emits the spec (permissive)
+    expect(deployment.contracts).toHaveLength(2);
+
+    // But validateSpec catches the duplicate
+    const result = validateSpec(deployment);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.code === "DUPLICATE_ID")).toBe(true);
+  });
+
+  it("emits and validator rejects: ref to non-existent contract id", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "vault", "Vault", {
+        args: [{ index: 0, kind: "literal", value: "" }],
+      }),
+    ];
+    // Edge from a node that doesn't exist in nodes list
+    const edgeData: ConstructorRefEdgeData = { edgeKind: "constructorRef", argIndex: 0 };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "ghost-node", target: "n1", data: edgeData },
+    ];
+
+    const { deployment } = graphToSpec(nodes, edges);
+    // vault's arg[0] should be ref to "ghost-node" (the raw node id, since node not found)
+    const vaultEntry = deployment.contracts.find((c) => c.id === "vault")!;
+    expect(vaultEntry.args![0]).toEqual({ kind: "ref", contract: "ghost-node" });
+
+    // validateSpec should catch the missing ref
+    const result = validateSpec(deployment);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.code === "MISSING_REF")).toBe(true);
+  });
+
+  it("emits and validator rejects: self-reference in constructor arg", () => {
+    // vault has a ref pointing to itself
+    const nodes: GraphNode[] = [
+      makeNode("n1", "vault", "Vault", {
+        args: [{ index: 0, kind: "literal", value: "" }],
+      }),
+    ];
+    const edgeData: ConstructorRefEdgeData = { edgeKind: "constructorRef", argIndex: 0 };
+    // Edge from n1 to n1 (self loop)
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n1", data: edgeData },
+    ];
+
+    const { deployment } = graphToSpec(nodes, edges);
+
+    const result = validateSpec(deployment);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Either SELF_REFERENCE or CYCLE is expected
+    const codes = result.errors.map((e) => e.code);
+    expect(codes.some((c) => c === "SELF_REFERENCE" || c === "CYCLE")).toBe(true);
+  });
+
+  it("emits and validator rejects: config step referencing missing contract", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "vault", "Vault", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-wire",
+            functionName: "setFoo",
+            args: [],
+          },
+        ],
+      }),
+    ];
+
+    // wire edge references a node not in graph
+    const wireData: WireEdgeData = {
+      edgeKind: "wire",
+      wireStepId: "wire-ghost",
+      wireFunction: "setOracle",
+    };
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "ghost-node", target: "n1", data: wireData },
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, edges);
+
+    // Deployment is valid (vault exists)
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    // Config should fail because source "ghost-node" is not in deployment
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(false);
+    if (cResult.ok) return;
+    expect(cResult.errors.some((e) => e.code === "MISSING_REF")).toBe(true);
+  });
+
+  it("emits empty strings as null literals (permissive)", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "literal", value: "" }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    expect(deployment.contracts[0].args![0]).toEqual({ kind: "literal", value: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) Edge case: empty graph
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — empty graph", () => {
+  it("produces valid empty specs", () => {
+    const { deployment, config } = graphToSpec([], []);
+    expect(validateSpec(deployment).ok).toBe(true);
+    expect(validateConfig(config, deployment).ok).toBe(true);
+    expect(deployment.contracts).toHaveLength(0);
+    expect(config.steps).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) after[] ordering constraints
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — after ordering", () => {
+  it("carries after[] from node data into the ContractEntry", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "dep", "Dep"),
+      makeNode("n2", "main", "Main", { after: ["dep"] }),
+    ];
+
+    const { deployment } = graphToSpec(nodes, []);
+    const mainEntry = deployment.contracts.find((c) => c.id === "main")!;
+    expect(mainEntry.after).toEqual(["dep"]);
+
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+});
