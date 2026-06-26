@@ -1,0 +1,7 @@
+
+{"type":"DEPLOYMENT_EXECUTION_STATE_INITIALIZE","futureId":"Deployment#registry","contractName":"Registry","constructorArgs":[],"libraries":{},"dependencies":[]}
+{"type":"DEPLOYMENT_EXECUTION_STATE_COMPLETE","futureId":"Deployment#registry","result":{"type":"SUCCESS","address":"0x1111111111111111111111111111111111111111"}}
+{"type":"DEPLOYMENT_EXECUTION_STATE_INITIALIZE","futureId":"Deployment#token","contractName":"ERC20Token","constructorArgs":["My Token","1000000000000000000n",{"_kind":"bigint","value":"500"}],"libraries":{},"dependencies":[]}
+{"type":"DEPLOYMENT_EXECUTION_STATE_COMPLETE","futureId":"Deployment#token","result":{"type":"SUCCESS","address":"0x2222222222222222222222222222222222222222"}}
+{"type":"DEPLOYMENT_EXECUTION_STATE_INITIALIZE","futureId":"Deployment#vault","contractName":"Vault","constructorArgs":[],"libraries":{"SafeMath":"Deployment#registry"},"dependencies":["Deployment#token","Deployment#registry"]}
+{"type":"DEPLOYMENT_EXECUTION_STATE_COMPLETE","futureId":"Deployment#vault","result":{"type":"SUCCESS","address":"0x3333333333333333333333333333333333333333"}}

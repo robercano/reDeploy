@@ -1,8 +1,18 @@
 /**
  * App.tsx
  *
- * Main authoring canvas: React Flow canvas with contract nodes, a toolbar
- * for adding nodes and exporting, and a config panel for the selected node.
+ * Main application: a mode toggle (authoring / inspector) plus the
+ * corresponding canvas for each mode.
+ *
+ * ## Authoring mode (default)
+ * React Flow canvas with contract nodes, a toolbar for adding nodes and
+ * exporting, and a config panel for the selected node.
+ *
+ * ## Inspector mode
+ * Read-only React Flow canvas rendering a DeploymentView (passed as a
+ * static in-memory sample for the browser). The actual disk read
+ * (readDeployment) is Node-only and lives in src/inspector/load-deployment.ts
+ * — it is NOT imported here.
  *
  * ## Type note
  * React Flow requires `Node<T>` where `T extends Record<string, unknown>`.
@@ -11,18 +21,20 @@
  * and cast `node.data` to `ContractNodeData` when passing it to ConfigPanel.
  */
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState } from "react";
 import { ReactFlow, Background, Controls, MiniMap } from "@xyflow/react";
 import type { NodeMouseHandler, NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { ContractNode } from "./components/ContractNode";
-import { ConfigPanel } from "./components/ConfigPanel";
-import { SpecExporter } from "./components/SpecExporter";
-import { useGraph } from "./hooks/useGraph";
-import { graphToSpec } from "./spec/graph-to-spec";
-import type { GraphNode, GraphEdge } from "./spec/graph-to-spec";
-import type { ContractNodeData } from "./spec/types";
+import { ContractNode } from "./components/ContractNode.js";
+import { ConfigPanel } from "./components/ConfigPanel.js";
+import { SpecExporter } from "./components/SpecExporter.js";
+import { Inspector } from "./components/Inspector.js";
+import { useGraph } from "./hooks/useGraph.js";
+import { graphToSpec } from "./spec/graph-to-spec.js";
+import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
+import type { ContractNodeData } from "./spec/types.js";
+import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 
 // Register the custom node type once (stable reference required by React Flow).
 // Cast to NodeTypes to satisfy the `Record<string, unknown>` data constraint.
@@ -47,7 +59,18 @@ const btnStyle: React.CSSProperties = {
   boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
 };
 
+const activeBtnStyle: React.CSSProperties = {
+  ...btnStyle,
+  background: "#1a73e8",
+  color: "#fff",
+  border: "1px solid #1a73e8",
+};
+
+type AppMode = "authoring" | "inspector";
+
 export function App() {
+  const [mode, setMode] = useState<AppMode>("authoring");
+
   const {
     nodes,
     edges,
@@ -99,45 +122,71 @@ export function App() {
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
-      {/* Toolbar */}
+      {/* Mode toggle toolbar */}
       <div style={toolbarStyle}>
         <button
-          style={btnStyle}
-          onClick={addContractNode}
-          data-testid="add-contract-btn"
+          style={mode === "authoring" ? activeBtnStyle : btnStyle}
+          onClick={() => setMode("authoring")}
+          data-testid="mode-authoring"
         >
-          + Contract
+          Authoring
         </button>
-        <SpecExporter deployment={deployment} config={config} />
+        <button
+          style={mode === "inspector" ? activeBtnStyle : btnStyle}
+          onClick={() => setMode("inspector")}
+          data-testid="mode-inspector"
+        >
+          Inspector
+        </button>
       </div>
 
-      {/* React Flow canvas */}
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={NODE_TYPES}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onNodeClick={onNodeClick}
-        onPaneClick={onPaneClick}
-        fitView
-      >
-        <Background />
-        <Controls />
-        <MiniMap />
-      </ReactFlow>
+      {mode === "authoring" && (
+        <>
+          {/* Authoring toolbar */}
+          <div style={{ ...toolbarStyle, left: 200 }}>
+            <button
+              style={btnStyle}
+              onClick={addContractNode}
+              data-testid="add-contract-btn"
+            >
+              + Contract
+            </button>
+            <SpecExporter deployment={deployment} config={config} />
+          </div>
 
-      {/* Config panel for selected node */}
-      {selectedNode && (
-        <ConfigPanel
-          nodeId={selectedNode.id}
-          data={selectedNode.data as unknown as ContractNodeData}
-          onAddStep={addConfigStep}
-          onRemoveStep={removeConfigStep}
-          onUpdateSetXStep={updateSetXStep}
-          onUpdateGrantRoleStep={updateGrantRoleStep}
-        />
+          {/* React Flow canvas */}
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={NODE_TYPES}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
+            fitView
+          >
+            <Background />
+            <Controls />
+            <MiniMap />
+          </ReactFlow>
+
+          {/* Config panel for selected node */}
+          {selectedNode && (
+            <ConfigPanel
+              nodeId={selectedNode.id}
+              data={selectedNode.data as unknown as ContractNodeData}
+              onAddStep={addConfigStep}
+              onRemoveStep={removeConfigStep}
+              onUpdateSetXStep={updateSetXStep}
+              onUpdateGrantRoleStep={updateGrantRoleStep}
+            />
+          )}
+        </>
+      )}
+
+      {mode === "inspector" && (
+        <Inspector view={SAMPLE_DEPLOYMENT_VIEW} />
       )}
     </div>
   );
