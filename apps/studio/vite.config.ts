@@ -16,6 +16,8 @@ export default defineConfig({
       external: [
         // Hardhat Ignition — Node-only, has native .node binaries
         /^@nomicfoundation\//,
+        // @redeploy/reader — Node-only (uses fs); only its types are used in browser code
+        "@redeploy/reader",
         // Other Node-only packages pulled in transitively
         /^hardhat/,
         /^ethers/,
@@ -62,6 +64,12 @@ export default defineConfig({
         "node_modules/**",
         // Type-only file: no runtime code, always 0% coverage
         "src/spec/types.ts",
+        // Inspector type-only file
+        "src/inspector/types.ts",
+        // Data-constant only: no logic
+        "src/inspector/sample-view.ts",
+        // Trivial Node-only wrapper: no logic
+        "src/inspector/load-deployment.ts",
       ],
     },
   },
