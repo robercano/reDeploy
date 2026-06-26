@@ -1173,15 +1173,65 @@ describe("createEtherscanClient — MISSING_API_KEY guard", () => {
     }
   });
 
-  it("error message does not echo the sentinel key value", () => {
-    const SENTINEL = "SECRET_ETHERSCAN_KEY_DO_NOT_LOG";
-    try {
-      createEtherscanClient({ apiKey: "" }, makeFakeFetch({}));
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(VerifyError);
-      expect((err as VerifyError).message).not.toContain(SENTINEL);
-    }
+  it("sentinel apiKey never leaks into returned SubmitResult or StatusResult messages", async () => {
+    // A real key that must never appear in any returned .message field.
+    // (It IS placed in the request body/URL handed to fakeFetch — that is
+    // expected and intentional.  The assertion is only about RETURNED messages.)
+    const SENTINEL_KEY = "SENTINEL_ETHERSCAN_KEY_abc123_DO_NOT_LOG";
+
+    // --- path 1: submit() with HTTP non-2xx response ---
+    const httpErrorFetch = makeFakeFetch(
+      { status: "0", result: "internal server error" },
+      { ok: false, status: 500 },
+    );
+    const clientHttp = createEtherscanClient(
+      { apiKey: SENTINEL_KEY, pollIntervalMs: 0 },
+      httpErrorFetch,
+      () => Promise.resolve(),
+    );
+    const submitHttpResult = await clientHttp.submit(etherscanMapper(minimalEntry));
+    expect(submitHttpResult.status).toBe("failed");
+    expect(submitHttpResult.message).toBeDefined();
+    expect(submitHttpResult.message).not.toContain(SENTINEL_KEY);
+
+    // --- path 2: submit() with a network-throw fetch ---
+    const networkThrowFetch = makeNetworkErrorFetch("connect ECONNREFUSED 127.0.0.1:9999");
+    const clientNet = createEtherscanClient(
+      { apiKey: SENTINEL_KEY, pollIntervalMs: 0 },
+      networkThrowFetch,
+      () => Promise.resolve(),
+    );
+    const submitNetResult = await clientNet.submit(etherscanMapper(minimalEntry));
+    expect(submitNetResult.status).toBe("failed");
+    expect(submitNetResult.message).toBeDefined();
+    expect(submitNetResult.message).not.toContain(SENTINEL_KEY);
+
+    // --- path 3: checkStatus() with HTTP non-2xx response ---
+    const statusHttpFetch = makeFakeFetch(
+      { status: "0", result: "rate limited" },
+      { ok: false, status: 429 },
+    );
+    const clientStatus = createEtherscanClient(
+      { apiKey: SENTINEL_KEY, pollIntervalMs: 0 },
+      statusHttpFetch,
+      () => Promise.resolve(),
+    );
+    const checkStatusResult = await clientStatus.checkStatus("some-guid-abc");
+    expect(checkStatusResult.status).toBe("failed");
+    expect(checkStatusResult.message).toBeDefined();
+    expect(checkStatusResult.message).not.toContain(SENTINEL_KEY);
+
+    // --- path 4: checkStatus() with a network-throw fetch ---
+    const statusNetFetch = makeNetworkErrorFetch("connect ETIMEDOUT");
+    const clientStatusNet = createEtherscanClient(
+      { apiKey: SENTINEL_KEY, pollIntervalMs: 0 },
+      statusNetFetch,
+      () => Promise.resolve(),
+    );
+    const checkStatusNetResult = await clientStatusNet.checkStatus("some-guid-xyz");
+    expect(checkStatusNetResult.status).toBe("failed");
+    expect(checkStatusNetResult.message).toBeDefined();
+    expect(checkStatusNetResult.message).not.toContain(SENTINEL_KEY);
   });
 
   it("does NOT throw for a valid non-empty apiKey (sanity check)", () => {
