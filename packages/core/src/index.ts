@@ -19,3 +19,9 @@ export type { CompileOptions, CompiledModule } from "./compile/compile.js";
 export { compileSpec } from "./compile/compile.js";
 export type { CompileErrorCode } from "./compile/errors.js";
 export { CompileError } from "./compile/errors.js";
+
+// Deployment runner — idempotent, resumable deploy() backed by Ignition's journal
+export type { DeployOptions, DeployResult } from "./deploy/deploy.js";
+export { deploy } from "./deploy/deploy.js";
+export type { DeployErrorCode } from "./deploy/errors.js";
+export { DeployError } from "./deploy/errors.js";
