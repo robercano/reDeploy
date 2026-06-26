@@ -100,7 +100,17 @@ importers:
         version: 2.1.9(@types/node@22.7.5)
 
   packages/verify:
+    dependencies:
+      '@redeploy/config':
+        specifier: workspace:*
+        version: link:../config
+      '@redeploy/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.7.5
       '@vitest/coverage-v8':
         specifier: ^2.1.8
         version: 2.1.9(vitest@2.1.9(@types/node@22.7.5))
