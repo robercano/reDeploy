@@ -9,8 +9,8 @@
     "build": "vite build",
     "typecheck": "pnpm --filter @redeploy/core build && pnpm --filter @redeploy/config build && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "test": "pnpm --filter @redeploy/core build && pnpm --filter @redeploy/config build && vitest run",
+    "coverage": "pnpm --filter @redeploy/core build && pnpm --filter @redeploy/config build && vitest run --coverage"
   },
   "dependencies": {
     "@redeploy/config": "workspace:*",
