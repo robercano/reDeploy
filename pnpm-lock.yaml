@@ -26,6 +26,12 @@ importers:
 
   apps/studio:
     dependencies:
+      '@redeploy/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@redeploy/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@xyflow/react':
         specifier: ^12.8.0
         version: 12.11.1(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(immer@10.0.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
