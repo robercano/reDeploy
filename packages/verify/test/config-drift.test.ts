@@ -1084,3 +1084,222 @@ describe("verifyConfig() — exported API surface", () => {
     expect(err).toBeInstanceOf(ConfigVerifyError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// REGRESSION: grantRole drift with bigint actual (JSON.stringify bug fix)
+// ---------------------------------------------------------------------------
+
+describe("verifyConfig() — grantRole drift with bigint actual (regression)", () => {
+  const grantRoleSpec: ConfigSpec = {
+    version: 1,
+    steps: [
+      {
+        kind: "grantRole",
+        id: "grant-minter",
+        target: "token",
+        role: "MINTER_ROLE",
+        account: { kind: "ref", contract: "minterContract" },
+      },
+    ],
+  };
+
+  it("hasRole returns 0n (bigint zero) → verifyConfig does NOT throw, status: drift", async () => {
+    // Regression: JSON.stringify(0n) would throw TypeError: Do not know how to serialize a BigInt
+    // Fix: use safeSerialize() which handles bigint by appending 'n'
+    const reader = makeMockReader({ [`${ADDR_TOKEN}::hasRole`]: 0n });
+
+    // Must not throw
+    const result = await verifyConfig({ spec: grantRoleSpec, deployedAddresses, reader });
+
+    expect(result.clean).toBe(false);
+    expect(result.results[0].status).toBe("drift");
+    expect(result.results[0].actual).toBe(0n);
+    expect(result.results[0].expected).toBe(true);
+    // Message must be produced (not undefined) and contain the bigint representation
+    expect(result.results[0].message).toBeDefined();
+    expect(result.results[0].message).toContain("0n");
+  });
+
+  it("hasRole returns 1n (truthy bigint) → still drift (strict === true check)", async () => {
+    // 1n \!== true, so the strict `actual === true` guard keeps this as drift
+    const reader = makeMockReader({ [`${ADDR_TOKEN}::hasRole`]: 1n });
+
+    const result = await verifyConfig({ spec: grantRoleSpec, deployedAddresses, reader });
+
+    expect(result.clean).toBe(false);
+    expect(result.results[0].status).toBe("drift");
+    expect(result.results[0].actual).toBe(1n);
+    expect(result.results[0].message).toBeDefined();
+    expect(result.results[0].message).toContain("1n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// grantRole: truthy-but-not-true access-control strictness (security pin)
+// ---------------------------------------------------------------------------
+
+describe("verifyConfig() — grantRole strict === true check (security pin)", () => {
+  const grantRoleSpec: ConfigSpec = {
+    version: 1,
+    steps: [
+      {
+        kind: "grantRole",
+        id: "grant-minter",
+        target: "token",
+        role: "MINTER_ROLE",
+        account: { kind: "literal", value: ADDR_MINTER },
+      },
+    ],
+  };
+
+  it("hasRole returns 1 (number) → drift, NOT match (strict === true)", async () => {
+    // Pins the `actual === true` access-control check.
+    // A future refactor to `Boolean(actual)` / `\!\!actual` would make this fail,
+    // catching an unintended security regression.
+    const reader = makeMockReader({ [`${ADDR_TOKEN}::hasRole`]: 1 });
+    const result = await verifyConfig({ spec: grantRoleSpec, deployedAddresses, reader });
+
+    expect(result.clean).toBe(false);
+    expect(result.results[0].status).toBe("drift");
+    expect(result.results[0].actual).toBe(1);
+  });
+
+  it("hasRole returns \"true\" (string) → drift, NOT match (strict === true)", async () => {
+    const reader = makeMockReader({ [`${ADDR_TOKEN}::hasRole`]: "true" });
+    const result = await verifyConfig({ spec: grantRoleSpec, deployedAddresses, reader });
+
+    expect(result.clean).toBe(false);
+    expect(result.results[0].status).toBe("drift");
+    expect(result.results[0].actual).toBe("true");
+  });
+
+  it("hasRole returns \"false\" (string) → drift, NOT match (strict === true)", async () => {
+    const reader = makeMockReader({ [`${ADDR_TOKEN}::hasRole`]: "false" });
+    const result = await verifyConfig({ spec: grantRoleSpec, deployedAddresses, reader });
+
+    expect(result.clean).toBe(false);
+    expect(result.results[0].status).toBe("drift");
+    expect(result.results[0].actual).toBe("false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reads.args: RefArg and LiteralArg resolution in getter args
+// ---------------------------------------------------------------------------
+
+describe("verifyConfig() — reads.args argument resolution", () => {
+  it("setX getter called with resolved args: RefArg → address, LiteralArg → value", async () => {
+    // Verify that reads[stepId].args are resolved before being passed to reader.call
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        { kind: "setX", id: "set-fee", target: "feeController", function: "setFee" },
+      ],
+    };
+
+    const capturedArgs: unknown[] = [];
+    const reader: ChainReader = {
+      call: vi.fn(async ({ args }) => {
+        if (args) capturedArgs.push(...args);
+        return 500n;
+      }),
+    };
+
+    await verifyConfig({
+      spec,
+      deployedAddresses,
+      reader,
+      reads: {
+        "set-fee": {
+          function: "getFee",
+          // mix: one ref arg (resolves to ADDR_TOKEN) and one literal (resolves to 42)
+          args: [
+            { kind: "ref", contract: "token" },
+            { kind: "literal", value: 42 },
+          ],
+          expected: { kind: "literal", value: 500 },
+        },
+      },
+    });
+
+    // reader.call must have been called with the RESOLVED args
+    expect(reader.call).toHaveBeenCalledWith({
+      address: ADDR_FEE,
+      function: "getFee",
+      args: [ADDR_TOKEN, 42],
+    });
+    expect(capturedArgs[0]).toBe(ADDR_TOKEN);  // RefArg resolved to address
+    expect(capturedArgs[1]).toBe(42);           // LiteralArg passed through
+  });
+
+  it("wire getter called with resolved ref arg", async () => {
+    // Verify reads[stepId].args are resolved for wire steps too
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "wire",
+          id: "wire-token-into-vault",
+          source: "token",
+          into: "vault",
+          function: "setToken",
+        },
+      ],
+    };
+
+    const reader: ChainReader = {
+      call: vi.fn(async () => ADDR_TOKEN),
+    };
+
+    await verifyConfig({
+      spec,
+      deployedAddresses,
+      reader,
+      reads: {
+        "wire-token-into-vault": {
+          function: "getToken",
+          // pass a ref arg to the getter (unusual but legal)
+          args: [{ kind: "ref", contract: "feeController" }],
+        },
+      },
+    });
+
+    expect(reader.call).toHaveBeenCalledWith({
+      address: ADDR_VAULT,
+      function: "getToken",
+      args: [ADDR_FEE],  // ref resolved to ADDR_FEE
+    });
+  });
+
+  it("reads[stepId].args contains a ref to unknown id → throws ConfigVerifyError(UNKNOWN_REF)", async () => {
+    // resolveArgs calls resolveArg which throws UNKNOWN_REF for unknown ref ids.
+    // This exercises config-drift.ts lines ~414-421 (resolveArgs/resolveArg).
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        { kind: "setX", id: "set-fee", target: "feeController", function: "setFee" },
+      ],
+    };
+
+    await expect(
+      verifyConfig({
+        spec,
+        deployedAddresses,
+        reader: makeMockReader({}),
+        reads: {
+          "set-fee": {
+            function: "getFee",
+            args: [{ kind: "ref", contract: "NONEXISTENT_CONTRACT" }],
+            expected: { kind: "literal", value: 500 },
+          },
+        },
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return (
+        err instanceof ConfigVerifyError &&
+        err.code === "UNKNOWN_REF" &&
+        err.message.includes("NONEXISTENT_CONTRACT")
+      );
+    });
+  });
+});

@@ -521,7 +521,7 @@ async function verifyStep(
       actual,
       message: hasRole
         ? undefined
-        : `Role "${step.role}" not granted to ${String(accountValue)}: hasRole returned ${JSON.stringify(actual)}`,
+        : `Role "${step.role}" not granted to ${String(accountValue)}: hasRole returned ${safeSerialize(actual)}`,
     };
   }
 
