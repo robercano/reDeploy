@@ -14,10 +14,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "pnpm --filter @redeploy/core build && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@redeploy/core": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
