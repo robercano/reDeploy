@@ -46,6 +46,7 @@
  */
 
 import type { VerifierClient, SubmitRequest, SubmitResult, StatusResult } from "../types.js";
+import { VerifyError } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Injectable HTTP type (no real http library)
@@ -260,6 +261,15 @@ export function createEtherscanClient(
   fetchFn: FetchLike,
   sleepFn?: (ms: number) => Promise<void>,
 ): VerifierClient<EtherscanSubmitRequest> {
+  // Validate API key before building anything — a missing or blank key is a
+  // setup error (VerifyError), not a per-contract failure.
+  if (!config.apiKey || config.apiKey.trim() === "") {
+    throw new VerifyError(
+      "MISSING_API_KEY",
+      "Etherscan verifier requires a non-empty apiKey.",
+    );
+  }
+
   const apiUrl = config.apiUrl ?? "https://api.etherscan.io/api";
   const maxPollAttempts = config.maxPollAttempts ?? 10;
   const pollIntervalMs = config.pollIntervalMs ?? 5000;

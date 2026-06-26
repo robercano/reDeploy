@@ -1147,3 +1147,46 @@ describe("createEtherscanClient — submit unexpected status fallback", () => {
     expect(result.status).toBe("failed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// createEtherscanClient — MISSING_API_KEY guard
+// ---------------------------------------------------------------------------
+
+describe("createEtherscanClient — MISSING_API_KEY guard", () => {
+  it("throws VerifyError MISSING_API_KEY for an empty apiKey", () => {
+    try {
+      createEtherscanClient({ apiKey: "" }, makeFakeFetch({}));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(VerifyError);
+      expect((err as VerifyError).code).toBe("MISSING_API_KEY");
+    }
+  });
+
+  it("throws VerifyError MISSING_API_KEY for a whitespace-only apiKey", () => {
+    try {
+      createEtherscanClient({ apiKey: "   " }, makeFakeFetch({}));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(VerifyError);
+      expect((err as VerifyError).code).toBe("MISSING_API_KEY");
+    }
+  });
+
+  it("error message does not echo the sentinel key value", () => {
+    const SENTINEL = "SECRET_ETHERSCAN_KEY_DO_NOT_LOG";
+    try {
+      createEtherscanClient({ apiKey: "" }, makeFakeFetch({}));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(VerifyError);
+      expect((err as VerifyError).message).not.toContain(SENTINEL);
+    }
+  });
+
+  it("does NOT throw for a valid non-empty apiKey (sanity check)", () => {
+    expect(() =>
+      createEtherscanClient({ apiKey: "valid-api-key" }, makeFakeFetch({})),
+    ).not.toThrow();
+  });
+});
