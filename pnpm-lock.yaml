@@ -79,13 +79,13 @@ importers:
 
   packages/reader:
     dependencies:
-      '@nomicfoundation/ignition-core':
-        specifier: 0.15.15
-        version: 0.15.15
       '@redeploy/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
+      '@nomicfoundation/ignition-core':
+        specifier: 0.15.15
+        version: 0.15.15
       '@types/node':
         specifier: ^22.7.5
         version: 22.7.5

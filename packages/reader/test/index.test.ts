@@ -580,3 +580,115 @@ describe("malformed deployed_addresses.json", () => {
     expect(view.warnings.some((w) => w.includes("deployed_addresses.json"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test 11: JOURNAL_READ_ERROR — journal.jsonl exists but cannot be read
+// ---------------------------------------------------------------------------
+
+describe("journal read error (EISDIR)", () => {
+  it("throws ReadError with code JOURNAL_READ_ERROR when journal.jsonl is a directory", () => {
+    // Create journal.jsonl as a DIRECTORY instead of a file.
+    // fs.readFileSync on a directory throws EISDIR (a non-ENOENT error),
+    // which must hit the JOURNAL_READ_ERROR branch.
+    fs.mkdirSync(path.join(tmpDir, "journal.jsonl"));
+
+    try {
+      readDeployment({ deploymentDir: tmpDir });
+      expect.fail("Expected ReadError to be thrown");
+    } catch (err) {
+      expect(err instanceof ReadError).toBe(true);
+      expect((err as ReadError).code).toBe("JOURNAL_READ_ERROR");
+      expect((err as ReadError).name).toBe("ReadError");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 12: CONFIG_JOURNAL_READ_ERROR — config-state.jsonl exists but cannot be read
+// ---------------------------------------------------------------------------
+
+describe("config journal read error (EISDIR)", () => {
+  it("throws ReadError with code CONFIG_JOURNAL_READ_ERROR when config-state.jsonl is a directory", () => {
+    // Deployment side must be valid so the read gets far enough to attempt
+    // the config journal read and hits that specific branch.
+    writeJournal(tmpDir, [
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_INITIALIZE",
+        futureId: "Deployment#c",
+        contractName: "C",
+        constructorArgs: [],
+        libraries: {},
+        dependencies: [],
+      },
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_COMPLETE",
+        futureId: "Deployment#c",
+        result: { type: "SUCCESS", address: "0x1234567890123456789012345678901234567890" },
+      },
+    ]);
+    writeDeployedAddresses(tmpDir, {
+      "Deployment#c": "0x1234567890123456789012345678901234567890",
+    });
+
+    // Create config-state.jsonl as a DIRECTORY instead of a file.
+    // fs.readFileSync on a directory throws EISDIR (a non-ENOENT error),
+    // which must hit the CONFIG_JOURNAL_READ_ERROR branch.
+    fs.mkdirSync(path.join(tmpDir, "config-state.jsonl"));
+
+    try {
+      readDeployment({ deploymentDir: tmpDir });
+      expect.fail("Expected ReadError to be thrown");
+    } catch (err) {
+      expect(err instanceof ReadError).toBe(true);
+      expect((err as ReadError).code).toBe("CONFIG_JOURNAL_READ_ERROR");
+      expect((err as ReadError).name).toBe("ReadError");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 13: normalizeArg prototype pollution defense
+// ---------------------------------------------------------------------------
+
+describe("normalizeArg prototype pollution defense", () => {
+  it("handles an arg object containing __proto__ key without polluting Object.prototype", () => {
+    // Record a baseline to detect pollution
+    const baselineHasOwn = Object.prototype.hasOwnProperty;
+
+    writeJournal(tmpDir, [
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_INITIALIZE",
+        futureId: "Deployment#c",
+        contractName: "C",
+        // Untrusted journal arg object with dangerous prototype-pollution keys.
+        // JSON.stringify + JSON.parse (what writeJournal does via the file path)
+        // will drop __proto__ but keep constructor and prototype as own keys.
+        constructorArgs: [
+          {
+            normal: "value",
+            constructor: "should-be-skipped",
+            prototype: "should-be-skipped",
+          },
+        ],
+        libraries: {},
+        dependencies: [],
+      },
+    ]);
+
+    const view = readDeployment({ deploymentDir: tmpDir });
+
+    // The contract should be read successfully
+    expect(view.contracts).toHaveLength(1);
+    const arg = view.contracts[0].args[0] as Record<string, unknown>;
+
+    // constructor and prototype keys must NOT appear in the output
+    expect(Object.keys(arg)).not.toContain("constructor");
+    expect(Object.keys(arg)).not.toContain("prototype");
+
+    // The normal key should still be present
+    expect(arg["normal"]).toBe("value");
+
+    // Object.prototype must be untouched — no pollution
+    expect(Object.prototype.hasOwnProperty).toBe(baselineHasOwn);
+  });
+});

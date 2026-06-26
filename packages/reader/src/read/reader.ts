@@ -264,8 +264,13 @@ function normalizeArg(v: unknown): ArgValue {
     return v.map(normalizeArg);
   }
   if (typeof v === "object") {
-    const out: Record<string, ArgValue> = {};
+    // Use a null-prototype object to prevent prototype pollution when writing
+    // untrusted journal keys. Skip the three well-known dangerous key names
+    // that could be used to pollute Object.prototype or Function.prototype.
+    const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+    const out = Object.create(null) as Record<string, ArgValue>;
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (DANGEROUS_KEYS.has(k)) continue;
       out[k] = normalizeArg(val);
     }
     return out;
