@@ -2067,5 +2067,81 @@
         }
       ]
     }
+  },
+  {
+    "abi": [],
+    "ast": {
+      "absolutePath": "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol",
+      "nodeType": "SourceUnit",
+      "nodes": [
+        {
+          "nodeType": "ContractDefinition",
+          "id": 41645,
+          "name": "IERC4626",
+          "contractKind": "interface",
+          "linearizedBaseContracts": [
+            41645
+          ],
+          "nodes": []
+        }
+      ]
+    }
+  },
+  {
+    "abi": [],
+    "ast": {
+      "absolutePath": "lib/openzeppelin-contracts/contracts/interfaces/draft-IERC6093.sol",
+      "nodeType": "SourceUnit",
+      "nodes": [
+        {
+          "nodeType": "ContractDefinition",
+          "id": 41687,
+          "name": "IERC20Errors",
+          "contractKind": "interface",
+          "linearizedBaseContracts": [
+            41687
+          ],
+          "nodes": []
+        }
+      ]
+    }
+  },
+  {
+    "abi": [],
+    "ast": {
+      "absolutePath": "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol",
+      "nodeType": "SourceUnit",
+      "nodes": [
+        {
+          "nodeType": "ContractDefinition",
+          "id": 43086,
+          "name": "IERC20Metadata",
+          "contractKind": "interface",
+          "linearizedBaseContracts": [
+            43086
+          ],
+          "nodes": []
+        }
+      ]
+    }
+  },
+  {
+    "abi": [],
+    "ast": {
+      "absolutePath": "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol",
+      "nodeType": "SourceUnit",
+      "nodes": [
+        {
+          "nodeType": "ContractDefinition",
+          "id": 42375,
+          "name": "IERC20",
+          "contractKind": "interface",
+          "linearizedBaseContracts": [
+            42375
+          ],
+          "nodes": []
+        }
+      ]
+    }
   }
 ]

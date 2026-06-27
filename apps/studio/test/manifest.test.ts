@@ -378,6 +378,116 @@ describe("derivePackageSegments", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// MAJOR 1 -- fixture-derived VaultERC4626 inheritance deep-equals full real array
+// ---------------------------------------------------------------------------
+
+describe("deriveManifests -- VaultERC4626 full inheritance (fixture)", () => {
+  const outputs = fixtureOutputs as unknown as FoundryContractOutput[];
+  const manifests = deriveManifests(outputs);
+
+  it("VaultERC4626 fixture-derived inheritance deep-equals full most-derived-first array including interfaces", () => {
+    const m = manifests.find((x) => x.name === "VaultERC4626")!;
+    expect(m.inheritance).toEqual([
+      "VaultERC4626",
+      "ERC4626",
+      "IERC4626",
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MAJOR 2 -- most-derived-wins dedup: decimals resolves to ERC4626, not ERC20
+// ---------------------------------------------------------------------------
+
+describe("deriveManifests -- most-derived-wins dedup invariant (fixture)", () => {
+  const outputs = fixtureOutputs as unknown as FoundryContractOutput[];
+  const manifests = deriveManifests(outputs);
+
+  it("VaultERC4626 decimals.declaredIn is 'ERC4626' (most-derived wins over ERC20)", () => {
+    const m = manifests.find((x) => x.name === "VaultERC4626")!;
+    const decimals = m.functions.find((f) => f.name === "decimals");
+    expect(decimals).toBeDefined();
+    expect(decimals!.declaredIn).toBe("ERC4626");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MINOR 3 -- interface filtering: AggregatorV3Interface excluded from output
+// ---------------------------------------------------------------------------
+
+describe("deriveManifests -- interface filtering (fixture)", () => {
+  const outputs = fixtureOutputs as unknown as FoundryContractOutput[];
+  const manifests = deriveManifests(outputs);
+
+  it("AggregatorV3Interface (contractKind='interface') is excluded from manifests", () => {
+    expect(manifests.some((m) => m.name === "AggregatorV3Interface")).toBe(false);
+  });
+
+  it("IERC4626 (contractKind='interface') is excluded from manifests", () => {
+    expect(manifests.some((m) => m.name === "IERC4626")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MINOR 4 -- uncovered OZ-root packageSegments branch (dirs.length === 0)
+// ---------------------------------------------------------------------------
+
+describe("derivePackageSegments -- OZ root (dirs.length === 0)", () => {
+  it("lib/openzeppelin-contracts/contracts/Foo.sol maps to ['@openzeppelin']", () => {
+    expect(derivePackageSegments("lib/openzeppelin-contracts/contracts/Foo.sol")).toEqual([
+      "@openzeppelin",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MINOR 5 -- types and stateMutability assertions
+// ---------------------------------------------------------------------------
+
+describe("deriveManifests -- types and stateMutability (fixture)", () => {
+  const outputs = fixtureOutputs as unknown as FoundryContractOutput[];
+  const manifests = deriveManifests(outputs);
+
+  it("VaultERC4626 constructorArgs types deep-equal expected", () => {
+    const m = manifests.find((x) => x.name === "VaultERC4626")!;
+    const types = m.constructorArgs.map((a) => a.type);
+    expect(types).toEqual([
+      "contract IERC20",
+      "contract AggregatorV3Interface",
+      "string",
+      "string",
+    ]);
+  });
+
+  it("VaultERC4626 assetPrice function has stateMutability='view' and empty inputs", () => {
+    const m = manifests.find((x) => x.name === "VaultERC4626")!;
+    const fn = m.functions.find((f) => f.name === "assetPrice");
+    expect(fn).toBeDefined();
+    expect(fn!.stateMutability).toBe("view");
+    expect(fn!.inputs).toEqual([]);
+  });
+
+  it("PriceOracle constructorArgs types are ['uint8','int256']", () => {
+    const m = manifests.find((x) => x.name === "PriceOracle")!;
+    const types = m.constructorArgs.map((a) => a.type);
+    expect(types).toEqual(["uint8", "int256"]);
+  });
+
+  it("VaultERC4626 totalValue function has stateMutability='view'", () => {
+    const m = manifests.find((x) => x.name === "VaultERC4626")!;
+    const fn = m.functions.find((f) => f.name === "totalValue");
+    expect(fn).toBeDefined();
+    expect(fn!.stateMutability).toBe("view");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Manifest type compatibility check (type assertion compiles cleanly)
 // ---------------------------------------------------------------------------
