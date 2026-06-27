@@ -348,3 +348,107 @@ describe("ContractsBrowser — empty contracts", () => {
     expect(screen.getByTestId("contracts-list").children).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Duplicate contract names (same name, different sourcePath)
+// ---------------------------------------------------------------------------
+
+describe("ContractsBrowser — duplicate contract names", () => {
+  // Two contracts share the name "Token" but come from different source paths.
+  // The second one has a different constructor signature so we can confirm
+  // the correct one shows up after selection.
+  const TOKEN_SRC: ContractManifest = {
+    name: "Token",
+    sourcePath: "src/Token.sol",
+    packageSegments: ["src"],
+    constructorArgs: [
+      { name: "name", type: "string" },
+      { name: "symbol", type: "string" },
+    ],
+    inheritance: ["Token"],
+    functions: [],
+  };
+
+  const TOKEN_LIB: ContractManifest = {
+    name: "Token",
+    sourcePath: "lib/vendor/Token.sol",
+    packageSegments: ["lib", "vendor"],
+    constructorArgs: [{ name: "initialSupply", type: "uint256" }],
+    inheritance: ["Token"],
+    functions: [],
+  };
+
+  const DUPLICATE_CONTRACTS: ContractManifest[] = [TOKEN_SRC, TOKEN_LIB];
+
+  it("renders both rows when two contracts share the same name", () => {
+    render(<ContractsBrowser contracts={DUPLICATE_CONTRACTS} />);
+    // Both Token rows should appear; getAllByTestId returns all matching elements.
+    const rows = screen.getAllByTestId("contract-row-Token");
+    expect(rows).toHaveLength(2);
+  });
+
+  it("selecting TOKEN_SRC shows its constructor signature (string name, string symbol)", () => {
+    render(<ContractsBrowser contracts={DUPLICATE_CONTRACTS} />);
+    const rows = screen.getAllByTestId("contract-row-Token");
+    // TOKEN_SRC is sorted first alphabetically by sourcePath (lib sorts after src, but
+    // sorted flat by name so both appear — click the one showing the src hint).
+    const srcRow = rows.find((r) => r.textContent && r.textContent.includes("src"));
+    expect(srcRow).toBeDefined();
+    fireEvent.click(srcRow!);
+
+    const sig = screen.getByTestId("constructor-signature");
+    expect(sig.textContent).toBe("constructor(string name, string symbol)");
+  });
+
+  it("selecting TOKEN_LIB shows its constructor signature (uint256 initialSupply)", () => {
+    render(<ContractsBrowser contracts={DUPLICATE_CONTRACTS} />);
+    const rows = screen.getAllByTestId("contract-row-Token");
+    const libRow = rows.find((r) => r.textContent && r.textContent.includes("lib"));
+    expect(libRow).toBeDefined();
+    fireEvent.click(libRow!);
+
+    const sig = screen.getByTestId("constructor-signature");
+    expect(sig.textContent).toBe("constructor(uint256 initialSupply)");
+  });
+
+  it("selecting TOKEN_SRC does not highlight TOKEN_LIB row", () => {
+    render(<ContractsBrowser contracts={DUPLICATE_CONTRACTS} />);
+    const rows = screen.getAllByTestId("contract-row-Token");
+    const srcRow = rows.find((r) => r.textContent && r.textContent.includes("src"));
+    fireEvent.click(srcRow!);
+
+    // After selecting the src row, the lib row should NOT have the selected style
+    // (selected rows get a blue left-border; check via inline style or by verifying
+    // only one row has background set to the selection color).
+    const libRow = rows.find((r) => r.textContent && r.textContent.includes("lib"));
+    expect(libRow).toBeDefined();
+    // The selected row has a blue selection background (jsdom normalizes hex to rgb).
+    // Unselected row should have no selection background.
+    const libBg = (libRow as HTMLElement).style.background;
+    const srcBg = (srcRow as HTMLElement).style.background;
+    // src row should be selected (non-empty background)
+    expect(srcBg).toBeTruthy();
+    // lib row should not be selected (empty background)
+    expect(libBg).toBe("");
+  });
+
+  it("can switch selection from TOKEN_SRC to TOKEN_LIB independently", () => {
+    render(<ContractsBrowser contracts={DUPLICATE_CONTRACTS} />);
+    const rows = screen.getAllByTestId("contract-row-Token");
+    const srcRow = rows.find((r) => r.textContent && r.textContent.includes("src"))!;
+    const libRow = rows.find((r) => r.textContent && r.textContent.includes("lib"))!;
+
+    // Select src first
+    fireEvent.click(srcRow);
+    expect(screen.getByTestId("constructor-signature").textContent).toBe(
+      "constructor(string name, string symbol)",
+    );
+
+    // Now select lib
+    fireEvent.click(libRow);
+    expect(screen.getByTestId("constructor-signature").textContent).toBe(
+      "constructor(uint256 initialSupply)",
+    );
+  });
+});
+

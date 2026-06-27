@@ -47,6 +47,14 @@ interface FolderNode {
   contracts: ContractManifest[];
 }
 
+// ---------------------------------------------------------------------------
+// Unique contract id
+// ---------------------------------------------------------------------------
+
+function contractUniqueId(contract: ContractManifest): string {
+  return `${contract.sourcePath}::${contract.name}`;
+}
+
 function buildFolderTree(contracts: ContractManifest[]): Map<string, FolderNode> {
   const root = new Map<string, FolderNode>();
 
@@ -83,7 +91,7 @@ function buildFolderTree(contracts: ContractManifest[]): Map<string, FolderNode>
 const panelStyle: React.CSSProperties = {
   position: "fixed",
   left: 0,
-  top: 0,
+  top: 56,
   bottom: 0,
   width: 280,
   background: "#f8f9fa",
@@ -221,7 +229,7 @@ function buildPackageHint(contract: ContractManifest): string {
 interface ContractRowProps {
   contract: ContractManifest;
   selected: boolean;
-  onSelect: (name: string) => void;
+  onSelect: (uniqueId: string) => void;
   indent?: number;
 }
 
@@ -234,7 +242,7 @@ function ContractRow({ contract, selected, onSelect, indent = 0 }: ContractRowPr
     <div
       style={style}
       data-testid={`contract-row-${contract.name}`}
-      onClick={() => onSelect(contract.name)}
+      onClick={() => onSelect(contractUniqueId(contract))}
     >
       <div style={contractNameStyle}>{contract.name}</div>
       <div style={contractHintStyle}>{buildPackageHint(contract)}</div>
@@ -244,12 +252,15 @@ function ContractRow({ contract, selected, onSelect, indent = 0 }: ContractRowPr
 
 interface FolderTreeProps {
   node: FolderNode;
-  selectedName: string | null;
-  onSelect: (name: string) => void;
+  selectedId: string | null;
+  onSelect: (uniqueId: string) => void;
   depth?: number;
+  /** Accumulated path from root — used to build collision-safe folder keys. */
+  path?: string;
 }
 
-function FolderTree({ node, selectedName, onSelect, depth = 0 }: FolderTreeProps) {
+function FolderTree({ node, selectedId, onSelect, depth = 0, path = "" }: FolderTreeProps) {
+  const fullPath = path === "" ? node.segment : `${path}/${node.segment}`;
   const [open, setOpen] = useState(true);
 
   const hasContent =
@@ -283,20 +294,21 @@ function FolderTree({ node, selectedName, onSelect, depth = 0 }: FolderTreeProps
         <div>
           {sortedContracts.map((contract) => (
             <ContractRow
-              key={contract.name}
+              key={contractUniqueId(contract)}
               contract={contract}
-              selected={selectedName === contract.name}
+              selected={selectedId === contractUniqueId(contract)}
               onSelect={onSelect}
               indent={depth + 1}
             />
           ))}
           {sortedChildren.map((child) => (
             <FolderTree
-              key={child.segment}
+              key={`${fullPath}/${child.segment}`}
               node={child}
-              selectedName={selectedName}
+              selectedId={selectedId}
               onSelect={onSelect}
               depth={depth + 1}
+              path={fullPath}
             />
           ))}
         </div>
@@ -317,7 +329,7 @@ function hasVisibleContent(node: FolderNode): boolean {
 export function ContractsBrowser({ contracts = contractManifest }: ContractsBrowserProps) {
   const [mode, setMode] = useState<ViewMode>("flat");
   const [search, setSearch] = useState("");
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Apply case-insensitive substring filter on name.
   const filtered =
@@ -329,7 +341,7 @@ export function ContractsBrowser({ contracts = contractManifest }: ContractsBrow
     a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
   );
 
-  const selectedContract = selectedName != null ? contracts.find((c) => c.name === selectedName) : null;
+  const selectedContract = selectedId != null ? contracts.find((c) => contractUniqueId(c) === selectedId) : null;
 
   return (
     <div style={panelStyle} data-testid="contracts-browser">
@@ -370,10 +382,10 @@ export function ContractsBrowser({ contracts = contractManifest }: ContractsBrow
         {mode === "flat" &&
           sortedFlat.map((contract) => (
             <ContractRow
-              key={contract.name}
+              key={contractUniqueId(contract)}
               contract={contract}
-              selected={selectedName === contract.name}
-              onSelect={setSelectedName}
+              selected={selectedId === contractUniqueId(contract)}
+              onSelect={setSelectedId}
             />
           ))}
 
@@ -386,8 +398,8 @@ export function ContractsBrowser({ contracts = contractManifest }: ContractsBrow
             <FolderTree
               key={folder.segment}
               node={folder}
-              selectedName={selectedName}
-              onSelect={setSelectedName}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
             />
           ));
         })()}
