@@ -369,3 +369,189 @@ describe("useGraph — selectedNodeId", () => {
     expect(result.current.selectedNodeId).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// addContractFromManifest
+// ---------------------------------------------------------------------------
+
+import type { ContractManifest } from "../src/manifest/types";
+
+/** VaultERC4626-style fixture with four constructor args. */
+const VAULT_MANIFEST: ContractManifest = {
+  name: "VaultERC4626",
+  sourcePath: "src/VaultERC4626.sol",
+  packageSegments: ["src"],
+  constructorArgs: [
+    { name: "asset_", type: "contract IERC20" },
+    { name: "oracle_", type: "contract IOracle" },
+    { name: "name_", type: "string" },
+    { name: "symbol_", type: "string" },
+  ],
+  inheritance: ["VaultERC4626", "ERC4626"],
+  functions: [],
+};
+
+describe("useGraph — addContractFromManifest", () => {
+  it("creates one node with contractName set to manifest name", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).contractName).toBe("VaultERC4626");
+  });
+
+  it("sets deployId to empty string (user fills it in)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    expect(nd(result.current.nodes[0]).deployId).toBe("");
+  });
+
+  it("creates node type contractNode", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    expect(result.current.nodes[0].type).toBe("contractNode");
+  });
+
+  it("creates args with length equal to constructorArgs count", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    expect(nd(result.current.nodes[0]).args).toHaveLength(4);
+  });
+
+  it("sets arg indices 0..3 in order", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const args = nd(result.current.nodes[0]).args;
+    expect(args[0].index).toBe(0);
+    expect(args[1].index).toBe(1);
+    expect(args[2].index).toBe(2);
+    expect(args[3].index).toBe(3);
+  });
+
+  it("sets every arg kind to literal", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const args = nd(result.current.nodes[0]).args;
+    for (const arg of args) {
+      expect(arg.kind).toBe("literal");
+    }
+  });
+
+  it("sets every arg value to empty string", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const args = nd(result.current.nodes[0]).args;
+    for (const arg of args) {
+      expect(arg.value).toBe("");
+    }
+  });
+
+  it("sets arg[0].name = 'asset_' and arg[0].type = 'contract IERC20'", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const arg0 = nd(result.current.nodes[0]).args[0];
+    expect(arg0.name).toBe("asset_");
+    expect(arg0.type).toBe("contract IERC20");
+  });
+
+  it("sets arg[1].name = 'oracle_' and arg[1].type = 'contract IOracle'", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const arg1 = nd(result.current.nodes[0]).args[1];
+    expect(arg1.name).toBe("oracle_");
+    expect(arg1.type).toBe("contract IOracle");
+  });
+
+  it("sets arg[2].name = 'name_' and arg[2].type = 'string'", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const arg2 = nd(result.current.nodes[0]).args[2];
+    expect(arg2.name).toBe("name_");
+    expect(arg2.type).toBe("string");
+  });
+
+  it("sets arg[3].name = 'symbol_' and arg[3].type = 'string'", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const arg3 = nd(result.current.nodes[0]).args[3];
+    expect(arg3.name).toBe("symbol_");
+    expect(arg3.type).toBe("string");
+  });
+
+  it("injects all expected callbacks into node data", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const data = result.current.nodes[0].data;
+    expect(typeof data.onUpdateDeployId).toBe("function");
+    expect(typeof data.onUpdateContractName).toBe("function");
+    expect(typeof data.onAddArg).toBe("function");
+    expect(typeof data.onRemoveArg).toBe("function");
+    expect(typeof data.onUpdateArgSlot).toBe("function");
+  });
+
+  it("honors an explicit position when provided", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST, { x: 42, y: 99 }));
+
+    expect(result.current.nodes[0].position).toEqual({ x: 42, y: 99 });
+  });
+
+  it("uses auto-offset position when no position is provided", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const pos = result.current.nodes[0].position;
+    // Auto position formula: { x: 100 + (nodeCounter - 1) * 250, y: 100 }
+    // nodeCounter increments each call so x >= 100, y === 100
+    expect(pos.y).toBe(100);
+    expect(pos.x).toBeGreaterThanOrEqual(100);
+  });
+
+  it("creates a node with empty after[] and configSteps[]", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(VAULT_MANIFEST));
+
+    const d = nd(result.current.nodes[0]);
+    expect(d.after).toEqual([]);
+    expect(d.configSteps).toEqual([]);
+  });
+
+  it("handles a manifest with zero constructor args", () => {
+    const noArgManifest: ContractManifest = {
+      name: "Registry",
+      sourcePath: "src/Registry.sol",
+      packageSegments: ["src"],
+      constructorArgs: [],
+      inheritance: ["Registry"],
+      functions: [],
+    };
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(noArgManifest));
+
+    expect(nd(result.current.nodes[0]).contractName).toBe("Registry");
+    expect(nd(result.current.nodes[0]).args).toHaveLength(0);
+  });
+
+  it("sequential adds increment ids — two calls produce 2 nodes with distinct ids", () => {
+    const { result } = renderHook(() => useGraph());
+
+    act(() => {
+      result.current.addContractFromManifest(VAULT_MANIFEST);
+      result.current.addContractFromManifest(VAULT_MANIFEST);
+    });
+
+    expect(result.current.nodes).toHaveLength(2);
+    expect(result.current.nodes[0].id).not.toBe(result.current.nodes[1].id);
+  });
+});

@@ -7,8 +7,8 @@
  */
 
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
-import { ContractsBrowser } from "../src/components/ContractsBrowser.js";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { ContractsBrowser, DRAG_TRANSFER_KEY } from "../src/components/ContractsBrowser.js";
 import type { ContractManifest } from "../src/manifest/types.js";
 
 // ---------------------------------------------------------------------------
@@ -350,6 +350,66 @@ describe("ContractsBrowser — empty contracts", () => {
 });
 
 // ---------------------------------------------------------------------------
+// onAddContract callback (click-add)
+// ---------------------------------------------------------------------------
+
+describe("ContractsBrowser — onAddContract callback", () => {
+  it("calls onAddContract with the contract when a row is clicked", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Token"));
+
+    expect(onAddContract).toHaveBeenCalledTimes(1);
+    expect(onAddContract).toHaveBeenCalledWith(TOKEN);
+  });
+
+  it("still selects the contract (shows signature panel) when onAddContract is set", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Token"));
+
+    // Selection still works
+    expect(screen.getByTestId("constructor-signature-panel")).not.toBeNull();
+    expect(screen.getByTestId("constructor-signature").textContent).toBe(
+      "constructor(string name, string symbol)",
+    );
+  });
+
+  it("calls onAddContract with correct contract when a different row is clicked", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Vault"));
+
+    expect(onAddContract).toHaveBeenCalledWith(VAULT);
+  });
+
+  it("does not throw when onAddContract is not provided", () => {
+    // No onAddContract prop — should behave exactly as before (select only)
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    expect(() => {
+      fireEvent.click(screen.getByTestId("contract-row-Token"));
+    }).not.toThrow();
+
+    // Selection still works
+    expect(screen.getByTestId("constructor-signature-panel")).not.toBeNull();
+  });
+
+  it("calls onAddContract for a contract in folders mode", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+    fireEvent.click(screen.getByTestId("mode-folders"));
+
+    fireEvent.click(screen.getByTestId("contract-row-Vault"));
+
+    expect(onAddContract).toHaveBeenCalledWith(VAULT);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Duplicate contract names (same name, different sourcePath)
 // ---------------------------------------------------------------------------
 
@@ -448,6 +508,64 @@ describe("ContractsBrowser — duplicate contract names", () => {
     fireEvent.click(libRow);
     expect(screen.getByTestId("constructor-signature").textContent).toBe(
       "constructor(uint256 initialSupply)",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drag SOURCE — handleDragStart on contract rows
+// ---------------------------------------------------------------------------
+
+describe("ContractsBrowser — drag source (handleDragStart)", () => {
+  it("sets effectAllowed='copy' and dataTransfer.setData with DRAG_TRANSFER_KEY on drag start", () => {
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    const setData = vi.fn();
+    const mockDataTransfer = {
+      effectAllowed: "none",
+      setData,
+    };
+
+    const row = screen.getByTestId("contract-row-Token");
+    fireEvent.dragStart(row, { dataTransfer: mockDataTransfer });
+
+    // effectAllowed must be set to "copy"
+    expect(mockDataTransfer.effectAllowed).toBe("copy");
+    // setData must have been called with the DRAG_TRANSFER_KEY and Token's uniqueId
+    expect(setData).toHaveBeenCalledTimes(1);
+    expect(setData).toHaveBeenCalledWith(DRAG_TRANSFER_KEY, "src/Token.sol::Token");
+  });
+
+  it("uses sourcePath::name as the uniqueId for Vault", () => {
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    const setData = vi.fn();
+    const mockDataTransfer = {
+      effectAllowed: "none",
+      setData,
+    };
+
+    const row = screen.getByTestId("contract-row-Vault");
+    fireEvent.dragStart(row, { dataTransfer: mockDataTransfer });
+
+    expect(setData).toHaveBeenCalledWith(DRAG_TRANSFER_KEY, "src/Vault.sol::Vault");
+  });
+
+  it("uses sourcePath::name from deeply nested ERC20 contract", () => {
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    const setData = vi.fn();
+    const mockDataTransfer = {
+      effectAllowed: "none",
+      setData,
+    };
+
+    const row = screen.getByTestId("contract-row-ERC20");
+    fireEvent.dragStart(row, { dataTransfer: mockDataTransfer });
+
+    expect(setData).toHaveBeenCalledWith(
+      DRAG_TRANSFER_KEY,
+      "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol::ERC20",
     );
   });
 });

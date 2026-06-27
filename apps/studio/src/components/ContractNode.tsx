@@ -45,6 +45,12 @@ const argRowStyle: React.CSSProperties = {
   position: "relative",
 };
 
+const paramTypeStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: "#999",
+  fontStyle: "italic",
+};
+
 function ArgRow({
   slot,
   nodeId,
@@ -57,6 +63,7 @@ function ArgRow({
   onRemove: (index: number) => void;
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
+  const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
   return (
     <div style={argRowStyle}>
       <Handle
@@ -68,14 +75,26 @@ function ArgRow({
       <span style={{ fontSize: 10, color: "#999", minWidth: 12 }}>
         [{slot.index}]
       </span>
-      <input
-        style={{ ...inputStyle, flex: 1 }}
-        value={slot.value}
-        placeholder={slot.kind === "ref" ? "(ref)" : "value"}
-        title={`Constructor arg ${slot.index}${slot.kind === "ref" ? " (bound by edge)" : ""}`}
-        onChange={(e) => onUpdate(slot.index, e.target.value)}
-        aria-label={`arg-${slot.index}`}
-      />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
+        {hasParamInfo && (
+          <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
+            {slot.name !== undefined && (
+              <span style={{ ...labelStyle, marginBottom: 0 }}>{slot.name}</span>
+            )}
+            {slot.type !== undefined && (
+              <span style={paramTypeStyle}>{slot.type}</span>
+            )}
+          </div>
+        )}
+        <input
+          style={inputStyle}
+          value={slot.value}
+          placeholder={slot.kind === "ref" ? "(ref)" : "value"}
+          title={`Constructor arg ${slot.index}${slot.kind === "ref" ? " (bound by edge)" : ""}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
+          onChange={(e) => onUpdate(slot.index, e.target.value)}
+          aria-label={`arg-${slot.index}`}
+        />
+      </div>
       <button
         style={{ fontSize: 10, padding: "1px 4px", cursor: "pointer" }}
         onClick={() => onRemove(slot.index)}

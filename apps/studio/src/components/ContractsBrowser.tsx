@@ -2,7 +2,11 @@
  * ContractsBrowser.tsx
  *
  * Left-sidebar panel for browsing and searching compiled contracts from the
- * manifest. Read-only: no graph mutation (add-to-canvas is issue #37).
+ * manifest. Supports:
+ * - Add-to-canvas on click via the optional `onAddContract` prop.
+ * - Drag-to-canvas: each row is draggable; dragStart sets the dataTransfer key
+ *   "application/redeploy-contract" to the contract's unique id
+ *   (`sourcePath::name`). App.tsx reads this on drop and looks up the manifest.
  *
  * ## View modes
  * - Flat: all contracts sorted alphabetically by name, filtered by search.
@@ -29,7 +33,23 @@ import type { ContractManifest } from "../manifest/types.js";
 export interface ContractsBrowserProps {
   /** Contracts to display. Defaults to contractManifest from the manifest. */
   contracts?: ContractManifest[];
+  /**
+   * Called when the user clicks a contract row to add it to the canvas at a
+   * default position. The caller (App.tsx) is responsible for positioning.
+   */
+  onAddContract?: (contract: ContractManifest) => void;
 }
+
+// ---------------------------------------------------------------------------
+// dataTransfer key used by drag-to-canvas
+// ---------------------------------------------------------------------------
+
+/**
+ * The MIME-type-style key used in HTML5 dataTransfer for dragging a contract
+ * row onto the React Flow canvas. The value is the contract's unique id
+ * (`sourcePath::name`), which App.tsx uses to look up the ContractManifest.
+ */
+export const DRAG_TRANSFER_KEY = "application/redeploy-contract";
 
 // ---------------------------------------------------------------------------
 // View mode type
@@ -230,19 +250,32 @@ interface ContractRowProps {
   contract: ContractManifest;
   selected: boolean;
   onSelect: (uniqueId: string) => void;
+  onAddContract?: (contract: ContractManifest) => void;
   indent?: number;
 }
 
-function ContractRow({ contract, selected, onSelect, indent = 0 }: ContractRowProps) {
+function ContractRow({ contract, selected, onSelect, onAddContract, indent = 0 }: ContractRowProps) {
   const style = selected
     ? { ...contractRowSelectedStyle, paddingLeft: 13 + indent * 8 }
     : { ...contractRowStyle, paddingLeft: 16 + indent * 8 };
+
+  function handleClick() {
+    onSelect(contractUniqueId(contract));
+    onAddContract?.(contract);
+  }
+
+  function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData(DRAG_TRANSFER_KEY, contractUniqueId(contract));
+  }
 
   return (
     <div
       style={style}
       data-testid={`contract-row-${contract.name}`}
-      onClick={() => onSelect(contractUniqueId(contract))}
+      draggable
+      onClick={handleClick}
+      onDragStart={handleDragStart}
     >
       <div style={contractNameStyle}>{contract.name}</div>
       <div style={contractHintStyle}>{buildPackageHint(contract)}</div>
@@ -254,12 +287,13 @@ interface FolderTreeProps {
   node: FolderNode;
   selectedId: string | null;
   onSelect: (uniqueId: string) => void;
+  onAddContract?: (contract: ContractManifest) => void;
   depth?: number;
   /** Accumulated path from root — used to build collision-safe folder keys. */
   path?: string;
 }
 
-function FolderTree({ node, selectedId, onSelect, depth = 0, path = "" }: FolderTreeProps) {
+function FolderTree({ node, selectedId, onSelect, onAddContract, depth = 0, path = "" }: FolderTreeProps) {
   const fullPath = path === "" ? node.segment : `${path}/${node.segment}`;
   const [open, setOpen] = useState(true);
 
@@ -298,6 +332,7 @@ function FolderTree({ node, selectedId, onSelect, depth = 0, path = "" }: Folder
               contract={contract}
               selected={selectedId === contractUniqueId(contract)}
               onSelect={onSelect}
+              onAddContract={onAddContract}
               indent={depth + 1}
             />
           ))}
@@ -307,6 +342,7 @@ function FolderTree({ node, selectedId, onSelect, depth = 0, path = "" }: Folder
               node={child}
               selectedId={selectedId}
               onSelect={onSelect}
+              onAddContract={onAddContract}
               depth={depth + 1}
               path={fullPath}
             />
@@ -326,7 +362,7 @@ function hasVisibleContent(node: FolderNode): boolean {
 // Main ContractsBrowser component
 // ---------------------------------------------------------------------------
 
-export function ContractsBrowser({ contracts = contractManifest }: ContractsBrowserProps) {
+export function ContractsBrowser({ contracts = contractManifest, onAddContract }: ContractsBrowserProps) {
   const [mode, setMode] = useState<ViewMode>("flat");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -386,6 +422,7 @@ export function ContractsBrowser({ contracts = contractManifest }: ContractsBrow
               contract={contract}
               selected={selectedId === contractUniqueId(contract)}
               onSelect={setSelectedId}
+              onAddContract={onAddContract}
             />
           ))}
 
@@ -400,6 +437,7 @@ export function ContractsBrowser({ contracts = contractManifest }: ContractsBrow
               node={folder}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              onAddContract={onAddContract}
             />
           ));
         })()}
