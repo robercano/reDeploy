@@ -329,9 +329,9 @@ contract VaultERC4626Test is Test {
         vault.totalValue();
     }
 
-    function test_TotalValueDoesNotRevertOnZeroPriceWhenVaultEmpty() public {
-        // totalAssets == 0, so totalValue == 0 * price / decs == 0,
-        // but assetPrice() == 0 triggers the guard first.
+    function test_TotalValueRevertsOnZeroPriceEvenWhenVaultEmpty() public {
+        // totalAssets == 0, but assetPrice() == 0 triggers the non-positive guard
+        // before any multiply — so totalValue() reverts even when the vault is empty.
         vm.prank(deployer);
         oracle.setAnswer(0);
 

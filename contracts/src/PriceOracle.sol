@@ -17,11 +17,6 @@ contract PriceOracle is Ownable, AggregatorV3Interface {
     // Custom errors
     // -------------------------------------------------------------------------
 
-    /// @dev Thrown by setAnswer when the caller is not the owner.
-    ///      (OZ Ownable already reverts with OwnableUnauthorizedAccount — this error is
-    ///      kept as a named sentinel that tests can assert against via the onlyOwner
-    ///      modifier path. Ownable's own error is what gets thrown in practice; see tests.)
-
     // -------------------------------------------------------------------------
     // State
     // -------------------------------------------------------------------------

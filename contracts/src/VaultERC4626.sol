@@ -18,11 +18,11 @@ import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 ///                             using the oracle price and its declared decimals.
 ///
 ///         Unit convention for totalValue():
-///           result = totalAssets (asset tokens, 18 dec)
+///           result = totalAssets (asset tokens, asset.decimals() dec)
 ///                  * oracle answer (oracle.decimals() dec)
 ///                  / 10^oracle.decimals()
-///           => result is expressed in the same units as oracle.decimals() implies
-///              (e.g. USD with 18 decimals when oracle.decimals() == 18).
+///           => oracle decimals cancel out; result is denominated in the underlying
+///              asset's decimals (e.g. 18 dec when the asset uses 18 decimals).
 ///
 ///         Dependency direction: builds on Token (as asset) and PriceOracle (as feed).
 contract VaultERC4626 is ERC4626 {
