@@ -6,6 +6,7 @@ libs = ["lib"]
 solc = "0.8.28"
 optimizer = true
 optimizer_runs = 200
+ast = true
 
 [fmt]
 line_length = 100
