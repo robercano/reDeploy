@@ -542,4 +542,16 @@ describe("useGraph — addContractFromManifest", () => {
     expect(nd(result.current.nodes[0]).contractName).toBe("Registry");
     expect(nd(result.current.nodes[0]).args).toHaveLength(0);
   });
+
+  it("sequential adds increment ids — two calls produce 2 nodes with distinct ids", () => {
+    const { result } = renderHook(() => useGraph());
+
+    act(() => {
+      result.current.addContractFromManifest(VAULT_MANIFEST);
+      result.current.addContractFromManifest(VAULT_MANIFEST);
+    });
+
+    expect(result.current.nodes).toHaveLength(2);
+    expect(result.current.nodes[0].id).not.toBe(result.current.nodes[1].id);
+  });
 });
