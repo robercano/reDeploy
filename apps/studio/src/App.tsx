@@ -301,16 +301,20 @@ export function App() {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
   // Derive deploy targets from all graph nodes — used by ConfigPanel's setX target picker.
-  const deployTargets = useMemo<DeployTarget[]>(
-    () =>
-      nodes
-        .map((n) => {
-          const d = n.data as unknown as ContractNodeData;
-          return { deployId: d.deployId, contractName: d.contractName };
-        })
-        .filter((dt) => dt.deployId !== ""),
-    [nodes],
-  );
+  // Dedup by deployId so the picker never receives duplicate keys (duplicate deployIds are
+  // a user error caught by validateSpec, but the UI must not crash before validation runs).
+  const deployTargets = useMemo<DeployTarget[]>(() => {
+    const seen = new Set<string>();
+    const targets: DeployTarget[] = [];
+    for (const n of nodes) {
+      const d = n.data as unknown as ContractNodeData;
+      if (d.deployId !== "" && !seen.has(d.deployId)) {
+        seen.add(d.deployId);
+        targets.push({ deployId: d.deployId, contractName: d.contractName });
+      }
+    }
+    return targets;
+  }, [nodes]);
 
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
 

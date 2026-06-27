@@ -95,22 +95,26 @@ function SetXStepCard({
   step,
   nodeId,
   deployTargets,
-  defaultContractName,
+  ownDeployId,
   onUpdate,
   onRemove,
 }: {
   step: StudioSetXStep;
   nodeId: string;
   deployTargets: DeployTarget[];
-  /** contractName of the node this step is attached to (fallback target). */
-  defaultContractName: string;
+  /** deployId of the node this step is attached to (used as fallback target when step.target is undefined). */
+  ownDeployId: string;
   onUpdate: (update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => void;
   onRemove: () => void;
 }) {
-  // Resolve the target deploy-id: explicit step.target, or the node's own deployId.
-  const targetDeployId = step.target ?? deployTargets.find((dt) => dt.contractName === defaultContractName)?.deployId ?? "";
-  // Resolve contractName for the selected target.
-  const targetContractName = deployTargets.find((dt) => dt.deployId === targetDeployId)?.contractName ?? defaultContractName;
+  // Resolve the target deploy-id: use the explicit step.target override, or the
+  // attached node's own deployId as the default. This matches graph-to-spec.ts
+  // which serializes `step.target ?? targetId` where targetId is the node's own
+  // deployId — NOT a contractName lookup, which would fail for multiple nodes
+  // sharing the same contractName (e.g. two Token deploys token1/token2).
+  const targetDeployId = step.target ?? ownDeployId;
+  // Resolve contractName for the selected target (look up by deployId).
+  const targetContractName = deployTargets.find((dt) => dt.deployId === targetDeployId)?.contractName ?? "";
   const manifest = getContract(targetContractName);
   const groups = manifest ? groupWriteFunctions(manifest.functions) : [];
   const hasManifest = manifest !== undefined && groups.length > 0;
@@ -151,7 +155,11 @@ function SetXStepCard({
         </>
       )}
 
-      {/* Function picker (manifest-driven) or free-text fallback */}
+      {/* Function picker (manifest-driven) or free-text fallback.
+          NOTE: The spec's SetXStep uses a single `function: string` field, so
+          overloaded Solidity functions (same name, different signatures) cannot
+          be distinguished at the spec level. Current fixtures have no overloads,
+          so keying options by fn.name is safe for now. */}
       <div style={labelStyle}>Function name</div>
       {hasManifest ? (
         <select
@@ -292,7 +300,7 @@ export function ConfigPanel({
               step={step}
               nodeId={nodeId}
               deployTargets={deployTargets}
-              defaultContractName={data.contractName}
+              ownDeployId={data.deployId}
               onUpdate={(u) => onUpdateSetXStep(nodeId, step.id, u)}
               onRemove={() => onRemoveStep(nodeId, step.id)}
             />

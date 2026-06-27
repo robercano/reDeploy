@@ -496,6 +496,106 @@ describe("ConfigPanel — setX step (target picker)", () => {
       args: [],
     });
   });
+
+  it("defaults target picker to the node's own deployId when step.target is undefined", () => {
+    // The node's deployId is "vault"; step.target is undefined — picker should show "vault".
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSetX}
+        deployTargets={[VAULT_TARGET, TOKEN_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const select = screen.getByLabelText("setx-target-n1-step-t1") as HTMLSelectElement;
+    // The picker value must match the node's own deployId ("vault"), matching
+    // what graph-to-spec.ts serializes as `step.target ?? targetId`.
+    expect(select.value).toBe("vault");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setX step — default target regression: two nodes with the same contractName
+// ---------------------------------------------------------------------------
+
+describe("ConfigPanel — setX step (default target regression: same contractName, two nodes)", () => {
+  /**
+   * Regression: when two graph nodes share the same contractName (e.g. two Token
+   * deploys "token1" and "token2") a contractName-based .find() would always
+   * resolve to the FIRST node's deployId. The correct default is the ATTACHED
+   * node's own deployId, not a contractName lookup.
+   */
+
+  // Two Token deploy targets with different deploy-ids but the same contractName.
+  const TOKEN1_TARGET: DeployTarget = { deployId: "token1", contractName: "Token" };
+  const TOKEN2_TARGET: DeployTarget = { deployId: "token2", contractName: "Token" };
+  const ALL_TARGETS: DeployTarget[] = [TOKEN1_TARGET, TOKEN2_TARGET];
+
+  it("shows the SECOND node's own deployId as default when step is attached to the second node", () => {
+    // The step is attached to the node whose deployId is "token2".
+    const dataToken2 = makeData({
+      deployId: "token2",
+      contractName: "Token",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-reg",
+          functionName: "",
+          args: [],
+          // step.target is intentionally undefined — default must resolve to "token2"
+        },
+      ],
+    });
+
+    render(
+      <ConfigPanel
+        nodeId="n2"
+        data={dataToken2}
+        deployTargets={ALL_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+
+    const select = screen.getByLabelText("setx-target-n2-step-reg") as HTMLSelectElement;
+    // Must be "token2" — NOT "token1" (which is what a contractName-based .find() would return).
+    expect(select.value).toBe("token2");
+  });
+
+  it("shows the FIRST node's own deployId as default when step is attached to the first node", () => {
+    const dataToken1 = makeData({
+      deployId: "token1",
+      contractName: "Token",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-reg1",
+          functionName: "",
+          args: [],
+        },
+      ],
+    });
+
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataToken1}
+        deployTargets={ALL_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+
+    const select = screen.getByLabelText("setx-target-n1-step-reg1") as HTMLSelectElement;
+    expect(select.value).toBe("token1");
+  });
 });
 
 // ---------------------------------------------------------------------------
