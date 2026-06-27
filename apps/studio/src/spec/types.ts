@@ -40,6 +40,21 @@ export interface ArgSlot {
   kind: "literal" | "ref";
   /** Stringified literal value (number, boolean, string, null). */
   value: string;
+  /**
+   * DISPLAY-ONLY: the constructor parameter name, e.g. "asset_".
+   * Populated when the node is added from the Contracts Browser manifest.
+   * This field is NOT serialized to DeploymentSpec — graph-to-spec.ts only
+   * reads index / kind / value when building ContractArg.
+   */
+  name?: string;
+  /**
+   * DISPLAY-ONLY: the Solidity type of the constructor parameter, e.g.
+   * "contract IERC20".
+   * Populated when the node is added from the Contracts Browser manifest.
+   * This field is NOT serialized to DeploymentSpec — graph-to-spec.ts only
+   * reads index / kind / value when building ContractArg.
+   */
+  type?: string;
 }
 
 /** Callbacks injected into node data so React Flow custom nodes can call them. */

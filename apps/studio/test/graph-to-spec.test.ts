@@ -485,6 +485,76 @@ describe("graphToSpec — empty graph", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (h) Display-only name/type fields on ArgSlot — must NOT leak into spec
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — named/typed ArgSlots do not leak into spec", () => {
+  it("serializes a node with named+typed slots to {kind, value} args only", () => {
+    // Simulate a node produced by addContractFromManifest
+    const nodes: GraphNode[] = [
+      {
+        id: "n1",
+        data: {
+          deployId: "vault",
+          contractName: "VaultERC4626",
+          args: [
+            { index: 0, kind: "literal", value: "0xasset", name: "asset_", type: "contract IERC20" },
+            { index: 1, kind: "literal", value: "0xoracle", name: "oracle_", type: "contract IOracle" },
+            { index: 2, kind: "literal", value: "MyVault", name: "name_", type: "string" },
+            { index: 3, kind: "literal", value: "MVT", name: "symbol_", type: "string" },
+          ],
+          after: [],
+          configSteps: [],
+        },
+      },
+    ];
+
+    const { deployment } = graphToSpec(nodes, []);
+
+    // Validate deployment spec is structurally valid
+    const dResult = validateSpec(deployment);
+    expect(dResult.ok).toBe(true);
+
+    const contractArgs = deployment.contracts[0].args!;
+    expect(contractArgs).toHaveLength(4);
+
+    // Each arg must only have kind + value — no name or type
+    for (const arg of contractArgs) {
+      expect(arg.kind).toBe("literal");
+      expect("name" in arg).toBe(false);
+      expect("type" in arg).toBe(false);
+    }
+
+    // Values are correctly serialized
+    expect(contractArgs[0]).toEqual({ kind: "literal", value: "0xasset" });
+    expect(contractArgs[1]).toEqual({ kind: "literal", value: "0xoracle" });
+    expect(contractArgs[2]).toEqual({ kind: "literal", value: "MyVault" });
+    expect(contractArgs[3]).toEqual({ kind: "literal", value: "MVT" });
+  });
+
+  it("config spec is also valid and steps have no leaked name/type", () => {
+    const nodes: GraphNode[] = [
+      {
+        id: "n1",
+        data: {
+          deployId: "vault",
+          contractName: "VaultERC4626",
+          args: [
+            { index: 0, kind: "literal", value: "0xasset", name: "asset_", type: "contract IERC20" },
+          ],
+          after: [],
+          configSteps: [],
+        },
+      },
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+    expect(validateConfig(config, deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (f) after[] ordering constraints
 // ---------------------------------------------------------------------------
 

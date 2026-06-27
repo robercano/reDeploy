@@ -7,7 +7,7 @@
  */
 
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ContractsBrowser } from "../src/components/ContractsBrowser.js";
 import type { ContractManifest } from "../src/manifest/types.js";
 
@@ -346,6 +346,66 @@ describe("ContractsBrowser — empty contracts", () => {
     render(<ContractsBrowser contracts={[]} />);
     expect(screen.getByTestId("contracts-browser")).not.toBeNull();
     expect(screen.getByTestId("contracts-list").children).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onAddContract callback (click-add)
+// ---------------------------------------------------------------------------
+
+describe("ContractsBrowser — onAddContract callback", () => {
+  it("calls onAddContract with the contract when a row is clicked", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Token"));
+
+    expect(onAddContract).toHaveBeenCalledTimes(1);
+    expect(onAddContract).toHaveBeenCalledWith(TOKEN);
+  });
+
+  it("still selects the contract (shows signature panel) when onAddContract is set", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Token"));
+
+    // Selection still works
+    expect(screen.getByTestId("constructor-signature-panel")).not.toBeNull();
+    expect(screen.getByTestId("constructor-signature").textContent).toBe(
+      "constructor(string name, string symbol)",
+    );
+  });
+
+  it("calls onAddContract with correct contract when a different row is clicked", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    fireEvent.click(screen.getByTestId("contract-row-Vault"));
+
+    expect(onAddContract).toHaveBeenCalledWith(VAULT);
+  });
+
+  it("does not throw when onAddContract is not provided", () => {
+    // No onAddContract prop — should behave exactly as before (select only)
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    expect(() => {
+      fireEvent.click(screen.getByTestId("contract-row-Token"));
+    }).not.toThrow();
+
+    // Selection still works
+    expect(screen.getByTestId("constructor-signature-panel")).not.toBeNull();
+  });
+
+  it("calls onAddContract for a contract in folders mode", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+    fireEvent.click(screen.getByTestId("mode-folders"));
+
+    fireEvent.click(screen.getByTestId("contract-row-Vault"));
+
+    expect(onAddContract).toHaveBeenCalledWith(VAULT);
   });
 });
 

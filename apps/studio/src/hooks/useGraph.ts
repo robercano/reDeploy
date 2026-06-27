@@ -25,6 +25,7 @@ import type {
   StudioSetXStep,
   StudioGrantRoleStep,
 } from "../spec/types";
+import type { ContractManifest } from "../manifest/index.js";
 
 // ---------------------------------------------------------------------------
 // Typed React Flow node / edge aliases
@@ -63,6 +64,21 @@ interface UseGraphReturn {
   onEdgesChange: OnEdgesChange<StudioFlowEdge>;
   onConnect: (connection: Connection) => void;
   addContractNode: () => void;
+  /**
+   * Add a pre-filled contract node from a ContractManifest entry.
+   *
+   * Sets contractName = manifest.name, deployId = "" (user fills it),
+   * and creates one ArgSlot per constructorArg with the param name and type
+   * stored for display purposes only (not serialized to the spec).
+   *
+   * @param manifest  - The ContractManifest to pre-fill from.
+   * @param position  - Optional canvas position. When omitted, uses the same
+   *                    auto-offset pattern as addContractNode.
+   */
+  addContractFromManifest: (
+    manifest: ContractManifest,
+    position?: { x: number; y: number },
+  ) => void;
   setSelectedNodeId: (id: string | null) => void;
   addConfigStep: (nodeId: string, kind: "setX" | "grantRole") => void;
   removeConfigStep: (nodeId: string, stepId: string) => void;
@@ -226,6 +242,39 @@ export function useGraph(): UseGraphReturn {
     setNodes((nds) => [...nds, newNode]);
   }, [updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot]);
 
+  const addContractFromManifest = useCallback(
+    (manifest: ContractManifest, position?: { x: number; y: number }) => {
+      const id = makeNodeId();
+      const args = manifest.constructorArgs.map((arg, i) => ({
+        index: i,
+        kind: "literal" as const,
+        value: "",
+        name: arg.name,
+        type: arg.type,
+      }));
+      const nodeData: ContractNodeData = {
+        deployId: "",
+        contractName: manifest.name,
+        args,
+        after: [],
+        configSteps: [],
+        onUpdateDeployId: updateDeployId,
+        onUpdateContractName: updateContractName,
+        onUpdateArgSlot: updateArgSlot,
+        onAddArg: addArgSlot,
+        onRemoveArg: removeArgSlot,
+      };
+      const newNode: ContractFlowNode = {
+        id,
+        type: "contractNode",
+        position: position ?? { x: 100 + (nodeCounter - 1) * 250, y: 100 },
+        data: nodeData as unknown as Record<string, unknown>,
+      };
+      setNodes((nds) => [...nds, newNode]);
+    },
+    [updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot],
+  );
+
   // ---- Config steps ---------------------------------------------------------
 
   const addConfigStep = useCallback(
@@ -292,6 +341,7 @@ export function useGraph(): UseGraphReturn {
     onEdgesChange,
     onConnect,
     addContractNode,
+    addContractFromManifest,
     setSelectedNodeId,
     addConfigStep,
     removeConfigStep,
