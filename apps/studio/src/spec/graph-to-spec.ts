@@ -39,12 +39,12 @@ import type {
   ContractEntry,
   ContractArg,
   LiteralValue,
-} from "@redeploy/core";
+} from "@redeploy/core/spec";
 import type {
   ConfigSpec,
   ConfigStep,
   ConfigArg,
-} from "@redeploy/config";
+} from "@redeploy/config/steps";
 import type {
   StudioEdgeData,
   ArgSlot,
