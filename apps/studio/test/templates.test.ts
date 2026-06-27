@@ -198,6 +198,30 @@ describe("instantiateTemplate — collision-free ids", () => {
     const uniqueDeployIds = new Set(deployIds);
     expect(uniqueDeployIds.size).toBe(12);
   });
+
+  it("template Token node gets a deduped deployId when an existing node's deployId collides", () => {
+    // Arrange: manually add a node via addContractNode and then set its deployId to "Token"
+    // to simulate a collision with the template's Token seed.
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractNode());
+    // Set the deployId of the manually added node to "Token" (same seed as template)
+    act(() => {
+      const existingNode = result.current.nodes[0];
+      nd(existingNode).onUpdateDeployId(existingNode.id, "Token");
+    });
+
+    // Act: instantiate the template
+    act(() => result.current.instantiateTemplate(VAULT_TEMPLATE));
+
+    // Assert: 4 nodes total (1 manual + 3 template), Token seed must be deduped
+    expect(result.current.nodes).toHaveLength(4);
+    const deployIds = result.current.nodes.map((n) => nd(n).deployId);
+    // "Token" is already taken by the manual node; template's Token must be "Token-2"
+    expect(deployIds.filter((id) => id === "Token")).toHaveLength(1);
+    expect(deployIds).toContain("Token-2");
+    // All deployIds must still be unique
+    expect(new Set(deployIds).size).toBe(4);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -313,6 +337,21 @@ describe("instantiateTemplate — round-trip acceptance", () => {
       console.error("Validation errors:", dResult.errors);
     }
     expect(dResult.ok).toBe(true);
+
+    // Strengthen: verify the ref wiring is correct in the emitted spec.
+    // graphToSpec reads edges to override arg slots with kind="ref", so if the
+    // edges were broken or duplicated the ref contracts would be wrong.
+    const tokenDeployId = nd(tokenNode).deployId;
+    const oracleDeployId = nd(oracleNode).deployId;
+
+    const vaultEntry = deployment.contracts.find(
+      (c) => c.id === nd(vaultNode).deployId,
+    );
+    expect(vaultEntry).toBeDefined();
+    // arg 0 (asset_) must be a ref to the Token contract
+    expect(vaultEntry!.args![0]).toEqual({ kind: "ref", contract: tokenDeployId });
+    // arg 1 (oracle_) must be a ref to the PriceOracle contract
+    expect(vaultEntry!.args![1]).toEqual({ kind: "ref", contract: oracleDeployId });
   });
 
   it("each node in the instantiated template has the expected arg count", () => {

@@ -293,91 +293,95 @@ export function useGraph(): UseGraphReturn {
 
   const instantiateTemplate = useCallback(
     (template: Template) => {
-      setNodes((currentNodes) => {
-        // Collect existing deployIds to detect collisions
-        const existingDeployIds = new Set<string>(
-          currentNodes.map((n) => (n.data as unknown as ContractNodeData).deployId),
-        );
+      // Collect existing deployIds from the current nodes closure value to detect
+      // collisions. This mirrors the pattern used in addContractNode (reads from
+      // closure rather than inside an updater) so both nodes and edges are built
+      // from the same consistent snapshot.
+      const existingDeployIds = new Set<string>(
+        nodes.map((n) => (n.data as unknown as ContractNodeData).deployId),
+      );
 
-        // Canvas offset: position templates below existing nodes
-        const baseOffsetY = currentNodes.length > 0 ? 150 : 0;
+      // Canvas offset: position templates below existing nodes
+      const baseOffsetY = nodes.length > 0 ? 150 : 0;
 
-        // Map from template-local node id → real graph node id
-        const idMap = new Map<string, string>();
+      // Map from template-local node id → real graph node id.
+      // makeNodeId() is invoked once per node here (outside any updater) so that
+      // a double-invoke of an updater under StrictMode/concurrent rendering
+      // cannot mint duplicate ids or advance the counter twice.
+      const idMap = new Map<string, string>();
+      for (const tNode of template.nodes) {
+        const realId = makeNodeId();
+        idMap.set(tNode.id, realId);
+      }
 
-        // First pass: generate all real node ids and resolve deployIds
-        for (const tNode of template.nodes) {
-          const realId = makeNodeId();
-          idMap.set(tNode.id, realId);
+      // Helper: de-duplicate a deployId seed against existing + newly-chosen deployIds
+      const chosenDeployIds = new Set<string>(existingDeployIds);
+      function resolveDeployId(seed: string): string {
+        if (!chosenDeployIds.has(seed)) {
+          chosenDeployIds.add(seed);
+          return seed;
         }
-
-        // Helper: de-duplicate a deployId seed against existing + newly-chosen deployIds
-        const chosenDeployIds = new Set<string>(existingDeployIds);
-        function resolveDeployId(seed: string): string {
-          if (!chosenDeployIds.has(seed)) {
-            chosenDeployIds.add(seed);
-            return seed;
-          }
-          let counter = 2;
-          while (chosenDeployIds.has(`${seed}-${counter}`)) {
-            counter++;
-          }
-          const resolved = `${seed}-${counter}`;
-          chosenDeployIds.add(resolved);
-          return resolved;
+        let counter = 2;
+        while (chosenDeployIds.has(`${seed}-${counter}`)) {
+          counter++;
         }
+        const resolved = `${seed}-${counter}`;
+        chosenDeployIds.add(resolved);
+        return resolved;
+      }
 
-        // Second pass: build real nodes
-        const newNodes: ContractFlowNode[] = template.nodes.map((tNode) => {
-          const realId = idMap.get(tNode.id)!;
-          const deployId = resolveDeployId(tNode.data.deployIdSeed);
-          const nodeData: ContractNodeData = {
-            deployId,
-            contractName: tNode.data.contractName,
-            args: tNode.data.args.map((slot) => ({ ...slot })),
-            after: tNode.data.after.map((localId) => idMap.get(localId) ?? localId),
-            configSteps: tNode.data.configSteps.map((s) => ({ ...s })),
-            onUpdateDeployId: updateDeployId,
-            onUpdateContractName: updateContractName,
-            onUpdateArgSlot: updateArgSlot,
-            onAddArg: addArgSlot,
-            onRemoveArg: removeArgSlot,
-          };
-          return {
-            id: realId,
-            type: "contractNode",
-            position: {
-              x: 100 + tNode.data.position.x,
-              y: 100 + tNode.data.position.y + baseOffsetY,
-            },
-            data: nodeData as unknown as Record<string, unknown>,
-          };
-        });
-
-        setEdges((currentEdges) => {
-          const newEdges = template.edges.map((tEdge) => {
-            const realSource = idMap.get(tEdge.source)!;
-            const realTarget = idMap.get(tEdge.target)!;
-            const edgeData: StudioEdgeData = {
-              edgeKind: "constructorRef",
-              argIndex: tEdge.argIndex,
-            };
-            return {
-              id: `template-edge-${realSource}-${realTarget}-arg${tEdge.argIndex}`,
-              source: realSource,
-              target: realTarget,
-              sourceHandle: `${realSource}-output`,
-              targetHandle: `${realTarget}-arg-${tEdge.argIndex}`,
-              data: edgeData as unknown as Record<string, unknown>,
-            };
-          });
-          return [...currentEdges, ...newEdges];
-        });
-
-        return [...currentNodes, ...newNodes];
+      // Build real nodes (all ids and deployIds are resolved upfront)
+      const newNodes: ContractFlowNode[] = template.nodes.map((tNode) => {
+        const realId = idMap.get(tNode.id)!;
+        const deployId = resolveDeployId(tNode.data.deployIdSeed);
+        const nodeData: ContractNodeData = {
+          deployId,
+          contractName: tNode.data.contractName,
+          args: tNode.data.args.map((slot) => ({ ...slot })),
+          after: tNode.data.after.map((localId) => idMap.get(localId) ?? localId),
+          configSteps: tNode.data.configSteps.map((s) => ({ ...s })),
+          onUpdateDeployId: updateDeployId,
+          onUpdateContractName: updateContractName,
+          onUpdateArgSlot: updateArgSlot,
+          onAddArg: addArgSlot,
+          onRemoveArg: removeArgSlot,
+        };
+        return {
+          id: realId,
+          type: "contractNode",
+          position: {
+            x: 100 + tNode.data.position.x,
+            y: 100 + tNode.data.position.y + baseOffsetY,
+          },
+          data: nodeData as unknown as Record<string, unknown>,
+        };
       });
+
+      // Build edges upfront (edge ids are computed once here, not inside updaters)
+      const newEdges: StudioFlowEdge[] = template.edges.map((tEdge) => {
+        const realSource = idMap.get(tEdge.source)!;
+        const realTarget = idMap.get(tEdge.target)!;
+        const edgeData: StudioEdgeData = {
+          edgeKind: "constructorRef",
+          argIndex: tEdge.argIndex,
+        };
+        return {
+          id: `template-edge-${realSource}-${realTarget}-arg${tEdge.argIndex}`,
+          source: realSource,
+          target: realTarget,
+          sourceHandle: `${realSource}-output`,
+          targetHandle: `${realTarget}-arg-${tEdge.argIndex}`,
+          data: edgeData as unknown as Record<string, unknown>,
+        };
+      });
+
+      // Apply the two state updates independently with pure functional updaters.
+      // Neither updater calls the other — React can safely invoke each one
+      // multiple times under StrictMode/concurrent rendering without side effects.
+      setNodes((prev) => [...prev, ...newNodes]);
+      setEdges((prev) => [...prev, ...newEdges]);
     },
-    [updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot],
+    [nodes, updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot],
   );
 
   // ---- Config steps ---------------------------------------------------------
