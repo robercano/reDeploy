@@ -28,6 +28,7 @@ import "@xyflow/react/dist/style.css";
 
 import { ContractNode } from "./components/ContractNode.js";
 import { ConfigPanel } from "./components/ConfigPanel.js";
+import { ContractsBrowser } from "./components/ContractsBrowser.js";
 import { SpecExporter } from "./components/SpecExporter.js";
 import { Inspector } from "./components/Inspector.js";
 import { useGraph } from "./hooks/useGraph.js";
@@ -70,6 +71,7 @@ type AppMode = "authoring" | "inspector";
 
 export function App() {
   const [mode, setMode] = useState<AppMode>("authoring");
+  const [showContractsBrowser, setShowContractsBrowser] = useState(false);
 
   const {
     nodes,
@@ -145,6 +147,13 @@ export function App() {
           {/* Authoring toolbar */}
           <div style={{ ...toolbarStyle, left: 200 }}>
             <button
+              style={showContractsBrowser ? activeBtnStyle : btnStyle}
+              onClick={() => setShowContractsBrowser((v) => !v)}
+              data-testid="toggle-contracts-browser"
+            >
+              Contracts
+            </button>
+            <button
               style={btnStyle}
               onClick={addContractNode}
               data-testid="add-contract-btn"
@@ -153,6 +162,9 @@ export function App() {
             </button>
             <SpecExporter deployment={deployment} config={config} />
           </div>
+
+          {/* Contracts browser panel (left sidebar) */}
+          {showContractsBrowser && <ContractsBrowser />}
 
           {/* React Flow canvas */}
           <ReactFlow
