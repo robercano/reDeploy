@@ -1,0 +1,1881 @@
+[
+  {
+    "name": "CommonBase",
+    "sourcePath": "lib/forge-std/src/Base.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "CommonBase"
+    ],
+    "functions": []
+  },
+  {
+    "name": "ScriptBase",
+    "sourcePath": "lib/forge-std/src/Base.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "ScriptBase",
+      "CommonBase"
+    ],
+    "functions": []
+  },
+  {
+    "name": "TestBase",
+    "sourcePath": "lib/forge-std/src/Base.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "TestBase",
+      "CommonBase"
+    ],
+    "functions": []
+  },
+  {
+    "name": "StdAssertions",
+    "sourcePath": "lib/forge-std/src/StdAssertions.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdAssertions"
+    ],
+    "functions": [
+      {
+        "name": "failed",
+        "declaredIn": "StdAssertions",
+        "inputs": [],
+        "stateMutability": "view"
+      }
+    ]
+  },
+  {
+    "name": "StdChains",
+    "sourcePath": "lib/forge-std/src/StdChains.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdChains"
+    ],
+    "functions": []
+  },
+  {
+    "name": "StdCheats",
+    "sourcePath": "lib/forge-std/src/StdCheats.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdCheats",
+      "StdCheatsSafe"
+    ],
+    "functions": []
+  },
+  {
+    "name": "StdCheatsSafe",
+    "sourcePath": "lib/forge-std/src/StdCheats.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdCheatsSafe"
+    ],
+    "functions": []
+  },
+  {
+    "name": "StdInvariant",
+    "sourcePath": "lib/forge-std/src/StdInvariant.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdInvariant"
+    ],
+    "functions": [
+      {
+        "name": "excludeArtifacts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeContracts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeSenders",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetArtifacts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetArtifactSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetContracts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetSenders",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetInterfaces",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      }
+    ]
+  },
+  {
+    "name": "StdUtils",
+    "sourcePath": "lib/forge-std/src/StdUtils.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "StdUtils"
+    ],
+    "functions": []
+  },
+  {
+    "name": "Test",
+    "sourcePath": "lib/forge-std/src/Test.sol",
+    "packageSegments": [
+      "forge-std"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "Test",
+      "StdUtils",
+      "StdInvariant",
+      "StdCheats",
+      "StdCheatsSafe",
+      "StdChains",
+      "StdAssertions",
+      "TestBase",
+      "CommonBase"
+    ],
+    "functions": [
+      {
+        "name": "excludeArtifacts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeContracts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "excludeSenders",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetArtifacts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetArtifactSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetContracts",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetSelectors",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetSenders",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "targetInterfaces",
+        "declaredIn": "StdInvariant",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "failed",
+        "declaredIn": "StdAssertions",
+        "inputs": [],
+        "stateMutability": "view"
+      }
+    ]
+  },
+  {
+    "name": "AccessControl",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/access/AccessControl.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "access"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "AccessControl",
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "supportsInterface",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "hasRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "getRoleAdmin",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "grantRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "revokeRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "renounceRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "callerConfirmation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "Ownable",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/access/Ownable.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "access"
+    ],
+    "constructorArgs": [
+      {
+        "name": "initialOwner",
+        "type": "address"
+      }
+    ],
+    "inheritance": [
+      "Ownable",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "owner",
+        "declaredIn": "Ownable",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "renounceOwnership",
+        "declaredIn": "Ownable",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferOwnership",
+        "declaredIn": "Ownable",
+        "inputs": [
+          {
+            "name": "newOwner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "ERC20",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "token",
+      "ERC20"
+    ],
+    "constructorArgs": [
+      {
+        "name": "name_",
+        "type": "string"
+      },
+      {
+        "name": "symbol_",
+        "type": "string"
+      }
+    ],
+    "inheritance": [
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "name",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "symbol",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "decimals",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalSupply",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "balanceOf",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transfer",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "allowance",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "approve",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferFrom",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "ERC4626",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "token",
+      "ERC20",
+      "extensions"
+    ],
+    "constructorArgs": [
+      {
+        "name": "asset_",
+        "type": "contract IERC20"
+      }
+    ],
+    "inheritance": [
+      "ERC4626",
+      "IERC4626",
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "decimals",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "asset",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalAssets",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "convertToShares",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "convertToAssets",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxDeposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxMint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxWithdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxRedeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewDeposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewMint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewWithdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewRedeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "deposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "mint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "withdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "redeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "name",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "symbol",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalSupply",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "balanceOf",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transfer",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "allowance",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "approve",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferFrom",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "Context",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/utils/Context.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "utils"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "Context"
+    ],
+    "functions": []
+  },
+  {
+    "name": "ERC165",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/utils/introspection/ERC165.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "utils",
+      "introspection"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "ERC165",
+      "IERC165"
+    ],
+    "functions": [
+      {
+        "name": "supportsInterface",
+        "declaredIn": "ERC165",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      }
+    ]
+  },
+  {
+    "name": "Pausable",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/utils/Pausable.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "utils"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "Pausable",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "paused",
+        "declaredIn": "Pausable",
+        "inputs": [],
+        "stateMutability": "view"
+      }
+    ]
+  },
+  {
+    "name": "ReentrancyGuard",
+    "sourcePath": "lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol",
+    "packageSegments": [
+      "@openzeppelin",
+      "utils"
+    ],
+    "constructorArgs": [],
+    "inheritance": [
+      "ReentrancyGuard"
+    ],
+    "functions": []
+  },
+  {
+    "name": "PriceOracle",
+    "sourcePath": "src/PriceOracle.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "decimals_",
+        "type": "uint8"
+      },
+      {
+        "name": "initialAnswer_",
+        "type": "int256"
+      }
+    ],
+    "inheritance": [
+      "PriceOracle",
+      "AggregatorV3Interface",
+      "Ownable",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "latestRoundData",
+        "declaredIn": "PriceOracle",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "setAnswer",
+        "declaredIn": "PriceOracle",
+        "inputs": [
+          {
+            "name": "answer_",
+            "type": "int256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "decimals",
+        "declaredIn": "AggregatorV3Interface",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "latestAnswer",
+        "declaredIn": "AggregatorV3Interface",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "owner",
+        "declaredIn": "Ownable",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "renounceOwnership",
+        "declaredIn": "Ownable",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferOwnership",
+        "declaredIn": "Ownable",
+        "inputs": [
+          {
+            "name": "newOwner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "Registry",
+    "sourcePath": "src/Registry.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "admin",
+        "type": "address"
+      }
+    ],
+    "inheritance": [
+      "Registry",
+      "AccessControl",
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "register",
+        "declaredIn": "Registry",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "string"
+          },
+          {
+            "name": "addr",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "lookup",
+        "declaredIn": "Registry",
+        "inputs": [
+          {
+            "name": "key",
+            "type": "string"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "supportsInterface",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "hasRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "getRoleAdmin",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "grantRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "revokeRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "renounceRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "callerConfirmation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "Token",
+    "sourcePath": "src/Token.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "name_",
+        "type": "string"
+      },
+      {
+        "name": "symbol_",
+        "type": "string"
+      }
+    ],
+    "inheritance": [
+      "Token",
+      "AccessControl",
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "mint",
+        "declaredIn": "Token",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "supportsInterface",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "hasRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "getRoleAdmin",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "grantRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "revokeRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "renounceRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "callerConfirmation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "name",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "symbol",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "decimals",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalSupply",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "balanceOf",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transfer",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "allowance",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "approve",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferFrom",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "Vault",
+    "sourcePath": "src/Vault.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "token_",
+        "type": "address"
+      }
+    ],
+    "inheritance": [
+      "Vault",
+      "Pausable",
+      "ReentrancyGuard",
+      "AccessControl",
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "deposit",
+        "declaredIn": "Vault",
+        "inputs": [
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "withdraw",
+        "declaredIn": "Vault",
+        "inputs": [
+          {
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "balanceOf",
+        "declaredIn": "Vault",
+        "inputs": [
+          {
+            "name": "user",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "setFeeBps",
+        "declaredIn": "Vault",
+        "inputs": [
+          {
+            "name": "bps",
+            "type": "uint16"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "pause",
+        "declaredIn": "Vault",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "unpause",
+        "declaredIn": "Vault",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "setRegistry",
+        "declaredIn": "Vault",
+        "inputs": [
+          {
+            "name": "registry_",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "paused",
+        "declaredIn": "Pausable",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "supportsInterface",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "hasRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "getRoleAdmin",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "grantRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "revokeRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "renounceRole",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "callerConfirmation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  },
+  {
+    "name": "VaultERC4626",
+    "sourcePath": "src/VaultERC4626.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "asset_",
+        "type": "contract IERC20"
+      },
+      {
+        "name": "oracle_",
+        "type": "contract AggregatorV3Interface"
+      },
+      {
+        "name": "name_",
+        "type": "string"
+      },
+      {
+        "name": "symbol_",
+        "type": "string"
+      }
+    ],
+    "inheritance": [
+      "VaultERC4626",
+      "ERC4626",
+      "IERC4626",
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "assetPrice",
+        "declaredIn": "VaultERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalValue",
+        "declaredIn": "VaultERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "decimals",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "asset",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalAssets",
+        "declaredIn": "ERC4626",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "convertToShares",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "convertToAssets",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxDeposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxMint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxWithdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "maxRedeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewDeposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewMint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewWithdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "previewRedeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "deposit",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "mint",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "withdraw",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "assets",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "redeem",
+        "declaredIn": "ERC4626",
+        "inputs": [
+          {
+            "name": "shares",
+            "type": "uint256"
+          },
+          {
+            "name": "receiver",
+            "type": "address"
+          },
+          {
+            "name": "owner",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "name",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "symbol",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalSupply",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "balanceOf",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transfer",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "allowance",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "approve",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferFrom",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
+  }
+]

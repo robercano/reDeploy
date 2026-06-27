@@ -5,7 +5,10 @@
   "type": "module",
   "description": "Visual tool: drag-and-drop authoring of contract connections and configuration (emits spec files) plus a deployment inspector. React + React Flow.",
   "scripts": {
+    "gen:manifest": "node --import tsx/esm scripts/gen-manifest.mts",
+    "predev": "pnpm gen:manifest",
     "dev": "vite",
+    "prebuild": "pnpm gen:manifest",
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -31,6 +34,7 @@
     "jsdom": "^26.1.0",
     "typescript": "^5.7.2",
     "vite": "^6.3.5",
+    "tsx": "^4.19.3",
     "vitest": "^2.1.8"
   }
 }

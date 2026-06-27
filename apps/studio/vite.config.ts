@@ -70,6 +70,12 @@ export default defineConfig({
         "src/inspector/sample-view.ts",
         // Trivial Node-only wrapper: no logic
         "src/inspector/load-deployment.ts",
+        // Manifest type-only file: no runtime code
+        "src/manifest/types.ts",
+        // Generated JSON data file: no logic
+        "src/manifest/contracts.generated.json",
+        // Node-only script: excluded from browser coverage
+        "scripts/**",
       ],
     },
   },
