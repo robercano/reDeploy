@@ -221,6 +221,42 @@ describe("graphToSpec — config steps", () => {
     ]);
   });
 
+  it("respects an explicit step.target override (cross-node setX)", () => {
+    // The step is attached to node "token1" but its step.target explicitly points
+    // to "token2" (a cross-node setX). graphToSpec must serialize the override,
+    // not the attached node's own deployId.
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token1", "Token"),
+      makeNode("n2", "token2", "Token", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-override",
+            functionName: "setFee",
+            args: ["50"],
+            target: "token1", // explicit override: target is token1, not token2
+          },
+        ],
+      }),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    expect(step.id).toBe("step-override");
+    // Must use the explicit override ("token1"), not the attached node's id ("token2").
+    expect(step.target).toBe("token1");
+    expect(step.function).toBe("setFee");
+  });
+
   it("maps a grantRole step with literal account", () => {
     const nodes: GraphNode[] = [
       makeNode("n1", "token", "Token", {

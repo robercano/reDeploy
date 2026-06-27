@@ -42,6 +42,7 @@ import "@xyflow/react/dist/style.css";
 
 import { ContractNode } from "./components/ContractNode.js";
 import { ConfigPanel } from "./components/ConfigPanel.js";
+import type { DeployTarget } from "./components/ConfigPanel.js";
 import { ContractsBrowser, DRAG_TRANSFER_KEY } from "./components/ContractsBrowser.js";
 import { SpecExporter } from "./components/SpecExporter.js";
 import { Inspector } from "./components/Inspector.js";
@@ -108,6 +109,8 @@ interface AuthoringCanvasProps {
   updateGrantRoleStep: ReturnType<typeof useGraph>["updateGrantRoleStep"];
   showBrowser: boolean;
   onToggleBrowser: () => void;
+  /** All deploy targets in the graph, for the setX target picker in ConfigPanel. */
+  deployTargets: DeployTarget[];
 }
 
 function AuthoringCanvas({
@@ -129,6 +132,7 @@ function AuthoringCanvas({
   updateGrantRoleStep,
   showBrowser,
   onToggleBrowser,
+  deployTargets,
 }: AuthoringCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
 
@@ -227,6 +231,7 @@ function AuthoringCanvas({
         <ConfigPanel
           nodeId={selectedNode.id}
           data={selectedNode.data as unknown as ContractNodeData}
+          deployTargets={deployTargets}
           onAddStep={addConfigStep}
           onRemoveStep={removeConfigStep}
           onUpdateSetXStep={updateSetXStep}
@@ -295,6 +300,22 @@ export function App() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
+  // Derive deploy targets from all graph nodes — used by ConfigPanel's setX target picker.
+  // Dedup by deployId so the picker never receives duplicate keys (duplicate deployIds are
+  // a user error caught by validateSpec, but the UI must not crash before validation runs).
+  const deployTargets = useMemo<DeployTarget[]>(() => {
+    const seen = new Set<string>();
+    const targets: DeployTarget[] = [];
+    for (const n of nodes) {
+      const d = n.data as unknown as ContractNodeData;
+      if (d.deployId !== "" && !seen.has(d.deployId)) {
+        seen.add(d.deployId);
+        targets.push({ deployId: d.deployId, contractName: d.contractName });
+      }
+    }
+    return targets;
+  }, [nodes]);
+
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
 
   return (
@@ -338,6 +359,7 @@ export function App() {
             updateGrantRoleStep={updateGrantRoleStep}
             showBrowser={showBrowser}
             onToggleBrowser={onToggleBrowser}
+            deployTargets={deployTargets}
           />
         </ReactFlowProvider>
       )}
