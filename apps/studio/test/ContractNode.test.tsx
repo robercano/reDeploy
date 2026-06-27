@@ -18,8 +18,9 @@
  */
 
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
+import type { NodeProps } from "@xyflow/react";
 import { ContractNode } from "../src/components/ContractNode.js";
 import type { ContractNodeData } from "../src/spec/types.js";
 
@@ -67,10 +68,9 @@ function renderContractNode(data: ContractNodeData, selected = false) {
     positionAbsoluteY: 0,
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return render(
     <ReactFlowProvider>
-      <ContractNode {...(props as any)} />
+      <ContractNode {...(props as unknown as NodeProps)} />
     </ReactFlowProvider>,
   );
 }
