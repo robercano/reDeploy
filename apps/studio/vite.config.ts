@@ -72,6 +72,8 @@ export default defineConfig({
         "src/inspector/load-deployment.ts",
         // Manifest type-only file: no runtime code
         "src/manifest/types.ts",
+        // Template type-only file: no runtime code
+        "src/templates/types.ts",
         // Generated JSON data file: no logic
         "src/manifest/contracts.generated.json",
         // Node-only script: excluded from browser coverage

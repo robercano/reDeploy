@@ -45,6 +45,7 @@ import { ConfigPanel } from "./components/ConfigPanel.js";
 import type { DeployTarget } from "./components/ConfigPanel.js";
 import { ContractsBrowser, DRAG_TRANSFER_KEY } from "./components/ContractsBrowser.js";
 import { SpecExporter } from "./components/SpecExporter.js";
+import { TemplateGallery } from "./components/TemplateGallery.js";
 import { Inspector } from "./components/Inspector.js";
 import { useGraph } from "./hooks/useGraph.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
@@ -100,6 +101,7 @@ interface AuthoringCanvasProps {
   onPaneClick: () => void;
   addContractNode: () => void;
   addContractFromManifest: ReturnType<typeof useGraph>["addContractFromManifest"];
+  instantiateTemplate: ReturnType<typeof useGraph>["instantiateTemplate"];
   selectedNode: ReturnType<typeof useGraph>["nodes"][number] | undefined;
   deployment: ReturnType<typeof graphToSpec>["deployment"];
   config: ReturnType<typeof graphToSpec>["config"];
@@ -123,6 +125,7 @@ function AuthoringCanvas({
   onPaneClick,
   addContractNode,
   addContractFromManifest,
+  instantiateTemplate,
   selectedNode,
   deployment,
   config,
@@ -192,6 +195,7 @@ function AuthoringCanvas({
         >
           + Contract
         </button>
+        <TemplateGallery onInstantiate={instantiateTemplate} />
         <SpecExporter deployment={deployment} config={config} />
       </div>
 
@@ -259,6 +263,7 @@ export function App() {
     onConnect,
     addContractNode,
     addContractFromManifest,
+    instantiateTemplate,
     setSelectedNodeId,
     addConfigStep,
     removeConfigStep,
@@ -350,6 +355,7 @@ export function App() {
             onPaneClick={onPaneClick}
             addContractNode={addContractNode}
             addContractFromManifest={addContractFromManifest}
+            instantiateTemplate={instantiateTemplate}
             selectedNode={selectedNode}
             deployment={deployment}
             config={config}
