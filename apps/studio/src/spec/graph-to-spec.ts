@@ -172,7 +172,7 @@ function buildConfigSteps(
       return {
         kind: "setX",
         id: step.id,
-        target: targetId,
+        target: step.target ?? targetId,
         function: step.functionName,
         ...(args.length > 0 ? { args } : {}),
       };

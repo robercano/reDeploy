@@ -86,7 +86,13 @@ export interface ContractNodeData extends NodeCallbacks {
 export interface StudioSetXStep {
   kind: "setX";
   id: string;
-  /** target is always the node this step is attached to */
+  /**
+   * The deploy-id of the contract this step targets.
+   * Defaults to the node this step is attached to when absent.
+   * When set, overrides the attached node's deployId in the exported spec.
+   */
+  target?: string;
+  /** Name of the setter function to call. */
   functionName: string;
   /** Stringified args (literals only for now). */
   args: string[];
