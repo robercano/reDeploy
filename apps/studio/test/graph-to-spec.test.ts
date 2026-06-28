@@ -842,3 +842,124 @@ describe("graphToSpec — cross-node setX overload resolution", () => {
     expect(step.function).toBe("setLimit(uint256,address)");
   });
 });
+
+// ---------------------------------------------------------------------------
+// (f) after[] ordering constraints
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — after ordering", () => {
+  it("carries after[] from node data into the ContractEntry", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "dep", "Dep"),
+      makeNode("n2", "main", "Main", { after: ["dep"] }),
+    ];
+
+    const { deployment } = graphToSpec(nodes, []);
+    const mainEntry = deployment.contracts.find((c) => c.id === "main")!;
+    expect(mainEntry.after).toEqual(["dep"]);
+
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (g) Large-integer literal preservation (uint256 / precision guard)
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — large-integer literal preservation (uint256 safety)", () => {
+  it("preserves a uint256-scale token amount string as a string (not a number)", () => {
+    const largeInt = "1000000000000000000000"; // 1e21, > Number.MAX_SAFE_INTEGER
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "literal", value: largeInt }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    const arg = deployment.contracts[0].args![0];
+    expect(arg.kind).toBe("literal");
+    if (arg.kind !== "literal") return;
+    // Must be preserved as the original string, NOT a corrupted number
+    expect(arg.value).toBe(largeInt);
+    expect(typeof arg.value).toBe("string");
+    // validateSpec must accept this (string is a valid LiteralScalar)
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("preserves uint256 max value as a string", () => {
+    // 2^256 - 1
+    const uint256Max = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    const nodes: GraphNode[] = [
+      makeNode("n1", "vault", "Vault", {
+        args: [{ index: 0, kind: "literal", value: uint256Max }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    const arg = deployment.contracts[0].args![0];
+    expect(arg.kind).toBe("literal");
+    if (arg.kind !== "literal") return;
+    expect(arg.value).toBe(uint256Max);
+    expect(typeof arg.value).toBe("string");
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("preserves off-by-one unsafe integer (9007199254740993) as a string", () => {
+    // Number.MAX_SAFE_INTEGER + 1 = 9007199254740993; Number() coercion rounds it
+    const offByOne = "9007199254740993";
+    const nodes: GraphNode[] = [
+      makeNode("n1", "registry", "Registry", {
+        args: [{ index: 0, kind: "literal", value: offByOne }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    const arg = deployment.contracts[0].args![0];
+    expect(arg.kind).toBe("literal");
+    if (arg.kind !== "literal") return;
+    expect(arg.value).toBe(offByOne);
+    expect(typeof arg.value).toBe("string");
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("still coerces a small safe integer string to a number", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "literal", value: "100" }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+    const arg = deployment.contracts[0].args![0];
+    expect(arg.kind).toBe("literal");
+    if (arg.kind !== "literal") return;
+    expect(arg.value).toBe(100);
+    expect(typeof arg.value).toBe("number");
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("preserves large-int as a string in a config setX step and validateConfig accepts it", () => {
+    const largeInt = "1000000000000000000000";
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-mint",
+            functionName: "setSupplyCap",
+            args: [largeInt],
+          },
+        ],
+      }),
+    ];
+    const { deployment, config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    const arg = step.args![0];
+    expect(arg.kind).toBe("literal");
+    if (arg.kind !== "literal") return;
+    // Large int must be preserved as string, not a corrupted number
+    expect(arg.value).toBe(largeInt);
+    expect(typeof arg.value).toBe("string");
+  });
+});
