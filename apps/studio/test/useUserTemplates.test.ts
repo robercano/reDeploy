@@ -301,3 +301,89 @@ describe("useUserTemplates — malformed element filtering", () => {
     expect(isValidTemplate(makeTemplate("t1"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 7. params element validation (regression for corrupt-localStorage crash)
+// ---------------------------------------------------------------------------
+
+describe("useUserTemplates — params element filtering", () => {
+  it("filters out a template with params: [null] and keeps a valid sibling", () => {
+    const bad = { ...makeTemplate("bad"), params: [null] };
+    const good = makeTemplate("good");
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, good]));
+    expect(() => renderHook(() => useUserTemplates())).not.toThrow();
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("filters out a template with params: ['bad'] (string element) and keeps a valid sibling", () => {
+    const bad = { ...makeTemplate("bad"), params: ["bad"] };
+    const good = makeTemplate("good");
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, good]));
+    expect(() => renderHook(() => useUserTemplates())).not.toThrow();
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("filters out a template with params: [{}] (missing required nodeId/label) and keeps a valid sibling", () => {
+    const bad = { ...makeTemplate("bad"), params: [{}] };
+    const good = makeTemplate("good");
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, good]));
+    expect(() => renderHook(() => useUserTemplates())).not.toThrow();
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("accepts a template with well-formed param elements", () => {
+    const good = {
+      ...makeTemplate("good"),
+      params: [
+        { nodeId: "node-1", label: "Token Name", hint: "e.g. MyToken", argIndex: 0 },
+        { nodeId: "node-1", label: "Token Symbol" },
+        { nodeId: "node-1", label: "Config Field", field: "symbol" },
+      ],
+    };
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([good]));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("isValidTemplate returns false when params contains null", () => {
+    const t = { ...makeTemplate("t1"), params: [null] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when params contains a string element", () => {
+    const t = { ...makeTemplate("t1"), params: ["bad"] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when params element is missing nodeId", () => {
+    const t = { ...makeTemplate("t1"), params: [{ label: "Token Name" }] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when params element is missing label", () => {
+    const t = { ...makeTemplate("t1"), params: [{ nodeId: "node-1" }] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when hint is not a string", () => {
+    const t = { ...makeTemplate("t1"), params: [{ nodeId: "node-1", label: "Name", hint: 42 }] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when argIndex is not a number", () => {
+    const t = { ...makeTemplate("t1"), params: [{ nodeId: "node-1", label: "Name", argIndex: "0" }] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+
+  it("isValidTemplate returns false when field is not a string", () => {
+    const t = { ...makeTemplate("t1"), params: [{ nodeId: "node-1", label: "Name", field: 99 }] };
+    expect(isValidTemplate(t)).toBe(false);
+  });
+});

@@ -40,7 +40,13 @@ export const USER_TEMPLATES_STORAGE_KEY = "redeploy.studio.userTemplates";
  *     and position { x: number; y: number }
  * - edges is an array where every element has string source, string target,
  *   and numeric argIndex
- * - params is an array
+ * - params is an array where every element has:
+ *   - non-null object
+ *   - string nodeId
+ *   - string label
+ *   - hint, if present, must be a string
+ *   - argIndex, if present, must be a number
+ *   - field, if present, must be a string
  */
 export function isValidTemplate(t: unknown): t is Template {
   if (t === null || typeof t !== "object") return false;
@@ -75,6 +81,16 @@ export function isValidTemplate(t: unknown): t is Template {
     if (typeof e["source"] !== "string") return false;
     if (typeof e["target"] !== "string") return false;
     if (typeof e["argIndex"] !== "number") return false;
+  }
+
+  for (const param of obj["params"] as unknown[]) {
+    if (param === null || typeof param !== "object") return false;
+    const p = param as Record<string, unknown>;
+    if (typeof p["nodeId"] !== "string") return false;
+    if (typeof p["label"] !== "string") return false;
+    if (p["hint"] !== undefined && typeof p["hint"] !== "string") return false;
+    if (p["argIndex"] !== undefined && typeof p["argIndex"] !== "number") return false;
+    if (p["field"] !== undefined && typeof p["field"] !== "string") return false;
   }
 
   return true;
