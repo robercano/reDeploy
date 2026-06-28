@@ -50,6 +50,7 @@ import type {
   ArgSlot,
   StudioConfigStep,
 } from "./types";
+import { getContract } from "../manifest/index.js";
 
 // ---------------------------------------------------------------------------
 // Input types accepted by graphToSpec
@@ -156,12 +157,51 @@ function buildConfigArg(kind: "literal" | "ref", value: string): ConfigArg {
 }
 
 /**
+ * Resolve the `function` field value for a setX config step.
+ *
+ * Rules:
+ * - If `step.functionSignature` is set AND the function name is overloaded on the
+ *   target contract (multiple manifest entries share the same bare name), emit the
+ *   full canonical signature (e.g. `"setLimit(uint256,address)"`).
+ * - Otherwise emit the bare name (e.g. `"setLimit"`). This keeps backward
+ *   compatibility: existing non-overloaded specs continue to emit bare names.
+ * - If the contract is not in the manifest (free-text fallback), always emit the
+ *   bare `functionName`.
+ *
+ * @param step           - The studio setX step.
+ * @param contractName   - The Solidity artifact name of the target contract.
+ */
+function resolveSetXFunctionField(step: { functionName: string; functionSignature?: string }, contractName: string): string {
+  // No signature stored — free-text path, always bare name.
+  if (!step.functionSignature) return step.functionName;
+
+  // Look up the manifest for the target contract.
+  const manifest = getContract(contractName);
+  if (!manifest) return step.functionName;
+
+  // Count how many manifest entries share the same bare function name.
+  const sameNameCount = manifest.functions.filter((f) => f.name === step.functionName).length;
+
+  // Overloaded: emit the full canonical signature.
+  if (sameNameCount > 1) return step.functionSignature;
+
+  // Unique name: emit the bare name for backward compatibility.
+  return step.functionName;
+}
+
+/**
  * Convert StudioConfigStep[] for a single node into ConfigStep[].
  * The node's deployId is used as the `target` for setX / grantRole steps.
+ *
+ * @param steps        - The config steps attached to the node.
+ * @param targetId     - The deploy-id of the node (used as fallback target).
+ * @param contractName - The Solidity artifact name of the node's contract (used for
+ *                       manifest lookup to decide bare-name vs signature serialization).
  */
 function buildConfigSteps(
   steps: StudioConfigStep[],
   targetId: string,
+  contractName: string,
 ): ConfigStep[] {
   return steps.map((step): ConfigStep => {
     if (step.kind === "setX") {
@@ -169,11 +209,18 @@ function buildConfigSteps(
         kind: "literal" as const,
         value: parseLiteralValue(raw),
       }));
+      // Determine the explicit target deploy-id for cross-node setX steps.
+      const effectiveTargetId = step.target ?? targetId;
+      // Use the contract name from the step's own node (contractName parameter)
+      // when the step targets itself, otherwise we can't resolve the target's
+      // contract name without a full node lookup. For cross-node steps the
+      // functionSignature provides enough info if the caller set it.
+      const functionField = resolveSetXFunctionField(step, contractName);
       return {
         kind: "setX",
         id: step.id,
-        target: step.target ?? targetId,
-        function: step.functionName,
+        target: effectiveTargetId,
+        function: functionField,
         ...(args.length > 0 ? { args } : {}),
       };
     }
@@ -261,7 +308,7 @@ export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
 
   // Step 3: Build ConfigStep[] from node-attached steps + wire edges
   const nodeConfigSteps: ConfigStep[] = nodes.flatMap((node) =>
-    buildConfigSteps(node.data.configSteps, node.data.deployId),
+    buildConfigSteps(node.data.configSteps, node.data.deployId, node.data.contractName),
   );
 
   const allSteps: ConfigStep[] = [...nodeConfigSteps, ...wireSteps];

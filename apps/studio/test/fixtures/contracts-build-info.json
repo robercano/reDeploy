@@ -2143,5 +2143,61 @@
         }
       ]
     }
+  },
+  {
+    "abi": [],
+    "ast": {
+      "absolutePath": "src/Overloaded.sol",
+      "nodeType": "SourceUnit",
+      "nodes": [
+        {
+          "nodeType": "ContractDefinition",
+          "id": 99001,
+          "name": "Overloaded",
+          "contractKind": "contract",
+          "linearizedBaseContracts": [
+            99001
+          ],
+          "nodes": [
+            {
+              "nodeType": "FunctionDefinition",
+              "id": 99010,
+              "kind": "function",
+              "name": "setLimit",
+              "visibility": "external",
+              "stateMutability": "nonpayable",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "limit_",
+                    "typeDescriptions": { "typeString": "uint256" }
+                  }
+                ]
+              }
+            },
+            {
+              "nodeType": "FunctionDefinition",
+              "id": 99020,
+              "kind": "function",
+              "name": "setLimit",
+              "visibility": "external",
+              "stateMutability": "nonpayable",
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "limit_",
+                    "typeDescriptions": { "typeString": "uint256" }
+                  },
+                  {
+                    "name": "beneficiary_",
+                    "typeDescriptions": { "typeString": "address" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
   }
 ]

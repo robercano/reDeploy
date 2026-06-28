@@ -50,6 +50,7 @@
     "functions": [
       {
         "name": "failed",
+        "signature": "failed()",
         "declaredIn": "StdAssertions",
         "inputs": [],
         "stateMutability": "view"
@@ -106,60 +107,70 @@
     "functions": [
       {
         "name": "excludeArtifacts",
+        "signature": "excludeArtifacts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeContracts",
+        "signature": "excludeContracts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeSelectors",
+        "signature": "excludeSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeSenders",
+        "signature": "excludeSenders()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetArtifacts",
+        "signature": "targetArtifacts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetArtifactSelectors",
+        "signature": "targetArtifactSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetContracts",
+        "signature": "targetContracts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetSelectors",
+        "signature": "targetSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetSenders",
+        "signature": "targetSenders()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetInterfaces",
+        "signature": "targetInterfaces()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
@@ -199,66 +210,77 @@
     "functions": [
       {
         "name": "excludeArtifacts",
+        "signature": "excludeArtifacts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeContracts",
+        "signature": "excludeContracts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeSelectors",
+        "signature": "excludeSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "excludeSenders",
+        "signature": "excludeSenders()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetArtifacts",
+        "signature": "targetArtifacts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetArtifactSelectors",
+        "signature": "targetArtifactSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetContracts",
+        "signature": "targetContracts()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetSelectors",
+        "signature": "targetSelectors()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetSenders",
+        "signature": "targetSenders()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "targetInterfaces",
+        "signature": "targetInterfaces()",
         "declaredIn": "StdInvariant",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "failed",
+        "signature": "failed()",
         "declaredIn": "StdAssertions",
         "inputs": [],
         "stateMutability": "view"
@@ -283,6 +305,7 @@
     "functions": [
       {
         "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -294,6 +317,7 @@
       },
       {
         "name": "hasRole",
+        "signature": "hasRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -309,6 +333,7 @@
       },
       {
         "name": "getRoleAdmin",
+        "signature": "getRoleAdmin(bytes32)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -320,6 +345,7 @@
       },
       {
         "name": "grantRole",
+        "signature": "grantRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -335,6 +361,7 @@
       },
       {
         "name": "revokeRole",
+        "signature": "revokeRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -350,6 +377,7 @@
       },
       {
         "name": "renounceRole",
+        "signature": "renounceRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -385,18 +413,21 @@
     "functions": [
       {
         "name": "owner",
+        "signature": "owner()",
         "declaredIn": "Ownable",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "renounceOwnership",
+        "signature": "renounceOwnership()",
         "declaredIn": "Ownable",
         "inputs": [],
         "stateMutability": "nonpayable"
       },
       {
         "name": "transferOwnership",
+        "signature": "transferOwnership(address)",
         "declaredIn": "Ownable",
         "inputs": [
           {
@@ -436,30 +467,35 @@
     "functions": [
       {
         "name": "name",
+        "signature": "name()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "symbol",
+        "signature": "symbol()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "decimals",
+        "signature": "decimals()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalSupply",
+        "signature": "totalSupply()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "balanceOf",
+        "signature": "balanceOf(address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -471,6 +507,7 @@
       },
       {
         "name": "transfer",
+        "signature": "transfer(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -486,6 +523,7 @@
       },
       {
         "name": "allowance",
+        "signature": "allowance(address,address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -501,6 +539,7 @@
       },
       {
         "name": "approve",
+        "signature": "approve(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -516,6 +555,7 @@
       },
       {
         "name": "transferFrom",
+        "signature": "transferFrom(address,address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -562,24 +602,28 @@
     "functions": [
       {
         "name": "decimals",
+        "signature": "decimals()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "asset",
+        "signature": "asset()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalAssets",
+        "signature": "totalAssets()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "convertToShares",
+        "signature": "convertToShares(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -591,6 +635,7 @@
       },
       {
         "name": "convertToAssets",
+        "signature": "convertToAssets(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -602,6 +647,7 @@
       },
       {
         "name": "maxDeposit",
+        "signature": "maxDeposit(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -613,6 +659,7 @@
       },
       {
         "name": "maxMint",
+        "signature": "maxMint(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -624,6 +671,7 @@
       },
       {
         "name": "maxWithdraw",
+        "signature": "maxWithdraw(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -635,6 +683,7 @@
       },
       {
         "name": "maxRedeem",
+        "signature": "maxRedeem(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -646,6 +695,7 @@
       },
       {
         "name": "previewDeposit",
+        "signature": "previewDeposit(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -657,6 +707,7 @@
       },
       {
         "name": "previewMint",
+        "signature": "previewMint(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -668,6 +719,7 @@
       },
       {
         "name": "previewWithdraw",
+        "signature": "previewWithdraw(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -679,6 +731,7 @@
       },
       {
         "name": "previewRedeem",
+        "signature": "previewRedeem(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -690,6 +743,7 @@
       },
       {
         "name": "deposit",
+        "signature": "deposit(uint256,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -705,6 +759,7 @@
       },
       {
         "name": "mint",
+        "signature": "mint(uint256,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -720,6 +775,7 @@
       },
       {
         "name": "withdraw",
+        "signature": "withdraw(uint256,address,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -739,6 +795,7 @@
       },
       {
         "name": "redeem",
+        "signature": "redeem(uint256,address,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -758,24 +815,28 @@
       },
       {
         "name": "name",
+        "signature": "name()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "symbol",
+        "signature": "symbol()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalSupply",
+        "signature": "totalSupply()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "balanceOf",
+        "signature": "balanceOf(address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -787,6 +848,7 @@
       },
       {
         "name": "transfer",
+        "signature": "transfer(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -802,6 +864,7 @@
       },
       {
         "name": "allowance",
+        "signature": "allowance(address,address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -817,6 +880,7 @@
       },
       {
         "name": "approve",
+        "signature": "approve(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -832,6 +896,7 @@
       },
       {
         "name": "transferFrom",
+        "signature": "transferFrom(address,address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -880,6 +945,7 @@
     "functions": [
       {
         "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
         "declaredIn": "ERC165",
         "inputs": [
           {
@@ -906,6 +972,7 @@
     "functions": [
       {
         "name": "paused",
+        "signature": "paused()",
         "declaredIn": "Pausable",
         "inputs": [],
         "stateMutability": "view"
@@ -924,6 +991,145 @@
       "ReentrancyGuard"
     ],
     "functions": []
+  },
+  {
+    "name": "Overloaded",
+    "sourcePath": "src/Overloaded.sol",
+    "packageSegments": [
+      "src"
+    ],
+    "constructorArgs": [
+      {
+        "name": "admin",
+        "type": "address"
+      }
+    ],
+    "inheritance": [
+      "Overloaded",
+      "AccessControl",
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "Context"
+    ],
+    "functions": [
+      {
+        "name": "setLimit",
+        "signature": "setLimit(uint256)",
+        "declaredIn": "Overloaded",
+        "inputs": [
+          {
+            "name": "limit_",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "setLimit",
+        "signature": "setLimit(uint256,address)",
+        "declaredIn": "Overloaded",
+        "inputs": [
+          {
+            "name": "limit_",
+            "type": "uint256"
+          },
+          {
+            "name": "beneficiary_",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "interfaceId",
+            "type": "bytes4"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "hasRole",
+        "signature": "hasRole(bytes32,address)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "getRoleAdmin",
+        "signature": "getRoleAdmin(bytes32)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "grantRole",
+        "signature": "grantRole(bytes32,address)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "revokeRole",
+        "signature": "revokeRole(bytes32,address)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "renounceRole",
+        "signature": "renounceRole(bytes32,address)",
+        "declaredIn": "AccessControl",
+        "inputs": [
+          {
+            "name": "role",
+            "type": "bytes32"
+          },
+          {
+            "name": "callerConfirmation",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      }
+    ]
   },
   {
     "name": "PriceOracle",
@@ -950,12 +1156,14 @@
     "functions": [
       {
         "name": "latestRoundData",
+        "signature": "latestRoundData()",
         "declaredIn": "PriceOracle",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "setAnswer",
+        "signature": "setAnswer(int256)",
         "declaredIn": "PriceOracle",
         "inputs": [
           {
@@ -967,30 +1175,35 @@
       },
       {
         "name": "decimals",
+        "signature": "decimals()",
         "declaredIn": "AggregatorV3Interface",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "latestAnswer",
+        "signature": "latestAnswer()",
         "declaredIn": "AggregatorV3Interface",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "owner",
+        "signature": "owner()",
         "declaredIn": "Ownable",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "renounceOwnership",
+        "signature": "renounceOwnership()",
         "declaredIn": "Ownable",
         "inputs": [],
         "stateMutability": "nonpayable"
       },
       {
         "name": "transferOwnership",
+        "signature": "transferOwnership(address)",
         "declaredIn": "Ownable",
         "inputs": [
           {
@@ -1025,6 +1238,7 @@
     "functions": [
       {
         "name": "register",
+        "signature": "register(string,address)",
         "declaredIn": "Registry",
         "inputs": [
           {
@@ -1040,6 +1254,7 @@
       },
       {
         "name": "lookup",
+        "signature": "lookup(string)",
         "declaredIn": "Registry",
         "inputs": [
           {
@@ -1051,6 +1266,7 @@
       },
       {
         "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1062,6 +1278,7 @@
       },
       {
         "name": "hasRole",
+        "signature": "hasRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1077,6 +1294,7 @@
       },
       {
         "name": "getRoleAdmin",
+        "signature": "getRoleAdmin(bytes32)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1088,6 +1306,7 @@
       },
       {
         "name": "grantRole",
+        "signature": "grantRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1103,6 +1322,7 @@
       },
       {
         "name": "revokeRole",
+        "signature": "revokeRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1118,6 +1338,7 @@
       },
       {
         "name": "renounceRole",
+        "signature": "renounceRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1164,6 +1385,7 @@
     "functions": [
       {
         "name": "mint",
+        "signature": "mint(address,uint256)",
         "declaredIn": "Token",
         "inputs": [
           {
@@ -1179,6 +1401,7 @@
       },
       {
         "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1190,6 +1413,7 @@
       },
       {
         "name": "hasRole",
+        "signature": "hasRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1205,6 +1429,7 @@
       },
       {
         "name": "getRoleAdmin",
+        "signature": "getRoleAdmin(bytes32)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1216,6 +1441,7 @@
       },
       {
         "name": "grantRole",
+        "signature": "grantRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1231,6 +1457,7 @@
       },
       {
         "name": "revokeRole",
+        "signature": "revokeRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1246,6 +1473,7 @@
       },
       {
         "name": "renounceRole",
+        "signature": "renounceRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1261,30 +1489,35 @@
       },
       {
         "name": "name",
+        "signature": "name()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "symbol",
+        "signature": "symbol()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "decimals",
+        "signature": "decimals()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalSupply",
+        "signature": "totalSupply()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "balanceOf",
+        "signature": "balanceOf(address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1296,6 +1529,7 @@
       },
       {
         "name": "transfer",
+        "signature": "transfer(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1311,6 +1545,7 @@
       },
       {
         "name": "allowance",
+        "signature": "allowance(address,address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1326,6 +1561,7 @@
       },
       {
         "name": "approve",
+        "signature": "approve(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1341,6 +1577,7 @@
       },
       {
         "name": "transferFrom",
+        "signature": "transferFrom(address,address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1385,6 +1622,7 @@
     "functions": [
       {
         "name": "deposit",
+        "signature": "deposit(uint256)",
         "declaredIn": "Vault",
         "inputs": [
           {
@@ -1396,6 +1634,7 @@
       },
       {
         "name": "withdraw",
+        "signature": "withdraw(uint256)",
         "declaredIn": "Vault",
         "inputs": [
           {
@@ -1407,6 +1646,7 @@
       },
       {
         "name": "balanceOf",
+        "signature": "balanceOf(address)",
         "declaredIn": "Vault",
         "inputs": [
           {
@@ -1418,6 +1658,7 @@
       },
       {
         "name": "setFeeBps",
+        "signature": "setFeeBps(uint16)",
         "declaredIn": "Vault",
         "inputs": [
           {
@@ -1429,18 +1670,21 @@
       },
       {
         "name": "pause",
+        "signature": "pause()",
         "declaredIn": "Vault",
         "inputs": [],
         "stateMutability": "nonpayable"
       },
       {
         "name": "unpause",
+        "signature": "unpause()",
         "declaredIn": "Vault",
         "inputs": [],
         "stateMutability": "nonpayable"
       },
       {
         "name": "setRegistry",
+        "signature": "setRegistry(address)",
         "declaredIn": "Vault",
         "inputs": [
           {
@@ -1452,12 +1696,14 @@
       },
       {
         "name": "paused",
+        "signature": "paused()",
         "declaredIn": "Pausable",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "supportsInterface",
+        "signature": "supportsInterface(bytes4)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1469,6 +1715,7 @@
       },
       {
         "name": "hasRole",
+        "signature": "hasRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1484,6 +1731,7 @@
       },
       {
         "name": "getRoleAdmin",
+        "signature": "getRoleAdmin(bytes32)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1495,6 +1743,7 @@
       },
       {
         "name": "grantRole",
+        "signature": "grantRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1510,6 +1759,7 @@
       },
       {
         "name": "revokeRole",
+        "signature": "revokeRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1525,6 +1775,7 @@
       },
       {
         "name": "renounceRole",
+        "signature": "renounceRole(bytes32,address)",
         "declaredIn": "AccessControl",
         "inputs": [
           {
@@ -1577,36 +1828,42 @@
     "functions": [
       {
         "name": "assetPrice",
+        "signature": "assetPrice()",
         "declaredIn": "VaultERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalValue",
+        "signature": "totalValue()",
         "declaredIn": "VaultERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "decimals",
+        "signature": "decimals()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "asset",
+        "signature": "asset()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalAssets",
+        "signature": "totalAssets()",
         "declaredIn": "ERC4626",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "convertToShares",
+        "signature": "convertToShares(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1618,6 +1875,7 @@
       },
       {
         "name": "convertToAssets",
+        "signature": "convertToAssets(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1629,6 +1887,7 @@
       },
       {
         "name": "maxDeposit",
+        "signature": "maxDeposit(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1640,6 +1899,7 @@
       },
       {
         "name": "maxMint",
+        "signature": "maxMint(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1651,6 +1911,7 @@
       },
       {
         "name": "maxWithdraw",
+        "signature": "maxWithdraw(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1662,6 +1923,7 @@
       },
       {
         "name": "maxRedeem",
+        "signature": "maxRedeem(address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1673,6 +1935,7 @@
       },
       {
         "name": "previewDeposit",
+        "signature": "previewDeposit(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1684,6 +1947,7 @@
       },
       {
         "name": "previewMint",
+        "signature": "previewMint(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1695,6 +1959,7 @@
       },
       {
         "name": "previewWithdraw",
+        "signature": "previewWithdraw(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1706,6 +1971,7 @@
       },
       {
         "name": "previewRedeem",
+        "signature": "previewRedeem(uint256)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1717,6 +1983,7 @@
       },
       {
         "name": "deposit",
+        "signature": "deposit(uint256,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1732,6 +1999,7 @@
       },
       {
         "name": "mint",
+        "signature": "mint(uint256,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1747,6 +2015,7 @@
       },
       {
         "name": "withdraw",
+        "signature": "withdraw(uint256,address,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1766,6 +2035,7 @@
       },
       {
         "name": "redeem",
+        "signature": "redeem(uint256,address,address)",
         "declaredIn": "ERC4626",
         "inputs": [
           {
@@ -1785,24 +2055,28 @@
       },
       {
         "name": "name",
+        "signature": "name()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "symbol",
+        "signature": "symbol()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "totalSupply",
+        "signature": "totalSupply()",
         "declaredIn": "ERC20",
         "inputs": [],
         "stateMutability": "view"
       },
       {
         "name": "balanceOf",
+        "signature": "balanceOf(address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1814,6 +2088,7 @@
       },
       {
         "name": "transfer",
+        "signature": "transfer(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1829,6 +2104,7 @@
       },
       {
         "name": "allowance",
+        "signature": "allowance(address,address)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1844,6 +2120,7 @@
       },
       {
         "name": "approve",
+        "signature": "approve(address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
@@ -1859,6 +2136,7 @@
       },
       {
         "name": "transferFrom",
+        "signature": "transferFrom(address,address,uint256)",
         "declaredIn": "ERC20",
         "inputs": [
           {
