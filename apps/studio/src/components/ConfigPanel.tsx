@@ -119,9 +119,16 @@ function SetXStepCard({
   const groups = manifest ? groupWriteFunctions(manifest.functions) : [];
   const hasManifest = manifest !== undefined && groups.length > 0;
 
+  // Collect all write functions for overload detection.
+  const allWriteFns = groups.flatMap((g) => g.fns);
+
   // Derive selected function's inputs for display-only arg labels.
+  // When a signature is stored on the step, look up by signature for precision
+  // (handles overloads). Fallback to bare name lookup for legacy steps.
   const selectedFn: ManifestFunction | undefined = hasManifest
-    ? groups.flatMap((g) => g.fns).find((f) => f.name === step.functionName)
+    ? (step.functionSignature
+        ? allWriteFns.find((f) => f.signature === step.functionSignature)
+        : allWriteFns.find((f) => f.name === step.functionName))
     : undefined;
 
   return (
@@ -156,28 +163,48 @@ function SetXStepCard({
       )}
 
       {/* Function picker (manifest-driven) or free-text fallback.
-          NOTE: The spec's SetXStep uses a single `function: string` field, so
-          overloaded Solidity functions (same name, different signatures) cannot
-          be distinguished at the spec level. Current fixtures have no overloads,
-          so keying options by fn.name is safe for now. */}
+          Options are keyed by canonical signature so overloaded functions
+          (same name, different parameter types) are presented distinctly.
+          The option label shows the full signature when the name is overloaded
+          on this contract; the bare name is shown when unique. */}
       <div style={labelStyle}>Function name</div>
       {hasManifest ? (
         <select
           style={{ ...inputStyle }}
-          value={step.functionName}
-          onChange={(e) => onUpdate({ functionName: e.target.value, args: [] })}
+          value={step.functionSignature ?? step.functionName}
+          onChange={(e) => {
+            const sig = e.target.value;
+            // Resolve the bare name from the chosen signature.
+            const chosenFn = allWriteFns.find((f) => f.signature === sig);
+            onUpdate({
+              functionName: chosenFn ? chosenFn.name : sig,
+              functionSignature: chosenFn ? chosenFn.signature : undefined,
+              args: [],
+            });
+          }}
           aria-label={`setx-function-select-${nodeId}-${step.id}`}
         >
           <option value="">— select function —</option>
-          {groups.map(({ group, fns }) => (
-            <optgroup key={group} label={group}>
-              {fns.map((fn) => (
-                <option key={fn.name} value={fn.name}>
-                  {fn.name}({fn.inputs.map((i) => i.type).join(", ")})
-                </option>
-              ))}
-            </optgroup>
-          ))}
+          {groups.map(({ group, fns }) => {
+            // Count overloads within this contract (across all groups).
+            return (
+              <optgroup key={group} label={group}>
+                {fns.map((fn) => {
+                  // Count how many functions share this bare name in the entire contract.
+                  const overloadCount = allWriteFns.filter((f) => f.name === fn.name).length;
+                  // Show full signature as label when the name is overloaded.
+                  const label = overloadCount > 1
+                    ? fn.signature
+                    : `${fn.name}(${fn.inputs.map((i) => i.type).join(", ")})`;
+                  return (
+                    <option key={fn.signature} value={fn.signature}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            );
+          })}
         </select>
       ) : (
         <input

@@ -92,8 +92,17 @@ export interface StudioSetXStep {
    * When set, overrides the attached node's deployId in the exported spec.
    */
   target?: string;
-  /** Name of the setter function to call. */
+  /** Name of the setter function to call (bare name, e.g. "setLimit"). */
   functionName: string;
+  /**
+   * Canonical signature of the selected function, e.g. "setLimit(uint256,address)".
+   * Present when the function was chosen from the manifest picker (overloaded or not).
+   * When the function name is unique on the target contract, graph-to-spec emits
+   * the bare name in the ConfigSpec. When it is overloaded (multiple signatures share
+   * the same name), the full canonical signature is emitted instead.
+   * Absent for free-text function entries (fallback input path).
+   */
+  functionSignature?: string;
   /** Stringified args (literals only for now). */
   args: string[];
 }

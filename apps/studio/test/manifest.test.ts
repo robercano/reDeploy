@@ -42,6 +42,7 @@ describe("contractManifest loader", () => {
       // functions shape
       for (const fn of entry.functions) {
         expect(typeof fn.name).toBe("string");
+        expect(typeof fn.signature).toBe("string");
         expect(typeof fn.declaredIn).toBe("string");
         expect(Array.isArray(fn.inputs)).toBe(true);
         expect(["pure", "view", "nonpayable", "payable"]).toContain(fn.stateMutability);
@@ -55,7 +56,7 @@ describe("contractManifest loader", () => {
 // ---------------------------------------------------------------------------
 
 describe("contractManifest — project contracts present", () => {
-  const projectContracts = ["Token", "Vault", "Registry", "PriceOracle", "VaultERC4626"];
+  const projectContracts = ["Token", "Vault", "Registry", "PriceOracle", "VaultERC4626", "Overloaded"];
 
   for (const name of projectContracts) {
     it(`contains ${name}`, () => {
@@ -70,6 +71,61 @@ describe("contractManifest — project contracts present", () => {
       const entry = getContract(name);
       expect(entry!.sourcePath).toMatch(/^src\//);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Overloaded contract — two setLimit overloads with distinct signatures
+// ---------------------------------------------------------------------------
+
+describe("contractManifest — Overloaded contract overloads", () => {
+  it("Overloaded has exactly two setLimit functions with distinct signatures", () => {
+    const entry = getContract("Overloaded")!;
+    const setLimitFns = entry.functions.filter((f) => f.name === "setLimit");
+    expect(setLimitFns).toHaveLength(2);
+    const sigs = setLimitFns.map((f) => f.signature).sort();
+    expect(sigs).toContain("setLimit(uint256)");
+    expect(sigs).toContain("setLimit(uint256,address)");
+  });
+
+  it("setLimit(uint256) has one input of type uint256", () => {
+    const entry = getContract("Overloaded")!;
+    const fn = entry.functions.find((f) => f.signature === "setLimit(uint256)");
+    expect(fn).toBeDefined();
+    expect(fn!.inputs).toHaveLength(1);
+    expect(fn!.inputs[0].type).toBe("uint256");
+  });
+
+  it("setLimit(uint256,address) has two inputs: uint256 and address", () => {
+    const entry = getContract("Overloaded")!;
+    const fn = entry.functions.find((f) => f.signature === "setLimit(uint256,address)");
+    expect(fn).toBeDefined();
+    expect(fn!.inputs).toHaveLength(2);
+    expect(fn!.inputs[0].type).toBe("uint256");
+    expect(fn!.inputs[1].type).toBe("address");
+  });
+
+  it("both setLimit functions have declaredIn='Overloaded'", () => {
+    const entry = getContract("Overloaded")!;
+    const setLimitFns = entry.functions.filter((f) => f.name === "setLimit");
+    for (const fn of setLimitFns) {
+      expect(fn.declaredIn).toBe("Overloaded");
+    }
+  });
+
+  it("both setLimit functions have stateMutability='nonpayable'", () => {
+    const entry = getContract("Overloaded")!;
+    const setLimitFns = entry.functions.filter((f) => f.name === "setLimit");
+    for (const fn of setLimitFns) {
+      expect(fn.stateMutability).toBe("nonpayable");
+    }
+  });
+
+  it("Overloaded functions list has no duplicate signatures", () => {
+    const entry = getContract("Overloaded")!;
+    const sigs = entry.functions.map((f) => f.signature);
+    const uniqueSigs = new Set(sigs);
+    expect(sigs.length).toBe(uniqueSigs.size);
   });
 });
 
@@ -191,11 +247,22 @@ describe("contractManifest — function grouping by declaredIn", () => {
     expect(names).toContain("deposit");
   });
 
-  it("functions list has no duplicates by name", () => {
+  it("functions list has no duplicates by SIGNATURE (overloads share a name but differ by signature)", () => {
+    // VaultERC4626 has no overloads: signatures are all distinct AND names are all distinct.
     const entry = getContract("VaultERC4626")!;
-    const names = entry.functions.map((f) => f.name);
-    const uniqueNames = new Set(names);
-    expect(names.length).toBe(uniqueNames.size);
+    const signatures = entry.functions.map((f) => f.signature);
+    const uniqueSigs = new Set(signatures);
+    expect(signatures.length).toBe(uniqueSigs.size);
+  });
+
+  it("each function has a signature matching name(type1,type2,...) pattern", () => {
+    const entry = getContract("VaultERC4626")!;
+    for (const fn of entry.functions) {
+      // Signature must start with the function name
+      expect(fn.signature.startsWith(fn.name + "(")).toBe(true);
+      // Signature must end with ")"
+      expect(fn.signature.endsWith(")")).toBe(true);
+    }
   });
 });
 
@@ -228,13 +295,14 @@ describe("deriveManifests — fixture-based deterministic derivation", () => {
     expect(manifests.length).toBeGreaterThan(0);
   });
 
-  it("contains all 5 project contracts from fixture", () => {
+  it("contains all 6 project contracts from fixture", () => {
     const names = manifests.map((m) => m.name);
     expect(names).toContain("Token");
     expect(names).toContain("Vault");
     expect(names).toContain("Registry");
     expect(names).toContain("PriceOracle");
     expect(names).toContain("VaultERC4626");
+    expect(names).toContain("Overloaded");
   });
 
   it("output is sorted by sourcePath then name (stable order)", () => {
@@ -321,6 +389,32 @@ describe("deriveManifests — fixture-based deterministic derivation", () => {
       const m = manifests.find((x) => x.name === "VaultERC4626")!;
       const erc4626Fns = m.functions.filter((f) => f.declaredIn === "ERC4626");
       expect(erc4626Fns.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Overloaded contract — fixture-based overload derivation", () => {
+    it("Overloaded yields two distinct setLimit entries with correct signatures", () => {
+      const m = manifests.find((x) => x.name === "Overloaded")!;
+      expect(m).toBeDefined();
+      const setLimitFns = m.functions.filter((f) => f.name === "setLimit");
+      expect(setLimitFns).toHaveLength(2);
+      const sigs = setLimitFns.map((f) => f.signature).sort();
+      expect(sigs).toEqual(["setLimit(uint256)", "setLimit(uint256,address)"]);
+    });
+
+    it("Overloaded function list has no duplicate signatures (by-signature uniqueness)", () => {
+      const m = manifests.find((x) => x.name === "Overloaded")!;
+      const sigs = m.functions.map((f) => f.signature);
+      const uniqueSigs = new Set(sigs);
+      expect(sigs.length).toBe(uniqueSigs.size);
+    });
+
+    it("each function entry has a signature field matching name(types) pattern", () => {
+      const m = manifests.find((x) => x.name === "Overloaded")!;
+      for (const fn of m.functions) {
+        expect(fn.signature).toMatch(/^\w+\(.*\)$/);
+        expect(fn.signature.startsWith(fn.name + "(")).toBe(true);
+      }
     });
   });
 });

@@ -18,6 +18,13 @@ export interface ManifestFunctionInput {
 
 export interface ManifestFunction {
   name: string;
+  /**
+   * Canonical signature: `name(type1,type2,...)` using Solidity canonical type strings.
+   * For a no-arg function `foo()`, this is `"foo()"`.
+   * For overloaded functions on the same contract, signatures are distinct.
+   * Examples: `"setLimit(uint256)"`, `"setLimit(uint256,address)"`.
+   */
+  signature: string;
   /** The name of the contract that DECLARES this function (for inheritance grouping). */
   declaredIn: string;
   inputs: ManifestFunctionInput[];
