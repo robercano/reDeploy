@@ -197,3 +197,107 @@ describe("useUserTemplates — persistence across remounts", () => {
     expect(second.current.userTemplates[0].id).toBe("persisted-1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. isValidTemplate shape guard (malformed entries filtered out)
+// ---------------------------------------------------------------------------
+
+import { isValidTemplate } from "../src/hooks/useUserTemplates";
+
+describe("useUserTemplates — malformed element filtering", () => {
+  it("filters out an entry missing nodes", () => {
+    const bad = { id: "t1", name: "Bad", description: "", edges: [], params: [] };
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, makeTemplate("good")]));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("filters out an entry where nodes is not an array", () => {
+    const bad = { id: "t2", name: "Bad", description: "", nodes: "not-an-array", edges: [], params: [] };
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, makeTemplate("good")]));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("filters out an entry where a node is missing data", () => {
+    const bad = {
+      id: "t3",
+      name: "Bad",
+      description: "",
+      nodes: [{ id: "node-1" }], // missing data
+      edges: [],
+      params: [],
+    };
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, makeTemplate("good")]));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("filters out an entry where a node data is missing args array", () => {
+    const bad = {
+      id: "t4",
+      name: "Bad",
+      description: "",
+      nodes: [
+        {
+          id: "node-1",
+          data: {
+            deployIdSeed: "Token",
+            contractName: "Token",
+            // args missing
+            after: [],
+            configSteps: [],
+            position: { x: 0, y: 0 },
+          },
+        },
+      ],
+      edges: [],
+      params: [],
+    };
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify([bad, makeTemplate("good")]));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("good");
+  });
+
+  it("does not throw when loading a stored array with malformed elements", () => {
+    const entries = [
+      null,
+      42,
+      "string",
+      { id: "", name: "no-id", description: "", nodes: [], edges: [], params: [] }, // empty id
+      makeTemplate("valid"),
+    ];
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify(entries));
+    expect(() => renderHook(() => useUserTemplates())).not.toThrow();
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(1);
+    expect(result.current.userTemplates[0].id).toBe("valid");
+  });
+
+  it("valid siblings survive when malformed entries are filtered out", () => {
+    const entries = [
+      makeTemplate("valid-1"),
+      { id: "bad", name: "Bad", description: "", nodes: "oops", edges: [], params: [] },
+      makeTemplate("valid-2"),
+    ];
+    localStorage.setItem(USER_TEMPLATES_STORAGE_KEY, JSON.stringify(entries));
+    const { result } = renderHook(() => useUserTemplates());
+    expect(result.current.userTemplates).toHaveLength(2);
+    expect(result.current.userTemplates.map((t) => t.id)).toEqual(["valid-1", "valid-2"]);
+  });
+
+  it("isValidTemplate returns false for non-object values", () => {
+    expect(isValidTemplate(null)).toBe(false);
+    expect(isValidTemplate(42)).toBe(false);
+    expect(isValidTemplate("string")).toBe(false);
+    expect(isValidTemplate([])).toBe(false);
+  });
+
+  it("isValidTemplate returns true for a well-formed template", () => {
+    expect(isValidTemplate(makeTemplate("t1"))).toBe(true);
+  });
+});

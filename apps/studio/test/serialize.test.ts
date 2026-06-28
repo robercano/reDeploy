@@ -214,6 +214,27 @@ describe("graphToTemplate — edges", () => {
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.edges).toHaveLength(0);
   });
+
+  it("constructorRef edge referencing a node not in the provided nodes list is dropped", () => {
+    // Build two real nodes and an edge between them
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractNode());
+    act(() => result.current.addContractNode());
+    const [source, target] = result.current.nodes;
+    act(() => nd(source).onUpdateDeployId(source.id, "Token"));
+    act(() => nd(target).onUpdateDeployId(target.id, "Vault"));
+
+    act(() => result.current.onConnect({
+      source: source.id,
+      target: target.id,
+      sourceHandle: `${source.id}-output`,
+      targetHandle: `${target.id}-arg-0`,
+    }));
+
+    // Only pass the source node — target is missing, so the edge should be dropped
+    const tmpl = graphToTemplate([source], result.current.edges, "user-1", "Test", "", []);
+    expect(tmpl.edges).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -332,9 +353,6 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
 
     const { deployment } = graphToSpec(graphNodes, graphEdges);
     const dResult = validateSpec(deployment);
-    if (!dResult.ok) {
-      console.error("Validation errors:", dResult.errors);
-    }
     expect(dResult.ok).toBe(true);
 
     // Verify edge wiring survived the round-trip
@@ -393,8 +411,16 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
       targetHandle: `${vaultNode.id}-arg-1`,
     }));
 
-    // Add a config step to vaultNode
+    // Add a valid grantRole config step to vaultNode with non-empty role and account
     act(() => graphResult.current.addConfigStep(vaultNode.id, "grantRole"));
+    // Get the step id from the freshly-added step
+    const vaultData = nd(graphResult.current.nodes.find((n) => n.id === vaultNode.id)!);
+    const grantStep = vaultData.configSteps[0];
+    act(() => graphResult.current.updateGrantRoleStep(vaultNode.id, grantStep.id, {
+      role: "MINTER_ROLE",
+      accountKind: "ref",
+      accountValue: "Token",
+    }));
 
     // Serialize
     const paramSelections: ParamSelection[] = [
@@ -433,15 +459,15 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
     const dResult = validateSpec(deployment);
     const cResult = validateConfig(config, deployment);
 
-    if (!dResult.ok) console.error("Deploy errors:", dResult.errors);
-    if (!cResult.ok) console.error("Config errors:", cResult.errors);
     expect(dResult.ok).toBe(true);
-    // Config has an empty grantRole step — may not validate perfectly, but should
-    // at least not throw or produce a type error. Deployment must always pass.
+    expect(cResult.ok).toBe(true);
   });
 
-  it("after/ordering constraints survive the round-trip", () => {
-    // Graph: A → B (A must deploy before B, declared via 'after')
+  it("after/ordering constraints are remapped from real ids to template-local ids", () => {
+    // Graph: nodeA and nodeB; nodeB.data.after references nodeA's real id.
+    // Since there is no public graph API to add to 'after' directly (it is set
+    // only during instantiateTemplate from template data), we unit-test
+    // graphToTemplate directly by constructing nodes with a hand-crafted 'after'.
     const { result } = renderHook(() => useGraph());
     act(() => result.current.addContractNode());
     act(() => result.current.addContractNode());
@@ -452,16 +478,39 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
     act(() => nd(nodeB).onUpdateDeployId(nodeB.id, "ContractB"));
     act(() => nd(nodeB).onUpdateContractName(nodeB.id, "Vault"));
 
-    // Manually set 'after' on nodeB to reference nodeA's real id
-    // (In practice the user would draw a wire edge, but we test the data path)
-    // We can't directly set 'after' on the data without a callback, so we skip
-    // this specific test path — after is tested indirectly via the builtin template tests.
-    // Just verify the template comes out with consistent structure.
-    const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-rt-3", "Test", "", []);
+    // Manually inject 'after' referencing nodeA's real id into nodeB's data
+    // by constructing the node objects with the correct after values directly.
+    // This exercises the remap branch in graphToTemplate (~line 132-134).
+    const nodeAFake = {
+      ...nodeA,
+      data: { ...nodeA.data, deployId: "ContractA", contractName: "Token", args: [], after: [], configSteps: [] },
+    };
+    const nodeBFake = {
+      ...nodeB,
+      data: { ...nodeB.data, deployId: "ContractB", contractName: "Vault", args: [], after: [nodeA.id], configSteps: [] },
+    };
+
+    const tmpl = graphToTemplate(
+      [nodeAFake, nodeBFake] as typeof result.current.nodes,
+      [],
+      "user-rt-3",
+      "Test",
+      "",
+      [],
+    );
+
     const nodeALocal = tmpl.nodes.find((n) => n.data.deployIdSeed === "ContractA");
     const nodeBLocal = tmpl.nodes.find((n) => n.data.deployIdSeed === "ContractB");
     expect(nodeALocal).toBeDefined();
     expect(nodeBLocal).toBeDefined();
+
+    // The key assertion: nodeB's 'after' should contain nodeA's TEMPLATE-LOCAL id,
+    // not nodeA's real graph id. This exercises the id-remap branch in graphToTemplate.
+    expect(nodeBLocal!.data.after).toHaveLength(1);
+    expect(nodeBLocal!.data.after[0]).toBe(nodeALocal!.id);
+    // nodeA's local id should be "contracta" (slug of "ContractA")
+    expect(nodeALocal!.id).toBe("contracta");
+    expect(nodeBLocal!.data.after[0]).toBe("contracta");
   });
 });
 

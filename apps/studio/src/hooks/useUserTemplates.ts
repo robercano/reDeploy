@@ -20,8 +20,65 @@ import type { Template } from "../templates/types.js";
 export const USER_TEMPLATES_STORAGE_KEY = "redeploy.studio.userTemplates";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Shape validation
 // ---------------------------------------------------------------------------
+
+/**
+ * Type guard that validates a parsed JSON value is a well-formed Template.
+ *
+ * Validates all nested arrays that instantiateTemplate dereferences so that
+ * a malformed/corrupt localStorage entry cannot cause an uncaught TypeError
+ * inside a React event handler.
+ *
+ * Validation rules:
+ * - t is a non-null object
+ * - id, name are non-empty strings; description is a string (may be empty)
+ * - nodes is an array where every element has:
+ *   - string id
+ *   - data object with string contractName, string deployIdSeed,
+ *     array args, array after, array configSteps,
+ *     and position { x: number; y: number }
+ * - edges is an array where every element has string source, string target,
+ *   and numeric argIndex
+ * - params is an array
+ */
+export function isValidTemplate(t: unknown): t is Template {
+  if (t === null || typeof t !== "object") return false;
+  const obj = t as Record<string, unknown>;
+
+  if (typeof obj["id"] !== "string" || obj["id"] === "") return false;
+  if (typeof obj["name"] !== "string" || obj["name"] === "") return false;
+  if (typeof obj["description"] !== "string") return false;
+  if (!Array.isArray(obj["nodes"])) return false;
+  if (!Array.isArray(obj["edges"])) return false;
+  if (!Array.isArray(obj["params"])) return false;
+
+  for (const node of obj["nodes"] as unknown[]) {
+    if (node === null || typeof node !== "object") return false;
+    const n = node as Record<string, unknown>;
+    if (typeof n["id"] !== "string") return false;
+    if (n["data"] === null || typeof n["data"] !== "object") return false;
+    const d = n["data"] as Record<string, unknown>;
+    if (typeof d["contractName"] !== "string") return false;
+    if (typeof d["deployIdSeed"] !== "string") return false;
+    if (!Array.isArray(d["args"])) return false;
+    if (!Array.isArray(d["after"])) return false;
+    if (!Array.isArray(d["configSteps"])) return false;
+    if (d["position"] === null || typeof d["position"] !== "object") return false;
+    const pos = d["position"] as Record<string, unknown>;
+    if (typeof pos["x"] !== "number" || typeof pos["y"] !== "number") return false;
+  }
+
+  for (const edge of obj["edges"] as unknown[]) {
+    if (edge === null || typeof edge !== "object") return false;
+    const e = edge as Record<string, unknown>;
+    if (typeof e["source"] !== "string") return false;
+    if (typeof e["target"] !== "string") return false;
+    if (typeof e["argIndex"] !== "number") return false;
+  }
+
+  return true;
+}
 
 function loadFromStorage(): Template[] {
   if (typeof window === "undefined") return [];
@@ -30,7 +87,7 @@ function loadFromStorage(): Template[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed as Template[];
+    return parsed.filter(isValidTemplate);
   } catch {
     return [];
   }

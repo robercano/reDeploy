@@ -8,6 +8,7 @@
  *   4. Toggling a param slot exposes label/hint inputs.
  *   5. onSave is called with correct arguments on confirm.
  *   6. onClose is called when Close / Cancel is clicked.
+ *   7. Label and hint values flow into onSave's params.
  */
 
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -242,6 +243,53 @@ describe("SaveTemplateModal — onSave", () => {
     const btn = screen.getByTestId("save-template-confirm") as HTMLButtonElement;
     fireEvent.click(btn);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("user-typed label flows into onSave params[0].label", () => {
+    const onSave = vi.fn();
+    renderModal(twoNodes, onSave);
+
+    fireEvent.change(screen.getByTestId("save-template-name"), {
+      target: { value: "My Template" },
+    });
+
+    // Toggle the first param slot on
+    fireEvent.click(screen.getByTestId("param-slot-node-1-0"));
+
+    // The label input appears with a default value — change it to a custom label
+    // Find label input by placeholder text
+    const labelInput = screen.getByPlaceholderText("Label") as HTMLInputElement;
+    fireEvent.change(labelInput, { target: { value: "Custom Token Label" } });
+
+    fireEvent.click(screen.getByTestId("save-template-confirm"));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const [, , params] = onSave.mock.calls[0] as [string, string, Array<{ nodeId: string; argIndex: number; label: string; hint?: string }>];
+    expect(params).toHaveLength(1);
+    expect(params[0].label).toBe("Custom Token Label");
+  });
+
+  it("user-typed hint flows into onSave params[0].hint", () => {
+    const onSave = vi.fn();
+    renderModal(twoNodes, onSave);
+
+    fireEvent.change(screen.getByTestId("save-template-name"), {
+      target: { value: "My Template" },
+    });
+
+    // Toggle the first param slot on
+    fireEvent.click(screen.getByTestId("param-slot-node-1-0"));
+
+    // Change the hint input
+    const hintInput = screen.getByPlaceholderText("e.g. 18 for standard tokens") as HTMLInputElement;
+    fireEvent.change(hintInput, { target: { value: "e.g. USD Coin" } });
+
+    fireEvent.click(screen.getByTestId("save-template-confirm"));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const [, , params] = onSave.mock.calls[0] as [string, string, Array<{ nodeId: string; argIndex: number; label: string; hint?: string }>];
+    expect(params).toHaveLength(1);
+    expect(params[0].hint).toBe("e.g. USD Coin");
   });
 });
 
