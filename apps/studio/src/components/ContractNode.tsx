@@ -2,9 +2,13 @@
  * ContractNode.tsx
  *
  * Custom React Flow node for a deployable contract.
- * Shows: deployment id, contract name (read-only), constructor arg slots.
- * Handles: output handle (for outgoing edges), arg input handles, and
- *          a general input handle for wire edges.
+ * Shows: deployment id, contract name (read-only), constructor arg slots,
+ *        and a collapsible "Config calls" section for per-node config steps.
+ * Handles: output handle (for outgoing edges), arg input handles.
+ *
+ * NOTE: The "Main Input" wire handle (`${id}-input`) has been removed.
+ * Cross-contract wiring is now expressed as a config call step whose arg is
+ * a `{DeployID}.address` reference — not a separate wire edge.
  *
  * Callbacks are passed via the `data` prop (NodeCallbacks interface)
  * because React Flow custom nodes only receive their `data` prop — not
@@ -24,10 +28,12 @@
  *   When the edge is removed, the slot reverts to an editable literal input.
  */
 
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
-import type { ContractNodeData, ArgSlot } from "../spec/types";
+import type { ContractNodeData, ArgSlot, StudioConfigStep, StudioAddressRef, StudioSetXStep, StudioGrantRoleStep } from "../spec/types.js";
+import { getContract } from "../manifest/index.js";
+import type { ManifestFunction } from "../manifest/types.js";
 
 const inputStyle: React.CSSProperties = {
   fontSize: 11,
@@ -154,6 +160,414 @@ function ArgRow({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Per-node Config Calls section
+// ---------------------------------------------------------------------------
+
+/** Groups the writable (nonpayable/payable) manifest functions by declaredIn. */
+function groupWriteFunctions(fns: ManifestFunction[]): { group: string; fns: ManifestFunction[] }[] {
+  const writeFns = fns.filter(
+    (f) => f.stateMutability === "nonpayable" || f.stateMutability === "payable",
+  );
+  const order: string[] = [];
+  const byGroup = new Map<string, ManifestFunction[]>();
+  for (const fn of writeFns) {
+    if (!byGroup.has(fn.declaredIn)) {
+      order.push(fn.declaredIn);
+      byGroup.set(fn.declaredIn, []);
+    }
+    byGroup.get(fn.declaredIn)!.push(fn);
+  }
+  return order.map((g) => ({ group: g, fns: byGroup.get(g)! }));
+}
+
+/** A deploy-id / contractName pair used for the address-ref arg picker. */
+export interface CanvasDeployTarget {
+  deployId: string;
+  contractName: string;
+}
+
+/** Callbacks for per-node config calls section (injected into node data via App.tsx). */
+export interface ConfigCallbacks {
+  onAddConfigStep: (nodeId: string, kind: "setX" | "grantRole") => void;
+  onRemoveConfigStep: (nodeId: string, stepId: string) => void;
+  onUpdateSetXStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => void;
+  onUpdateGrantRoleStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>) => void;
+  /** All deploy targets currently on the canvas (for address-ref arg picker). */
+  deployTargets?: CanvasDeployTarget[];
+}
+
+const configCardStyle: React.CSSProperties = {
+  background: "#f9f9f9",
+  border: "1px solid #e0e0e0",
+  borderRadius: 4,
+  padding: "6px 8px",
+  marginBottom: 6,
+  fontSize: 11,
+};
+
+const configSectionStyle: React.CSSProperties = {
+  marginTop: 6,
+  borderTop: "1px solid #eee",
+  paddingTop: 6,
+};
+
+const configArgRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  marginBottom: 4,
+};
+
+const smallInputStyle: React.CSSProperties = {
+  fontSize: 10,
+  padding: "2px 4px",
+  border: "1px solid #ccc",
+  borderRadius: 3,
+  width: "100%",
+  boxSizing: "border-box",
+};
+
+const smallSelectStyle: React.CSSProperties = {
+  fontSize: 10,
+  padding: "2px 4px",
+  border: "1px solid #ccc",
+  borderRadius: 3,
+  width: "100%",
+  boxSizing: "border-box",
+};
+
+/**
+ * Renders a single config step arg: either a literal input or an address-ref picker.
+ */
+function ConfigArgInput({
+  value,
+  index,
+  stepId,
+  nodeId,
+  inputName,
+  deployTargets,
+  onChange,
+}: {
+  value: string | StudioAddressRef;
+  index: number;
+  stepId: string;
+  nodeId: string;
+  inputName?: string;
+  deployTargets: CanvasDeployTarget[];
+  onChange: (v: string | StudioAddressRef) => void;
+}) {
+  const isRef = typeof value === "object" && value.kind === "addressRef";
+  const argLabel = `config-arg-${nodeId}-${stepId}-${index}`;
+
+  return (
+    <div style={configArgRowStyle}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+        {inputName && (
+          <span style={{ fontSize: 10, color: "#888" }}>{inputName}</span>
+        )}
+        <div style={{ display: "flex", gap: 4 }}>
+          {/* Kind toggle: literal vs addressRef */}
+          <select
+            style={{ ...smallSelectStyle, width: "auto", minWidth: 60 }}
+            value={isRef ? "ref" : "literal"}
+            onChange={(e) => {
+              if (e.target.value === "ref") {
+                onChange({ kind: "addressRef", deployId: deployTargets[0]?.deployId ?? "" });
+              } else {
+                onChange(typeof value === "object" ? "" : value);
+              }
+            }}
+            aria-label={`${argLabel}-kind`}
+          >
+            <option value="literal">literal</option>
+            <option value="ref">address ref</option>
+          </select>
+          {isRef ? (
+            <select
+              style={smallSelectStyle}
+              value={(value as StudioAddressRef).deployId}
+              onChange={(e) => onChange({ kind: "addressRef", deployId: e.target.value })}
+              aria-label={`${argLabel}-ref`}
+            >
+              {deployTargets.length === 0 && (
+                <option value="">— no contracts on canvas —</option>
+              )}
+              {deployTargets.map((dt) => (
+                <option key={dt.deployId} value={dt.deployId}>
+                  {dt.deployId}.address
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              style={smallInputStyle}
+              value={typeof value === "string" ? value : ""}
+              placeholder="value"
+              onChange={(e) => onChange(e.target.value)}
+              aria-label={`${argLabel}-literal`}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SetXCallCard({
+  step,
+  nodeId,
+  contractName,
+  deployTargets,
+  onUpdate,
+  onRemove,
+}: {
+  step: StudioSetXStep;
+  nodeId: string;
+  contractName: string;
+  deployTargets: CanvasDeployTarget[];
+  onUpdate: (update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => void;
+  onRemove: () => void;
+}) {
+  const manifest = getContract(contractName);
+  const groups = manifest ? groupWriteFunctions(manifest.functions) : [];
+  const hasManifest = manifest !== undefined && groups.length > 0;
+  const allWriteFns = groups.flatMap((g) => g.fns);
+
+  const selectedFn: ManifestFunction | undefined = hasManifest
+    ? (step.functionSignature
+        ? allWriteFns.find((f) => f.signature === step.functionSignature)
+        : allWriteFns.find((f) => f.name === step.functionName))
+    : undefined;
+
+  return (
+    <div style={configCardStyle} data-testid={`node-config-step-${step.id}`}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontWeight: 500, fontSize: 10, color: "#555" }}>setX</span>
+        <button
+          onClick={onRemove}
+          style={{ fontSize: 10, cursor: "pointer", color: "#dc3545", background: "none", border: "none", padding: 0 }}
+          title="Remove config call"
+          data-testid={`node-config-step-remove-${step.id}`}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Function picker (manifest-driven or free-text fallback) */}
+      {hasManifest ? (
+        <select
+          style={smallSelectStyle}
+          value={step.functionSignature ?? step.functionName}
+          onChange={(e) => {
+            const sig = e.target.value;
+            const chosenFn = allWriteFns.find((f) => f.signature === sig);
+            onUpdate({
+              functionName: chosenFn ? chosenFn.name : sig,
+              functionSignature: chosenFn ? chosenFn.signature : undefined,
+              args: [],
+            });
+          }}
+          aria-label={`node-setx-fn-${nodeId}-${step.id}`}
+        >
+          <option value="">— select function —</option>
+          {groups.map(({ group, fns }) => (
+            <optgroup key={group} label={group}>
+              {fns.map((fn) => {
+                const overloadCount = allWriteFns.filter((f) => f.name === fn.name).length;
+                const label = overloadCount > 1 ? fn.signature : `${fn.name}(${fn.inputs.map((i) => i.type).join(", ")})`;
+                return (
+                  <option key={fn.signature} value={fn.signature}>
+                    {label}
+                  </option>
+                );
+              })}
+            </optgroup>
+          ))}
+        </select>
+      ) : (
+        <input
+          style={smallInputStyle}
+          value={step.functionName}
+          placeholder="function name"
+          onChange={(e) => onUpdate({ functionName: e.target.value })}
+          aria-label={`node-setx-fn-${nodeId}-${step.id}`}
+        />
+      )}
+
+      {/* Args: per-input with labels when manifest function is selected */}
+      {selectedFn && selectedFn.inputs.length > 0 ? (
+        <div style={{ marginTop: 4 }}>
+          {selectedFn.inputs.map((input, idx) => (
+            <ConfigArgInput
+              key={idx}
+              value={step.args[idx] ?? ""}
+              index={idx}
+              stepId={step.id}
+              nodeId={nodeId}
+              inputName={`${input.name} (${input.type})`}
+              deployTargets={deployTargets}
+              onChange={(v) => {
+                const newArgs = [...step.args];
+                newArgs[idx] = v;
+                onUpdate({ args: newArgs });
+              }}
+            />
+          ))}
+        </div>
+      ) : (
+        !hasManifest && (
+          <div style={{ marginTop: 4 }}>
+            <ConfigArgInput
+              value={step.args[0] ?? ""}
+              index={0}
+              stepId={step.id}
+              nodeId={nodeId}
+              deployTargets={deployTargets}
+              onChange={(v) => onUpdate({ args: [v] })}
+            />
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+function GrantRoleCallCard({
+  step,
+  nodeId,
+  onUpdate,
+  onRemove,
+}: {
+  step: StudioGrantRoleStep;
+  nodeId: string;
+  onUpdate: (update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div style={configCardStyle} data-testid={`node-config-step-${step.id}`}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontWeight: 500, fontSize: 10, color: "#555" }}>grantRole</span>
+        <button
+          onClick={onRemove}
+          style={{ fontSize: 10, cursor: "pointer", color: "#dc3545", background: "none", border: "none", padding: 0 }}
+          title="Remove config call"
+          data-testid={`node-config-step-remove-${step.id}`}
+        >
+          ✕
+        </button>
+      </div>
+      <input
+        style={smallInputStyle}
+        value={step.role}
+        placeholder="role (e.g. MINTER_ROLE)"
+        onChange={(e) => onUpdate({ role: e.target.value })}
+        aria-label={`node-grantrole-role-${nodeId}-${step.id}`}
+      />
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        <select
+          style={{ ...smallSelectStyle, width: "auto" }}
+          value={step.accountKind}
+          onChange={(e) => onUpdate({ accountKind: e.target.value as "literal" | "ref" })}
+          aria-label={`node-grantrole-kind-${nodeId}-${step.id}`}
+        >
+          <option value="literal">literal</option>
+          <option value="ref">ref</option>
+        </select>
+        <input
+          style={smallInputStyle}
+          value={step.accountValue}
+          placeholder={step.accountKind === "ref" ? "deployId" : "0x..."}
+          onChange={(e) => onUpdate({ accountValue: e.target.value })}
+          aria-label={`node-grantrole-acct-${nodeId}-${step.id}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-node collapsible "Config calls" section rendered inside the ContractNode.
+ */
+function NodeConfigSection({
+  nodeId,
+  contractName,
+  configSteps,
+  configCallbacks,
+  deployTargets,
+}: {
+  nodeId: string;
+  contractName: string;
+  configSteps: StudioConfigStep[];
+  configCallbacks: ConfigCallbacks;
+  deployTargets: CanvasDeployTarget[];
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div style={configSectionStyle} data-testid={`node-config-section-${nodeId}`}>
+      <div
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, cursor: "pointer" }}
+        onClick={() => setCollapsed((v) => !v)}
+        data-testid={`node-config-section-toggle-${nodeId}`}
+      >
+        <span style={{ fontSize: 10, fontWeight: 600, color: "#555" }}>
+          Config calls {configSteps.length > 0 ? `(${configSteps.length})` : ""}
+        </span>
+        <span style={{ fontSize: 10, color: "#888" }}>{collapsed ? "▸" : "▾"}</span>
+      </div>
+      {!collapsed && (
+        <div>
+          {configSteps.map((step: StudioConfigStep) => {
+            if (step.kind === "setX") {
+              return (
+                <SetXCallCard
+                  key={step.id}
+                  step={step}
+                  nodeId={nodeId}
+                  contractName={contractName}
+                  deployTargets={deployTargets}
+                  onUpdate={(u) => configCallbacks.onUpdateSetXStep(nodeId, step.id, u)}
+                  onRemove={() => configCallbacks.onRemoveConfigStep(nodeId, step.id)}
+                />
+              );
+            }
+            return (
+              <GrantRoleCallCard
+                key={step.id}
+                step={step}
+                nodeId={nodeId}
+                onUpdate={(u) => configCallbacks.onUpdateGrantRoleStep(nodeId, step.id, u)}
+                onRemove={() => configCallbacks.onRemoveConfigStep(nodeId, step.id)}
+              />
+            );
+          })}
+          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+            <button
+              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
+              onClick={() => configCallbacks.onAddConfigStep(nodeId, "setX")}
+              data-testid={`node-add-setx-${nodeId}`}
+            >
+              + setX
+            </button>
+            <button
+              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
+              onClick={() => configCallbacks.onAddConfigStep(nodeId, "grantRole")}
+              data-testid={`node-add-grantrole-${nodeId}`}
+            >
+              + grantRole
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ContractNode main component
+// ---------------------------------------------------------------------------
+
 /**
  * ContractNode component.
  * Typed as `NodeProps` (the base unparameterised form) so that React Flow's
@@ -174,17 +588,24 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
     fontSize: 12,
   };
 
+  // Resolve configCallbacks and deployTargets if present in data (injected by App.tsx)
+  const configCallbacks = (rawData as unknown as Record<string, unknown>).configCallbacks as ConfigCallbacks | undefined;
+  const deployTargets = configCallbacks?.deployTargets ?? [];
+
   return (
     <div style={containerStyle} data-testid={`contract-node-${id}`}>
       {/*
-        Wire-target handle: hidden in overview via opacity:0 (layout box preserved
-        so any wire edges remain anchored). Visible in detailed mode.
+        Overview-anchor input handle: used ONLY as an anchor point for
+        overview-mode edge display. Wire edges no longer exist; this handle
+        does not accept meaningful connections (any connection to it is
+        silently dropped by onConnect which only processes arg-handle
+        connections). In overview mode it is hidden via opacity:0.
       */}
       <Handle
         type="target"
         position={Position.Left}
         id={`${id}-input`}
-        style={{ top: "50%", left: -8, background: "#1a73e8", ...(isOverview ? { opacity: 0 } : {}) }}
+        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? { opacity: 0 } : { opacity: 0 }) }}
       />
 
       <div style={{ marginBottom: 6 }}>
@@ -227,9 +648,20 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
         </div>
       )}
 
+      {/* Per-node config calls section (hidden in overview mode) */}
+      {!isOverview && configCallbacks && (
+        <NodeConfigSection
+          nodeId={id}
+          contractName={data.contractName}
+          configSteps={data.configSteps}
+          configCallbacks={configCallbacks}
+          deployTargets={deployTargets}
+        />
+      )}
+
       {/*
         Source output handle: hidden in overview via opacity:0 (layout box
-        preserved so constructor-ref / wire edges remain anchored).
+        preserved so constructor-ref edges remain anchored).
       */}
       <Handle
         type="source"

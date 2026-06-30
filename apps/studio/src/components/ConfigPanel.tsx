@@ -2,13 +2,17 @@
  * ConfigPanel.tsx
  *
  * Side panel for editing config steps (setX, grantRole) attached to the
- * currently selected contract node. Wire steps are created via edges on the
- * canvas and are not edited here.
+ * currently selected contract node.
+ *
+ * This component provides the same editing capabilities as the inline
+ * NodeConfigSection in ContractNode.tsx, but as a fixed side panel. It
+ * continues to handle StudioConfigArg (literal strings or StudioAddressRef
+ * values) with a literal/addressRef toggle for each arg.
  */
 
 import { getContract } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
-import type { ContractNodeData, StudioConfigStep, StudioSetXStep, StudioGrantRoleStep } from "../spec/types";
+import type { ContractNodeData, StudioConfigStep, StudioSetXStep, StudioGrantRoleStep, StudioConfigArg, StudioAddressRef } from "../spec/types.js";
 
 /** A deploy-id / contractName pair used to populate the target picker. */
 export interface DeployTarget {
@@ -91,6 +95,88 @@ function groupWriteFunctions(fns: ManifestFunction[]): { group: string; fns: Man
   return order.map((g) => ({ group: g, fns: byGroup.get(g)! }));
 }
 
+/**
+ * Render a single StudioConfigArg with a literal/addressRef toggle.
+ */
+function ConfigArgInput({
+  value,
+  index,
+  stepId,
+  nodeId,
+  inputName,
+  inputPlaceholder,
+  deployTargets,
+  onChange,
+}: {
+  value: StudioConfigArg;
+  index: number;
+  stepId: string;
+  nodeId: string;
+  inputName?: string;
+  /** Placeholder for the literal input (e.g. the Solidity type). */
+  inputPlaceholder?: string;
+  deployTargets: DeployTarget[];
+  onChange: (v: StudioConfigArg) => void;
+}) {
+  const isRef = typeof value === "object" && (value as StudioAddressRef).kind === "addressRef";
+  // The canonical aria-label for this arg slot (used by tests and accessibility).
+  // Matches the original format: setx-arg-${nodeId}-${stepId}-${index}
+  const argLabel = `setx-arg-${nodeId}-${stepId}-${index}`;
+
+  return (
+    <div style={{ marginBottom: 6 }}>
+      {inputName && (
+        <div style={labelStyle}>
+          {inputName}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 4 }}>
+        <select
+          style={{ ...inputStyle, width: "auto", marginBottom: 0, minWidth: 70 }}
+          value={isRef ? "ref" : "literal"}
+          onChange={(e) => {
+            if (e.target.value === "ref") {
+              onChange({ kind: "addressRef", deployId: deployTargets[0]?.deployId ?? "" });
+            } else {
+              onChange(typeof value === "object" ? "" : value);
+            }
+          }}
+          aria-label={`${argLabel}-kind`}
+        >
+          <option value="literal">literal</option>
+          <option value="ref">address ref</option>
+        </select>
+        {isRef ? (
+          <select
+            style={{ ...inputStyle, marginBottom: 0 }}
+            value={(value as StudioAddressRef).deployId}
+            onChange={(e) => onChange({ kind: "addressRef", deployId: e.target.value })}
+            aria-label={`${argLabel}-ref`}
+          >
+            {deployTargets.length === 0 && (
+              <option value="">— no contracts —</option>
+            )}
+            {deployTargets.map((dt) => (
+              <option key={dt.deployId} value={dt.deployId}>
+                {dt.deployId}.address
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            style={{ ...inputStyle, marginBottom: 0 }}
+            value={typeof value === "string" ? value : ""}
+            placeholder={inputPlaceholder ?? "value"}
+            onChange={(e) => onChange(e.target.value)}
+            // Canonical aria-label for literal inputs — matches tests: setx-arg-${nodeId}-${stepId}-${index}
+            aria-label={argLabel}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SetXStepCard({
   step,
   nodeId,
@@ -110,8 +196,7 @@ function SetXStepCard({
   // Resolve the target deploy-id: use the explicit step.target override, or the
   // attached node's own deployId as the default. This matches graph-to-spec.ts
   // which serializes `step.target ?? targetId` where targetId is the node's own
-  // deployId — NOT a contractName lookup, which would fail for multiple nodes
-  // sharing the same contractName (e.g. two Token deploys token1/token2).
+  // deployId.
   const targetDeployId = step.target ?? ownDeployId;
   // Resolve contractName for the selected target (look up by deployId).
   const targetContractName = deployTargets.find((dt) => dt.deployId === targetDeployId)?.contractName ?? "";
@@ -123,8 +208,6 @@ function SetXStepCard({
   const allWriteFns = groups.flatMap((g) => g.fns);
 
   // Derive selected function's inputs for display-only arg labels.
-  // When a signature is stored on the step, look up by signature for precision
-  // (handles overloads). Fallback to bare name lookup for legacy steps.
   const selectedFn: ManifestFunction | undefined = hasManifest
     ? (step.functionSignature
         ? allWriteFns.find((f) => f.signature === step.functionSignature)
@@ -162,11 +245,7 @@ function SetXStepCard({
         </>
       )}
 
-      {/* Function picker (manifest-driven) or free-text fallback.
-          Options are keyed by canonical signature so overloaded functions
-          (same name, different parameter types) are presented distinctly.
-          The option label shows the full signature when the name is overloaded
-          on this contract; the bare name is shown when unique. */}
+      {/* Function picker (manifest-driven) or free-text fallback */}
       <div style={labelStyle}>Function name</div>
       {hasManifest ? (
         <select
@@ -174,7 +253,6 @@ function SetXStepCard({
           value={step.functionSignature ?? step.functionName}
           onChange={(e) => {
             const sig = e.target.value;
-            // Resolve the bare name from the chosen signature.
             const chosenFn = allWriteFns.find((f) => f.signature === sig);
             onUpdate({
               functionName: chosenFn ? chosenFn.name : sig,
@@ -186,13 +264,10 @@ function SetXStepCard({
         >
           <option value="">— select function —</option>
           {groups.map(({ group, fns }) => {
-            // Count overloads within this contract (across all groups).
             return (
               <optgroup key={group} label={group}>
                 {fns.map((fn) => {
-                  // Count how many functions share this bare name in the entire contract.
                   const overloadCount = allWriteFns.filter((f) => f.name === fn.name).length;
-                  // Show full signature as label when the name is overloaded.
                   const label = overloadCount > 1
                     ? fn.signature
                     : `${fn.name}(${fn.inputs.map((i) => i.type).join(", ")})`;
@@ -220,22 +295,21 @@ function SetXStepCard({
       {selectedFn && selectedFn.inputs.length > 0 ? (
         <>
           {selectedFn.inputs.map((input, idx) => (
-            <div key={idx}>
-              <div style={labelStyle}>
-                {input.name} <span style={{ color: "#888", fontStyle: "italic" }}>({input.type})</span>
-              </div>
-              <input
-                style={inputStyle}
-                value={step.args[idx] ?? ""}
-                placeholder={input.type}
-                onChange={(e) => {
-                  const newArgs = [...step.args];
-                  newArgs[idx] = e.target.value;
-                  onUpdate({ args: newArgs });
-                }}
-                aria-label={`setx-arg-${nodeId}-${step.id}-${idx}`}
-              />
-            </div>
+            <ConfigArgInput
+              key={idx}
+              value={step.args[idx] ?? ""}
+              index={idx}
+              stepId={step.id}
+              nodeId={nodeId}
+              inputName={`${input.name} (${input.type})`}
+              inputPlaceholder={input.type}
+              deployTargets={deployTargets}
+              onChange={(v) => {
+                const newArgs = [...step.args];
+                newArgs[idx] = v;
+                onUpdate({ args: newArgs });
+              }}
+            />
           ))}
         </>
       ) : (
@@ -243,7 +317,7 @@ function SetXStepCard({
           <div style={labelStyle}>Args (comma-separated)</div>
           <input
             style={inputStyle}
-            value={step.args.join(",")}
+            value={step.args.filter((a) => typeof a === "string").join(",")}
             placeholder='e.g. 100,true,"hello"'
             onChange={(e) =>
               onUpdate({ args: e.target.value === "" ? [] : e.target.value.split(",").map((s) => s.trim()) })
@@ -315,9 +389,6 @@ export function ConfigPanel({
   return (
     <div style={panelStyle} data-testid="config-panel">
       <div style={sectionTitleStyle}>Config Steps — {data.deployId || "(no id)"}</div>
-      <p style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>
-        Wire steps are added by drawing edges on the canvas.
-      </p>
 
       {data.configSteps.map((step: StudioConfigStep) => {
         if (step.kind === "setX") {

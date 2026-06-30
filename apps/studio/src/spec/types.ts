@@ -7,13 +7,25 @@
  * ## Node types
  *
  * - ContractNodeData: represents a single deployable contract. It holds the
- *   deployment id, the Solidity artifact name, and a list of constructor arg
- *   slots. Each arg slot is either a literal value or a "ref" placeholder that
- *   gets filled in by an incoming edge.
+ *   deployment id, the Solidity artifact name, a list of constructor arg slots,
+ *   and per-node config call steps.
+ *
+ * ## Config steps
+ *
+ * Each contract node carries an optional list of per-node config calls
+ * (StudioConfigStep). These are serialized to ConfigSpec.steps (unordered).
+ * The canvas also maintains a global ordered list (StudioOrderedConfigStep[])
+ * serialized to ConfigSpec.orderedSteps (globally ordered execution).
+ *
+ * Args in config steps (StudioConfigArg) may use:
+ * - A plain string (literal value, interpreted by parseLiteralValue)
+ * - StudioAddressRef { kind: "addressRef", deployId } — studio-facing only.
+ *   MUST be normalized to RefArg { kind: "ref", contract: deployId } before
+ *   emitting a ConfigSpec (done in graph-to-spec.ts normalizeStudioArg).
  *
  * ## Edge types
  *
- * Two logical kinds of edges:
+ * One logical kind of edge:
  *
  * 1. ConstructorRefEdge (edgeKind = "constructorRef")
  *    source handle: "<contractId>-output"
@@ -21,12 +33,8 @@
  *    Maps to: ContractArg at position <index> in target ContractEntry.args →
  *             RefArg { kind: "ref", contract: <source node id> }
  *
- * 2. WireEdge (edgeKind = "wire")
- *    source handle: "<contractId>-output"
- *    target handle: "<contractId>-input"
- *    data must carry: wireStepId (unique step id), wireFunction (setter name)
- *    Maps to: WireStep { kind: "wire", id, source: <source node id>,
- *             into: <target node id>, function: <wireFunction> }
+ * Wire edges have been removed. Cross-contract wiring is now expressed as a
+ * config call step whose arg is a { kind: "addressRef", deployId } reference.
  */
 
 /** A single constructor argument slot on a contract node. */
@@ -94,7 +102,7 @@ export interface ContractNodeData extends NodeCallbacks {
   args: ArgSlot[];
   /** Explicit ordering constraints (ids of contracts that must deploy first). */
   after: string[];
-  /** Config steps attached to this contract node. */
+  /** Per-node config steps (serialized to ConfigSpec.steps, unordered). */
   configSteps: StudioConfigStep[];
   /**
    * DISPLAY-ONLY: maps arg slot index → source node's deployId for slots that
@@ -116,16 +124,39 @@ export interface ContractNodeData extends NodeCallbacks {
   viewMode?: ViewMode;
 }
 
+// ---- Studio config arg types ------------------------------------------------
+
+/**
+ * Studio-facing address-of-contract reference arg.
+ * "{deployId}.address" — must be normalized to RefArg before emitting ConfigSpec.
+ *
+ * This type is studio-internal ONLY. graph-to-spec.ts converts it to
+ * { kind: "ref", contract: deployId } (a valid ConfigArg) before validation.
+ */
+export interface StudioAddressRef {
+  kind: "addressRef";
+  /** The deploy-id of the contract whose address is referenced. */
+  deployId: string;
+}
+
+/**
+ * A config call argument as stored in the studio's in-memory state.
+ *
+ * - string: a literal value (parseLiteralValue interprets it to bool/number/string/null)
+ * - StudioAddressRef: an address-of-contract reference (normalized to RefArg at export)
+ */
+export type StudioConfigArg = string | StudioAddressRef;
+
 // ---- Config step shapes (studio-internal) ----------------------------------
 
-/** A setX step attached to a node. */
+/** A setX step attached to a node (or in the global ordered list). */
 export interface StudioSetXStep {
   kind: "setX";
   id: string;
   /**
    * The deploy-id of the contract this step targets.
-   * Defaults to the node this step is attached to when absent.
-   * When set, overrides the attached node's deployId in the exported spec.
+   * For per-node steps: defaults to the node this step is attached to when absent.
+   * For ordered steps: must always be set (there is no implicit attached-node target).
    */
   target?: string;
   /** Name of the setter function to call (bare name, e.g. "setLimit"). */
@@ -139,8 +170,12 @@ export interface StudioSetXStep {
    * Absent for free-text function entries (fallback input path).
    */
   functionSignature?: string;
-  /** Stringified args (literals only for now). */
-  args: string[];
+  /**
+   * Step arguments. Each element is either a literal value string or a
+   * StudioAddressRef (a { kind:"addressRef", deployId } reference that
+   * graph-to-spec.ts normalizes to RefArg before export).
+   */
+  args: StudioConfigArg[];
 }
 
 /** A grantRole step attached to a node. */
@@ -157,8 +192,17 @@ export interface StudioGrantRoleStep {
   accountValue: string;
 }
 
-/** Union of all studio config steps (wire steps come from edges). */
+/** Union of all studio per-node config steps. */
 export type StudioConfigStep = StudioSetXStep | StudioGrantRoleStep;
+
+/**
+ * A step in the global ordered config panel.
+ * These map to ConfigSpec.orderedSteps (strictly ordered execution).
+ *
+ * Currently only setX steps are supported in the ordered panel. GrantRole
+ * steps are per-node only.
+ */
+export type StudioOrderedConfigStep = StudioSetXStep;
 
 // ---- Edge data types -------------------------------------------------------
 
@@ -169,14 +213,5 @@ export interface ConstructorRefEdgeData {
   argIndex: number;
 }
 
-/** Data on a wire edge (connects source output → target input handle). */
-export interface WireEdgeData {
-  edgeKind: "wire";
-  /** Unique step id for the WireStep this edge represents. */
-  wireStepId: string;
-  /** Name of the setter function on the target (into) contract. */
-  wireFunction: string;
-}
-
-/** Union of all edge data variants. */
-export type StudioEdgeData = ConstructorRefEdgeData | WireEdgeData;
+/** Union of all edge data variants (wire edges have been removed). */
+export type StudioEdgeData = ConstructorRefEdgeData;

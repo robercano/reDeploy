@@ -14,11 +14,17 @@
  *     placed into target ContractEntry.args at position argIndex.
  *     Overrides any literal value the user may have typed for that slot.
  *
- * ### WireEdge (edgeKind = "wire")
- *   - source: any contract node (the contract whose address will be passed)
- *   - target: any contract node (the contract that receives the wiring call)
- *   - output: WireStep { kind: "wire", id: wireStepId, source: <source deployId>,
- *             into: <target deployId>, function: <wireFunction> }
+ * Wire edges have been removed. Cross-contract wiring is expressed as a config
+ * call step with an address-ref arg (StudioAddressRef), which is normalized to
+ * RefArg here before being placed in the ConfigSpec.
+ *
+ * ## Address-ref normalization
+ *
+ * Per-node config step args and ordered step args may contain StudioAddressRef
+ * values ({ kind: "addressRef", deployId }). These are studio-internal ONLY and
+ * MUST NOT reach a validated ConfigSpec. normalizeStudioArg() converts each:
+ *   - StudioAddressRef → { kind: "ref", contract: deployId }  (RefArg)
+ *   - string literal   → { kind: "literal", value: parseLiteralValue(raw) }
  *
  * ## Invalid-graph behavior
  *
@@ -49,7 +55,10 @@ import type {
   StudioEdgeData,
   ArgSlot,
   StudioConfigStep,
-} from "./types";
+  StudioOrderedConfigStep,
+  StudioConfigArg,
+  StudioAddressRef,
+} from "./types.js";
 import { getContract } from "../manifest/index.js";
 
 // ---------------------------------------------------------------------------
@@ -126,6 +135,21 @@ function parseLiteralValue(raw: string): LiteralValue {
 }
 
 /**
+ * Normalize a studio config arg (StudioConfigArg) to a validated ConfigArg.
+ *
+ * - StudioAddressRef { kind: "addressRef", deployId }
+ *     → RefArg { kind: "ref", contract: deployId }
+ * - string (literal value)
+ *     → LiteralArg { kind: "literal", value: parseLiteralValue(raw) }
+ */
+function normalizeStudioArg(arg: StudioConfigArg): ConfigArg {
+  if (typeof arg === "object" && (arg as StudioAddressRef).kind === "addressRef") {
+    return { kind: "ref", contract: (arg as StudioAddressRef).deployId };
+  }
+  return { kind: "literal", value: parseLiteralValue(arg as string) };
+}
+
+/**
  * Build the args array for a ContractEntry.
  *
  * @param slots   - The arg slots defined on the node.
@@ -199,6 +223,8 @@ function resolveSetXFunctionField(step: { functionName: string; functionSignatur
  * Convert StudioConfigStep[] for a single node into ConfigStep[].
  * The node's deployId is used as the target for setX / grantRole steps.
  *
+ * Args are normalized: StudioAddressRef → RefArg, string literals → LiteralArg.
+ *
  * @param steps              - The config steps attached to the node.
  * @param attachedTargetId   - The deploy-id of the attached node (used as fallback target).
  * @param deployIdToContract - Map from deployId → contractName for ALL nodes, used to
@@ -215,15 +241,10 @@ function buildConfigSteps(
 ): ConfigStep[] {
   return steps.map((step): ConfigStep => {
     if (step.kind === "setX") {
-      const args: ConfigArg[] = step.args.map((raw) => ({
-        kind: "literal" as const,
-        value: parseLiteralValue(raw),
-      }));
+      const args: ConfigArg[] = step.args.map((raw) => normalizeStudioArg(raw));
       // Determine the explicit target deploy-id for cross-node setX steps.
       const effectiveTargetId = step.target ?? attachedTargetId;
       // Resolve the TARGET contract name from the deployId→contractName map.
-      // This is the contract whose manifest determines whether the function name
-      // is overloaded — matching the resolution ConfigPanel.tsx uses at pick time.
       const targetContractName = deployIdToContract.get(effectiveTargetId) ?? attachedContractName;
       const functionField = resolveSetXFunctionField(step, targetContractName);
       return {
@@ -245,6 +266,34 @@ function buildConfigSteps(
   });
 }
 
+/**
+ * Convert StudioOrderedConfigStep[] into ConfigStep[] (for ConfigSpec.orderedSteps).
+ * These steps must have an explicit target (no attached-node fallback).
+ * Args are normalized: StudioAddressRef → RefArg, string literals → LiteralArg.
+ *
+ * @param steps              - The global ordered steps.
+ * @param deployIdToContract - Map from deployId → contractName for ALL nodes.
+ */
+function buildOrderedSteps(
+  steps: StudioOrderedConfigStep[],
+  deployIdToContract: Map<string, string>,
+): ConfigStep[] {
+  return steps.map((step): ConfigStep => {
+    // step.kind is always "setX" for ordered steps.
+    const args: ConfigArg[] = step.args.map((raw) => normalizeStudioArg(raw));
+    const effectiveTargetId = step.target ?? "";
+    const targetContractName = deployIdToContract.get(effectiveTargetId) ?? "";
+    const functionField = resolveSetXFunctionField(step, targetContractName);
+    return {
+      kind: "setX",
+      id: step.id,
+      target: effectiveTargetId,
+      function: functionField,
+      ...(args.length > 0 ? { args } : {}),
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -256,24 +305,26 @@ function buildConfigSteps(
  * Call validateSpec(deployment) and validateConfig(config, deployment) to
  * check the result before presenting it to the user.
  *
- * @param nodes  - Array of contract nodes from the React Flow state.
- * @param edges  - Array of edges from the React Flow state.
+ * @param nodes         - Array of contract nodes from the React Flow state.
+ * @param edges         - Array of edges from the React Flow state.
+ * @param orderedSteps  - Global ordered config steps (optional, defaults to []).
  */
-export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
+export function graphToSpec(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  orderedSteps: StudioOrderedConfigStep[] = [],
+): SpecPair {
   // Step 1: Index constructor-ref edges by target node id.
   // refEdges[targetNodeId][argIndex] = sourceDeployId
   const refEdges = new Map<string, Map<number, string>>();
-
-  // Collect wire edges separately
-  const wireSteps: ConfigStep[] = [];
 
   // Build a lookup map for O(1) node access inside the edge loop (O(N+E) total).
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
   for (const edge of edges) {
     const data = edge.data;
+    // Only constructorRef edges remain (wire edges have been removed).
     if (!data || data.edgeKind === "constructorRef") {
-      // Constructor ref edge: determine argIndex from data or target handle
       const argIndex =
         data && data.edgeKind === "constructorRef" ? data.argIndex : 0;
       const sourceNode = nodeById.get(edge.source);
@@ -282,19 +333,8 @@ export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
         refEdges.set(edge.target, new Map());
       }
       refEdges.get(edge.target)!.set(argIndex, sourceDeployId);
-    } else if (data.edgeKind === "wire") {
-      const sourceNode = nodeById.get(edge.source);
-      const targetNode = nodeById.get(edge.target);
-      const sourceId = sourceNode ? sourceNode.data.deployId : edge.source;
-      const intoId = targetNode ? targetNode.data.deployId : edge.target;
-      wireSteps.push({
-        kind: "wire",
-        id: data.wireStepId,
-        source: sourceId,
-        into: intoId,
-        function: data.wireFunction,
-      });
     }
+    // Unknown edge kinds (e.g. stale wire edges in old data) are silently ignored.
   }
 
   // Step 2: Build ContractEntry[] from nodes
@@ -317,22 +357,22 @@ export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
   };
 
   // Step 3: Build a deployId → contractName map for ALL nodes.
-  // This is used by buildConfigSteps to resolve the TARGET contract name
-  // for cross-node setX steps, mirroring what ConfigPanel.tsx does at pick time.
   const deployIdToContract = new Map<string, string>(
     nodes.map((n) => [n.data.deployId, n.data.contractName]),
   );
 
-  // Step 4: Build ConfigStep[] from node-attached steps + wire edges
+  // Step 4: Build ConfigStep[] from node-attached steps (→ ConfigSpec.steps).
   const nodeConfigSteps: ConfigStep[] = nodes.flatMap((node) =>
     buildConfigSteps(node.data.configSteps, node.data.deployId, deployIdToContract, node.data.contractName),
   );
 
-  const allSteps: ConfigStep[] = [...nodeConfigSteps, ...wireSteps];
+  // Step 5: Build ConfigStep[] from global ordered steps (→ ConfigSpec.orderedSteps).
+  const builtOrderedSteps: ConfigStep[] = buildOrderedSteps(orderedSteps, deployIdToContract);
 
   const config: ConfigSpec = {
     version: 1,
-    steps: allSteps,
+    steps: nodeConfigSteps,
+    ...(builtOrderedSteps.length > 0 ? { orderedSteps: builtOrderedSteps } : {}),
   };
 
   return { deployment, config };
