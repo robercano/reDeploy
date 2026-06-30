@@ -55,6 +55,7 @@ import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
 import type { ContractNodeData } from "./spec/types.js";
+import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
@@ -325,6 +326,15 @@ export function App() {
     return graphToSpec(graphNodes, graphEdges);
   }, [nodes, edges]);
 
+  // Enrich nodes with display-only refSourceDeployIds maps derived from
+  // constructorRef edges. The derivation logic lives in enrich-nodes.ts
+  // (pure, UI-agnostic, and unit-tested there). Recomputed whenever nodes
+  // or edges change so the displayed "{deployId}.address" stays live.
+  const enrichedNodes = useMemo(
+    () => enrichNodesWithRefSources(nodes, edges),
+    [nodes, edges],
+  );
+
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
     [setSelectedNodeId],
@@ -332,7 +342,7 @@ export function App() {
 
   const onPaneClick = useCallback(() => setSelectedNodeId(null), [setSelectedNodeId]);
 
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  const selectedNode = enrichedNodes.find((n) => n.id === selectedNodeId);
 
   // Derive deploy targets from all graph nodes — used by ConfigPanel's setX target picker.
   // Dedup by deployId so the picker never receives duplicate keys (duplicate deployIds are
@@ -384,7 +394,7 @@ export function App() {
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
-            nodes={nodes}
+            nodes={enrichedNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}

@@ -83,6 +83,18 @@ export interface ContractNodeData extends NodeCallbacks {
   after: string[];
   /** Config steps attached to this contract node. */
   configSteps: StudioConfigStep[];
+  /**
+   * DISPLAY-ONLY: maps arg slot index → source node's deployId for slots that
+   * are bound by an incoming constructorRef edge (slot kind === "ref").
+   * Populated in App.tsx by scanning edges + nodes; recomputed reactively on
+   * any nodes/edges change. NOT serialized by graph-to-spec.ts.
+   *
+   * When a slot index is present here, the ArgRow renders the bound source
+   * node's deploy-id as "{sourceDeployId}.address" (read-only).
+   * When the edge is removed the slot reverts to literal (kind="literal") and
+   * the entry is absent here, restoring the editable literal input.
+   */
+  refSourceDeployIds?: Map<number, string>;
 }
 
 // ---- Config step shapes (studio-internal) ----------------------------------
