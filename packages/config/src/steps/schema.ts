@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import type { ConfigArg, ConfigSpec, ConfigStep, LiteralValue } from "./types.js";
+import type { AddressRef, ConfigArg, ConfigArgExtended, ConfigSpec, ConfigStep, LiteralValue } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Literal value (re-implemented here to avoid importing private internals from
@@ -109,6 +109,40 @@ export const configArgSchema: z.ZodType<ConfigArg> = z.discriminatedUnion("kind"
 ]);
 
 // ---------------------------------------------------------------------------
+// AddressRef — explicit address-of-a-deployed-contract reference
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema for `AddressRef`: an explicit reference to a deployed contract's
+ * on-chain address by its deploy-id.
+ *
+ * `{ kind: "addressRef", deployId: "<non-empty deploy-id>" }`
+ *
+ * This is semantically equivalent to `{ kind: "ref", contract: deployId }`
+ * in an args position. The `"addressRef"` kind is provided as a self-
+ * documenting alternative for tooling and studio consumers.
+ */
+export const addressRefSchema: z.ZodType<AddressRef> = z.object({
+  kind: z.literal("addressRef"),
+  deployId: z.string().min(1, { message: "addressRef.deployId must be a non-empty string" }),
+});
+
+/**
+ * Extended ConfigArg schema that includes `AddressRef` in addition to the
+ * core `RefArg` and `LiteralArg`.
+ *
+ * Use this schema when parsing step args that may contain `"addressRef"` values.
+ */
+export const configArgExtendedSchema: z.ZodType<ConfigArgExtended> = z.discriminatedUnion("kind", [
+  refArgSchema,
+  literalArgSchema,
+  z.object({
+    kind: z.literal("addressRef"),
+    deployId: z.string().min(1, { message: "addressRef.deployId must be a non-empty string" }),
+  }),
+]);
+
+// ---------------------------------------------------------------------------
 // Step schemas
 // Note: intermediate step schemas are NOT annotated as ZodType<T> so that
 // TypeScript can infer the full discriminated union information needed by
@@ -165,8 +199,16 @@ export const configStepSchema: z.ZodType<ConfigStep> = z.discriminatedUnion("kin
 
 /**
  * Top-level ConfigSpec schema.
+ *
+ * Both `steps` (unordered) and `orderedSteps` (globally ordered) are
+ * validated against the same `configStepSchema`. The `orderedSteps` field
+ * is optional — existing specs without it remain valid (backward compat).
+ *
+ * Cross-field rules (duplicate ids across both lists, missing refs) are
+ * enforced in validate.ts after this structural parse succeeds.
  */
 export const configSpecSchema: z.ZodType<ConfigSpec> = z.object({
   version: z.literal(1),
   steps: z.array(configStepSchema),
+  orderedSteps: z.array(configStepSchema).optional(),
 });

@@ -6,7 +6,7 @@
  * (ApplyConfigResult).
  */
 
-import type { ConfigSpec } from "../steps/types.js";
+import type { ConfigSpec, ConfigStep } from "../steps/types.js";
 
 // ---------------------------------------------------------------------------
 // ConfigCall — the resolved, chain-agnostic description of a single step
@@ -48,7 +48,7 @@ export interface ConfigCall {
   /** The unique step id (from ConfigStep.id). */
   readonly stepId: string;
   /** The step kind. */
-  readonly kind: ConfigSpec["steps"][number]["kind"];
+  readonly kind: ConfigStep["kind"];
   /** Resolved on-chain address of the contract to call. */
   readonly target: string;
   /** Name of the function to call on `target`. */
@@ -152,13 +152,15 @@ export interface ApplyConfigResult {
   readonly success: boolean;
   /**
    * Ids of steps that were executed (on-chain call made) during THIS run.
-   * Does not include steps that were skipped because they were already in
-   * the journal from a previous run.
+   * Includes steps from both the unordered `steps` list and the ordered
+   * `orderedSteps` list. Does not include steps that were skipped because
+   * they were already in the journal from a previous run.
    */
   readonly executedStepIds: string[];
   /**
    * Ids of steps that were skipped because they were already recorded as
-   * complete in the journal (from a previous run).
+   * complete in the journal (from a previous run). Covers both `steps` and
+   * `orderedSteps`.
    */
   readonly skippedStepIds: string[];
   /**
@@ -166,7 +168,8 @@ export interface ApplyConfigResult {
    * and skippedStepIds (plus any previously-journaled steps not in this run's
    * spec, though those are excluded here since we only iterate the spec).
    *
-   * This is the full checkpoint set after this run.
+   * Covers both `steps` and `orderedSteps`. This is the full checkpoint set
+   * after this run.
    */
   readonly completedStepIds: string[];
 }
