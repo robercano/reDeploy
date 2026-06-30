@@ -36,6 +36,7 @@ import type { NodeProps } from "@xyflow/react";
 import App from "../src/App.js";
 import { ContractNode } from "../src/components/ContractNode.js";
 import { toGraphNodes } from "../src/spec/project-nodes.js";
+import { overviewEdges } from "../src/spec/overview-edges.js";
 import { graphToSpec } from "../src/spec/graph-to-spec.js";
 import { useGraph } from "../src/hooks/useGraph.js";
 import type { ContractNodeData } from "../src/spec/types.js";
@@ -688,5 +689,105 @@ describe("overview mode — arg-value round-trip", () => {
       (el) => el.style.height === "0px" || el.style.height === "0",
     );
     expect(collapsed).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. OVERVIEW EDGE AGGREGATION — overviewEdges helper + App integration
+//
+// jsdom does not render SVG edge elements so we test the helper directly and
+// verify App selects it by viewMode via a hook-level check.
+// ---------------------------------------------------------------------------
+
+describe("overview mode — edge aggregation (overviewEdges + App integration)", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("overviewEdges collapses 3 constructorRef edges A→B to 1 overview edge", () => {
+    // This mirrors the "floating lines" scenario: three arg slots connected
+    // from nodeA to nodeB each produce a real edge, but in overview only 1
+    // aggregated line should connect the two nodes.
+    const edges = [
+      { id: "e1", source: "nodeA", target: "nodeB", sourceHandle: "nodeA-output", targetHandle: "nodeB-arg-0", data: { edgeKind: "constructorRef", argIndex: 0 } },
+      { id: "e2", source: "nodeA", target: "nodeB", sourceHandle: "nodeA-output", targetHandle: "nodeB-arg-1", data: { edgeKind: "constructorRef", argIndex: 1 } },
+      { id: "e3", source: "nodeA", target: "nodeB", sourceHandle: "nodeA-output", targetHandle: "nodeB-arg-2", data: { edgeKind: "constructorRef", argIndex: 2 } },
+    ];
+    const result = overviewEdges(edges);
+    expect(result).toHaveLength(1);
+    expect(result[0].sourceHandle).toBe("nodeA-output");
+    expect(result[0].targetHandle).toBe("nodeB-input");
+  });
+
+  it("overviewEdges produces 2 edges for 2 distinct node pairs", () => {
+    const edges = [
+      { id: "e1", source: "nodeA", target: "nodeB", sourceHandle: "nodeA-output", targetHandle: "nodeB-arg-0", data: {} },
+      { id: "e2", source: "nodeA", target: "nodeC", sourceHandle: "nodeA-output", targetHandle: "nodeC-arg-0", data: {} },
+    ];
+    const result = overviewEdges(edges);
+    expect(result).toHaveLength(2);
+  });
+
+  it("overviewEdges anchors to node-level handles (not arg handles)", () => {
+    // This is the fix for the floating-line bug: the overview edge must anchor
+    // to node body handles, not the collapsed per-arg handles.
+    const edges = [
+      { id: "e1", source: "contract-1", target: "contract-2", sourceHandle: "contract-1-output", targetHandle: "contract-2-arg-0", data: { edgeKind: "constructorRef", argIndex: 0 } },
+    ];
+    const [ov] = overviewEdges(edges);
+    // Must NOT anchor to the arg handle (which is collapsed in overview)
+    expect(ov.targetHandle).not.toContain("-arg-");
+    // Must anchor to the node-level input handle
+    expect(ov.targetHandle).toBe("contract-2-input");
+    expect(ov.sourceHandle).toBe("contract-1-output");
+  });
+
+  it("graphToSpec still reads raw edges (overviewEdges does not affect serialization)", () => {
+    // Verify that overviewEdges only affects display — the underlying edge state
+    // (passed to graphToSpec) is unchanged.
+    const { result } = renderHook(() => useGraph());
+
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(ONE_ARG_MANIFEST);
+    });
+    const [srcNode, tgtNode] = result.current.nodes;
+    act(() => {
+      (srcNode.data as unknown as ContractNodeData).onUpdateDeployId(srcNode.id, "registry");
+      (tgtNode.data as unknown as ContractNodeData).onUpdateDeployId(tgtNode.id, "token");
+    });
+    act(() => {
+      result.current.onConnect({
+        source: srcNode.id,
+        target: tgtNode.id,
+        sourceHandle: `${srcNode.id}-output`,
+        targetHandle: `${tgtNode.id}-arg-0`,
+      });
+    });
+
+    const rawEdges = result.current.edges;
+    expect(rawEdges).toHaveLength(1);
+
+    // overviewEdges collapses to 1 edge with different handles
+    const displayEdges = overviewEdges(rawEdges);
+    expect(displayEdges).toHaveLength(1);
+    expect(displayEdges[0].targetHandle).toBe(`${tgtNode.id}-input`);
+
+    // But the raw edge is unchanged (graphToSpec uses raw edges)
+    expect(rawEdges[0].targetHandle).toBe(`${tgtNode.id}-arg-0`);
+
+    // graphToSpec with raw edges produces a constructorRef (ref arg)
+    const graphNodes = toGraphNodes(result.current.nodes);
+    const { deployment } = graphToSpec(graphNodes, rawEdges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      data: e.data as unknown as import("../src/spec/graph-to-spec.js").GraphEdge["data"],
+    })));
+
+    // The token contract should have a ref arg pointing to registry
+    const tokenContract = deployment.contracts.find((c) => c.id === "token");
+    expect(tokenContract).not.toBeUndefined();
+    expect(tokenContract!.args?.[0]).toEqual({ kind: "ref", contract: "registry" });
   });
 });

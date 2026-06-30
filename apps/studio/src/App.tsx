@@ -55,6 +55,7 @@ import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphEdge } from "./spec/graph-to-spec.js";
 import { toGraphNodes } from "./spec/project-nodes.js";
+import { overviewEdges } from "./spec/overview-edges.js";
 import type { ContractNodeData, ViewMode } from "./spec/types.js";
 import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
@@ -258,7 +259,7 @@ function AuthoringCanvas({
       >
         <ReactFlow
           nodes={nodes}
-          edges={edges}
+          edges={viewMode === "overview" ? overviewEdges(edges) : edges}
           nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
