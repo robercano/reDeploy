@@ -53,7 +53,8 @@ import { useUserTemplates } from "./hooks/useUserTemplates.js";
 import { graphToTemplate } from "./templates/serialize.js";
 import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
-import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
+import type { GraphEdge } from "./spec/graph-to-spec.js";
+import { toGraphNodes } from "./spec/project-nodes.js";
 import type { ContractNodeData, ViewMode } from "./spec/types.js";
 import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
@@ -316,21 +317,10 @@ export function App() {
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
 
   // Compute the spec pair for export whenever nodes/edges change.
-  // Strip callbacks from node data — graphToSpec only needs the payload fields.
+  // toGraphNodes strips all display-only fields (viewMode, refSourceDeployIds)
+  // and callbacks — graphToSpec only reads the five payload fields.
   const { deployment, config } = useMemo(() => {
-    const graphNodes: GraphNode[] = nodes.map((n) => {
-      const d = n.data as unknown as ContractNodeData;
-      return {
-        id: n.id,
-        data: {
-          deployId: d.deployId,
-          contractName: d.contractName,
-          args: d.args,
-          after: d.after,
-          configSteps: d.configSteps,
-        },
-      };
-    });
+    const graphNodes = toGraphNodes(nodes);
     const graphEdges: GraphEdge[] = edges.map((e) => ({
       id: e.id,
       source: e.source,
