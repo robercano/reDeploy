@@ -6,9 +6,11 @@
  *        and a collapsible "Config calls" section for per-node config steps.
  * Handles: output handle (for outgoing edges), arg input handles.
  *
- * NOTE: The "Main Input" wire handle (`${id}-input`) has been removed.
- * Cross-contract wiring is now expressed as a config call step whose arg is
- * a `{DeployID}.address` reference — not a separate wire edge.
+ * NOTE: The `${id}-input` handle is RETAINED as a passive overview-edge anchor.
+ * It is no longer a wire-edge target — wire edges have been removed. Cross-contract
+ * wiring is now expressed as a config call step whose arg is a `{DeployID}.address`
+ * reference. Any connection drawn to the input handle is silently dropped by
+ * onConnect (which only accepts arg-handle connections).
  *
  * Callbacks are passed via the `data` prop (NodeCallbacks interface)
  * because React Flow custom nodes only receive their `data` prop — not

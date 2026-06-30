@@ -23,7 +23,7 @@ import { useGraph } from "../src/hooks/useGraph.js";
 import { validateConfig } from "@redeploy/config";
 import { validateSpec } from "@redeploy/core";
 import type { GraphNode } from "../src/spec/graph-to-spec.js";
-import type { ContractNodeData, StudioOrderedConfigStep, StudioSetXStep, StudioAddressRef } from "../src/spec/types.js";
+import type { ContractNodeData, StudioOrderedConfigStep, StudioAddressRef } from "../src/spec/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -545,7 +545,7 @@ describe("graphToSpec — orderedSteps", () => {
     const { config } = graphToSpec([node], [], orderedSteps);
     expect(config.orderedSteps).toHaveLength(1);
     expect(config.orderedSteps![0].kind).toBe("setX");
-    expect(config.orderedSteps![0].target).toBe("token");
+    expect((config.orderedSteps![0] as { target: string }).target).toBe("token");
     expect((config.orderedSteps![0] as { function: string }).function).toBe("setFee");
   });
 
@@ -564,7 +564,7 @@ describe("graphToSpec — orderedSteps", () => {
     const { config } = graphToSpec([node], []);
     expect(config.steps).toHaveLength(1);
     expect(config.steps[0].kind).toBe("setX");
-    expect(config.steps[0].target).toBe("token");
+    expect((config.steps[0] as { target: string }).target).toBe("token");
   });
 
   it("per-node steps appear in ConfigSpec.steps and ordered steps appear in ConfigSpec.orderedSteps", () => {
@@ -673,6 +673,184 @@ describe("graphToSpec — address ref normalization", () => {
     const { deployment, config } = graphToSpec([registry, vault], []);
     expect(validateSpec(deployment).ok).toBe(true);
     expect(validateConfig(config, deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. OrderedArgInput — literal/addressRef toggle in OrderedStepCard
+//
+// Renders an OrderedConfigPanel with a step whose target resolves to a
+// manifest contract (Registry) that has the `register(string, address)`
+// function, so the manifest-driven arg inputs render. Asserts:
+//   - literal input renders by default
+//   - switching kind to "ref" shows the ref select with deploy targets
+//   - switching back to "literal" restores the text input
+// ---------------------------------------------------------------------------
+
+describe("OrderedConfigPanel — OrderedArgInput literal/addressRef toggle", () => {
+  function makeRegistryStep(id: string): StudioOrderedConfigStep {
+    return {
+      kind: "setX",
+      id,
+      functionName: "register",
+      functionSignature: "register(string,address)",
+      target: "reg",
+      // args[0] = string literal, args[1] = addressRef
+      args: ["myKey", { kind: "addressRef", deployId: "token" } as StudioAddressRef],
+    };
+  }
+
+  it("renders literal input for string arg and ref select for addressRef arg", () => {
+    const steps = [makeRegistryStep("s1")];
+    const deployTargets = [
+      { deployId: "reg", contractName: "Registry" },
+      { deployId: "token", contractName: "Token" },
+    ];
+    render(
+      <OrderedConfigPanel
+        orderedSteps={steps}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={noop}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+
+    // Arg 0 (string) → literal kind → literal input rendered
+    const arg0KindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-kind" }) as HTMLSelectElement;
+    expect(arg0KindSelect.value).toBe("literal");
+    const arg0LiteralInput = screen.getByRole("textbox", { name: "ordered-arg-s1-0-literal" }) as HTMLInputElement;
+    expect(arg0LiteralInput.value).toBe("myKey");
+
+    // Arg 1 (address) → ref kind → ref select rendered
+    const arg1KindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-1-kind" }) as HTMLSelectElement;
+    expect(arg1KindSelect.value).toBe("ref");
+    const arg1RefSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-1-ref" }) as HTMLSelectElement;
+    expect(arg1RefSelect.value).toBe("token");
+    // The ref select should list the deploy targets
+    expect(arg1RefSelect.innerHTML).toContain("token.address");
+  });
+
+  it("switching arg kind from literal to ref calls onUpdateStep", () => {
+    const updates: Array<{ stepId: string; update: object }> = [];
+    const steps = [makeRegistryStep("s1")];
+    const deployTargets = [
+      { deployId: "reg", contractName: "Registry" },
+      { deployId: "token", contractName: "Token" },
+    ];
+    render(
+      <OrderedConfigPanel
+        orderedSteps={steps}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={(stepId, update) => updates.push({ stepId, update })}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+
+    // Switch arg 0 from literal to ref
+    const arg0KindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-kind" });
+    fireEvent.change(arg0KindSelect, { target: { value: "ref" } });
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].stepId).toBe("s1");
+    // The new args array should have an addressRef at index 0
+    const newArgs = (updates[0].update as { args: unknown[] }).args;
+    expect(newArgs[0]).toEqual({ kind: "addressRef", deployId: "reg" }); // first deploy target
+  });
+
+  it("switching arg kind from ref to literal calls onUpdateStep", () => {
+    const updates: Array<{ stepId: string; update: object }> = [];
+    const steps = [makeRegistryStep("s1")];
+    const deployTargets = [
+      { deployId: "reg", contractName: "Registry" },
+      { deployId: "token", contractName: "Token" },
+    ];
+    render(
+      <OrderedConfigPanel
+        orderedSteps={steps}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={(stepId, update) => updates.push({ stepId, update })}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+
+    // Switch arg 1 (currently ref) to literal
+    const arg1KindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-1-kind" });
+    fireEvent.change(arg1KindSelect, { target: { value: "literal" } });
+
+    expect(updates).toHaveLength(1);
+    const newArgs = (updates[0].update as { args: unknown[] }).args;
+    // Switching from ref→literal: the value should be empty string (since original was an object)
+    expect(newArgs[1]).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5c. graphToSpec — orderedSteps with validateConfig + order preservation
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — orderedSteps validates and preserves order", () => {
+  it("spec with orderedSteps passes validateConfig", () => {
+    const token = makeGraphNode("n1", "token", "Token");
+    const registry = makeGraphNode("n2", "registry", "Registry");
+    const orderedSteps: StudioOrderedConfigStep[] = [
+      { kind: "setX", id: "os1", functionName: "register", target: "registry", args: ["key1", ""] },
+      { kind: "setX", id: "os2", functionName: "register", target: "registry", args: ["key2", ""] },
+    ];
+    const { deployment, config } = graphToSpec([token, registry], [], orderedSteps);
+    expect(validateSpec(deployment).ok).toBe(true);
+    expect(validateConfig(config, deployment).ok).toBe(true);
+    expect(config.orderedSteps).toHaveLength(2);
+  });
+
+  it("multi-element orderedSteps array preserves insertion order through graphToSpec", () => {
+    // Verifies the array-index execution order guarantee: os1 → os2 → os3.
+    const node = makeGraphNode("n1", "token", "Token");
+    const orderedSteps: StudioOrderedConfigStep[] = [
+      { kind: "setX", id: "first", functionName: "alpha", target: "token", args: [] },
+      { kind: "setX", id: "second", functionName: "beta", target: "token", args: [] },
+      { kind: "setX", id: "third", functionName: "gamma", target: "token", args: [] },
+    ];
+    const { config } = graphToSpec([node], [], orderedSteps);
+    expect(config.orderedSteps).toHaveLength(3);
+    // IDs must appear in the same order as the input
+    expect((config.orderedSteps![0] as { id: string }).id).toBe("first");
+    expect((config.orderedSteps![1] as { id: string }).id).toBe("second");
+    expect((config.orderedSteps![2] as { id: string }).id).toBe("third");
+    // Functions also preserve order
+    expect((config.orderedSteps![0] as { function: string }).function).toBe("alpha");
+    expect((config.orderedSteps![1] as { function: string }).function).toBe("beta");
+    expect((config.orderedSteps![2] as { function: string }).function).toBe("gamma");
+  });
+
+  it("per-node steps appear BEFORE orderedSteps in their respective spec arrays", () => {
+    // Spec guarantee: ConfigSpec.steps holds per-node steps; ConfigSpec.orderedSteps
+    // holds global ordered steps. They are distinct arrays, never interleaved.
+    const node = makeGraphNode("n1", "token", "Token", {
+      configSteps: [
+        { kind: "setX", id: "per1", functionName: "localStep", args: [] },
+        { kind: "setX", id: "per2", functionName: "localStep2", args: [] },
+      ],
+    });
+    const orderedSteps: StudioOrderedConfigStep[] = [
+      { kind: "setX", id: "ord1", functionName: "globalStep", target: "token", args: [] },
+    ];
+    const { config } = graphToSpec([node], [], orderedSteps);
+    // Per-node steps go into config.steps
+    expect(config.steps).toHaveLength(2);
+    expect((config.steps[0] as { id: string }).id).toBe("per1");
+    expect((config.steps[1] as { id: string }).id).toBe("per2");
+    // Ordered steps go into config.orderedSteps
+    expect(config.orderedSteps).toHaveLength(1);
+    expect((config.orderedSteps![0] as { id: string }).id).toBe("ord1");
   });
 });
 
