@@ -54,9 +54,12 @@ describe("@redeploy/deploy-server — handleRequest", () => {
   });
 
   describe("createServer", () => {
-    it("returns an http.Server instance", () => {
+    it("returns an http.Server with handleRequest wired as the request listener", () => {
       const server = createServer();
       expect(server).toBeInstanceOf(Server);
+      // Verify the handler is actually registered so a regression to a
+      // handler-less server is caught immediately.
+      expect(server.listeners("request")).toContain(handleRequest);
     });
   });
 
@@ -78,6 +81,7 @@ describe("@redeploy/deploy-server — handleRequest", () => {
       handleRequest(req, mock.res);
 
       expect(mock.statusCode).toBe(404);
+      expect(JSON.parse(mock.body)).toEqual({ error: "Not Found" });
     });
 
     it("responds 404 for root path /", () => {
