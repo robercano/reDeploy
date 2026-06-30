@@ -308,8 +308,12 @@ describe("overview mode — edge survival (constructor-ref binding)", () => {
     expect(refValueEl).not.toBeNull();
 
     // The Handle for arg-0 must still be in the DOM (edges stay anchored).
-    const argHandle = container.querySelector(`[data-handleid='${tgtNode.id}-arg-0']`);
+    const argHandle = container.querySelector(`[data-handleid='${tgtNode.id}-arg-0']`) as HTMLElement | null;
     expect(argHandle).not.toBeNull();
+
+    // The Handle must be visually HIDDEN via opacity:0 (not display:none, which would
+    // drop the layout box and break the edge anchor position).
+    expect(argHandle!.style.opacity).toBe("0");
 
     // The content is inside a collapsed wrapper (height:0)
     const collapsedDivs = Array.from(container.querySelectorAll("div")).filter(
@@ -352,7 +356,7 @@ describe("overview mode — Handles remain mounted", () => {
     expect(handles.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("arg-0 Handle is mounted (data-handleid present) in overview mode", () => {
+  it("arg-0 Handle is mounted (data-handleid present) AND opacity:0 in overview mode", () => {
     const data = makeData({
       args: [{ index: 0, kind: "literal", value: "test" }],
       viewMode: "overview",
@@ -360,12 +364,29 @@ describe("overview mode — Handles remain mounted", () => {
 
     const { container } = renderContractNode(data, "n1");
 
-    // React Flow renders Handles as divs with data-handleid attribute
-    const argHandle = container.querySelector("[data-handleid='n1-arg-0']");
+    // React Flow renders Handles as divs with data-handleid attribute.
+    // In overview mode the handle must be present (for edge anchoring) but invisible.
+    const argHandle = container.querySelector("[data-handleid='n1-arg-0']") as HTMLElement | null;
     expect(argHandle).not.toBeNull();
+    // Must be hidden via opacity (not display:none — that drops the layout box)
+    expect(argHandle!.style.opacity).toBe("0");
   });
 
-  it("arg Handle is mounted for ref-bound slot in overview mode", () => {
+  it("arg-0 Handle is visible (no opacity override) in detailed mode", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "test" }],
+      viewMode: "detailed",
+    });
+
+    const { container } = renderContractNode(data, "n1");
+
+    const argHandle = container.querySelector("[data-handleid='n1-arg-0']") as HTMLElement | null;
+    expect(argHandle).not.toBeNull();
+    // In detailed mode the dot must be visible — no opacity:0
+    expect(argHandle!.style.opacity).not.toBe("0");
+  });
+
+  it("arg Handle is mounted AND invisible for ref-bound slot in overview mode", () => {
     const data = makeData({
       args: [{ index: 0, kind: "literal", value: "" }],
       refSourceDeployIds: new Map([[0, "oracle"]]),
@@ -374,9 +395,10 @@ describe("overview mode — Handles remain mounted", () => {
 
     const { container } = renderContractNode(data, "n1");
 
-    // Handle must be mounted even when edge-bound and in overview
-    const argHandle = container.querySelector("[data-handleid='n1-arg-0']");
+    // Handle mounted (edge stays anchored) but dot hidden (no clutter in compact view)
+    const argHandle = container.querySelector("[data-handleid='n1-arg-0']") as HTMLElement | null;
     expect(argHandle).not.toBeNull();
+    expect(argHandle!.style.opacity).toBe("0");
   });
 
   it("arg Handle count matches between detailed and overview modes", () => {
