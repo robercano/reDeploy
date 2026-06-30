@@ -66,14 +66,33 @@ decide() {
   ' "$base" "$owner"
 }
 
+# After a merge, drop the local worktree + branch for the merged head branch.
+# Implementers run in isolated worktrees under .claude/worktrees/; the remote
+# branch is already gone via --delete-branch, so this clears the local residue
+# so it doesn't pile up. Best-effort: locked/bind-mounted admin dirs may be
+# "busy" in sandboxes — prune de-registers them and the env reclaims them later.
+clean_worktree() {
+  local b="$1" wt=""
+  [ -n "$b" ] || return 0
+  wt="$(git worktree list --porcelain 2>/dev/null | awk -v want="branch refs/heads/$b" '
+    /^worktree /{p=substr($0,10)} $0==want{print p; exit}')"
+  if [ -n "$wt" ]; then
+    git worktree remove --force "$wt" 2>/dev/null && echo "  worktree removed: $wt"
+  fi
+  git worktree prune 2>/dev/null || true
+  git branch -D "$b" 2>/dev/null || true
+}
+
 merged=0; skipped=0
 for n in $(gh pr list -R "$repo" --base "$base" --state open --json number -q '.[].number'); do
-  data="$(gh pr view "$n" -R "$repo" --json number,title,isDraft,baseRefName,mergeable,reviews,statusCheckRollup,commits)"
+  data="$(gh pr view "$n" -R "$repo" --json number,title,isDraft,baseRefName,headRefName,mergeable,reviews,statusCheckRollup,commits)"
   verdict="$(printf '%s' "$data" | decide)"
   title="$(printf '%s' "$data" | node -e 'process.stdout.write((JSON.parse(require("fs").readFileSync(0,"utf8")).title)||"")')"
   if [ "$verdict" = "MERGE" ]; then
     if gh pr merge "$n" -R "$repo" --merge --delete-branch >/dev/null 2>&1; then
       echo "{\"pr\":$n,\"action\":\"merged\",\"title\":\"$title\"}"; merged=$((merged+1))
+      head="$(printf '%s' "$data" | node -e 'process.stdout.write((JSON.parse(require("fs").readFileSync(0,"utf8")).headRefName)||"")')"
+      clean_worktree "$head"
     else
       echo "{\"pr\":$n,\"action\":\"merge-failed\",\"title\":\"$title\"}"
     fi
