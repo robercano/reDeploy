@@ -6,6 +6,8 @@ export type {
   LiteralArg,
   LiteralValue,
   ConfigArg,
+  AddressRef,
+  ConfigArgExtended,
   SetXStep,
   GrantRoleStep,
   WireStep,
@@ -17,6 +19,8 @@ export type {
 export {
   LITERAL_MAX_DEPTH,
   configArgSchema,
+  addressRefSchema,
+  configArgExtendedSchema,
   setXStepSchema,
   grantRoleStepSchema,
   wireStepSchema,

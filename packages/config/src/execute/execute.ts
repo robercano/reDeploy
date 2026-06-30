@@ -12,6 +12,22 @@
  *   Journal file: `<stateDir>/config-state.jsonl`
  *   Format: one JSON record per line — { id, kind, completedAt }
  *
+ * ORDERED vs. UNORDERED STEPS
+ * ============================
+ *
+ * A ConfigSpec has two step lists:
+ *
+ *   spec.steps        — unordered per-node steps. Executed first, in array
+ *                       order (but callers must not rely on the order between
+ *                       steps; it may become parallel in the future).
+ *
+ *   spec.orderedSteps — globally ordered steps. Executed in strict array-
+ *                       index order AFTER all unordered steps complete. Step
+ *                       N+1 never starts until step N has been journaled.
+ *
+ * Both lists share the same step-id journal. Resume picks up from the first
+ * un-journaled step in each list (steps first, then orderedSteps).
+ *
  * RESUME SEMANTICS (at-least-once per step)
  * ==========================================
  *
@@ -21,13 +37,15 @@
  *   3. Read the journal to learn which steps are already complete (from a
  *      previous run).
  *   4. Iterate spec.steps IN ORDER. Steps already in the journal are SKIPPED.
- *   5. For each remaining step:
+ *   5. Iterate spec.orderedSteps IN STRICT ARRAY ORDER. Steps already in the
+ *      journal are SKIPPED. Each step waits for the previous to complete.
+ *   6. For each remaining step (in either list):
  *        a. Resolve all refs to addresses via the safe Map (throws UNKNOWN_REF
  *           on unknown or prototype-key ids).
  *        b. Build a resolved ConfigCall.
  *        c. Call executor.execute(call) and await it.
  *        d. ONLY on success: append a completion record to the journal.
- *   6. If the executor throws, the error propagates immediately. The journal
+ *   7. If the executor throws, the error propagates immediately. The journal
  *      retains only the steps that completed before the failure. Re-running
  *      with the same stateDir resumes from the first un-journaled step.
  *
@@ -249,11 +267,16 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
   const executedStepIds: string[] = [];
   const skippedStepIds: string[] = [];
 
-  for (const step of validatedSpec.steps) {
+  /**
+   * Execute a single step: skip if already journaled, otherwise resolve refs,
+   * call executor, and journal on success. Mutates `executedStepIds`,
+   * `skippedStepIds`, and `alreadyCompleted` in place.
+   */
+  async function executeStep(step: ConfigStep): Promise<void> {
     if (alreadyCompleted.has(step.id)) {
       // Already journaled from a previous run — skip.
       skippedStepIds.push(step.id);
-      continue;
+      return;
     }
 
     // Resolve refs and build the ConfigCall.
@@ -278,10 +301,28 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
     alreadyCompleted.add(step.id);
   }
 
+  // Execute unordered steps (spec.steps) first — current array order is used
+  // but callers must not depend on inter-step ordering here.
+  for (const step of validatedSpec.steps) {
+    await executeStep(step);
+  }
+
+  // Execute globally ordered steps (spec.orderedSteps) in strict array order.
+  // Each step must complete (or be skipped as already-journaled) before the
+  // next one starts. This guarantees that orderedSteps[N+1] never runs before
+  // orderedSteps[N] has been recorded in the journal.
+  const orderedSteps = validatedSpec.orderedSteps ?? [];
+  for (const step of orderedSteps) {
+    await executeStep(step);
+  }
+
   // --- 5. Build and return the result ----------------------------------------
-  const completedStepIds = validatedSpec.steps
-    .map((s) => s.id)
-    .filter((id) => alreadyCompleted.has(id));
+  // Collect all step ids in both lists; filter to those already journaled.
+  const allStepIds = [
+    ...validatedSpec.steps.map((s) => s.id),
+    ...orderedSteps.map((s) => s.id),
+  ];
+  const completedStepIds = allStepIds.filter((id) => alreadyCompleted.has(id));
 
   return {
     success: true,

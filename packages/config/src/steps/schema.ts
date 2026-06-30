@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import type { ConfigArg, ConfigSpec, ConfigStep, LiteralValue } from "./types.js";
+import type { AddressRef, ConfigArg, ConfigArgExtended, ConfigSpec, ConfigStep, LiteralValue } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Literal value (re-implemented here to avoid importing private internals from
@@ -109,6 +109,43 @@ export const configArgSchema: z.ZodType<ConfigArg> = z.discriminatedUnion("kind"
 ]);
 
 // ---------------------------------------------------------------------------
+// AddressRef — explicit address-of-a-deployed-contract reference
+// ---------------------------------------------------------------------------
+
+/**
+ * Schema for `AddressRef` — a studio-internal address-of-contract reference.
+ *
+ * `{ kind: "addressRef", deployId: "<non-empty deploy-id>" }`
+ *
+ * NOTE: `AddressRef` is NOT accepted by `configStepSchema` / the execution
+ * engine. Studio components that hold `AddressRef` values must normalise them
+ * to `{ kind: "ref", contract: deployId }` before placing them in a
+ * `ConfigSpec` that will be validated or executed.
+ */
+export const addressRefSchema: z.ZodType<AddressRef> = z.object({
+  kind: z.literal("addressRef"),
+  deployId: z.string().min(1, { message: "addressRef.deployId must be a non-empty string" }),
+});
+
+/**
+ * Extended arg schema for studio-internal use — accepts `RefArg`, `LiteralArg`,
+ * and `AddressRef`.
+ *
+ * NOTE: this schema is for validating studio-internal arg representations only.
+ * It is NOT used by `configStepSchema` or the execution engine. Any `AddressRef`
+ * parsed with this schema must be normalised to a `RefArg` before being placed
+ * in a `ConfigSpec` for validation or execution.
+ */
+export const configArgExtendedSchema: z.ZodType<ConfigArgExtended> = z.discriminatedUnion("kind", [
+  refArgSchema,
+  literalArgSchema,
+  z.object({
+    kind: z.literal("addressRef"),
+    deployId: z.string().min(1, { message: "addressRef.deployId must be a non-empty string" }),
+  }),
+]);
+
+// ---------------------------------------------------------------------------
 // Step schemas
 // Note: intermediate step schemas are NOT annotated as ZodType<T> so that
 // TypeScript can infer the full discriminated union information needed by
@@ -165,8 +202,16 @@ export const configStepSchema: z.ZodType<ConfigStep> = z.discriminatedUnion("kin
 
 /**
  * Top-level ConfigSpec schema.
+ *
+ * Both `steps` (unordered) and `orderedSteps` (globally ordered) are
+ * validated against the same `configStepSchema`. The `orderedSteps` field
+ * is optional — existing specs without it remain valid (backward compat).
+ *
+ * Cross-field rules (duplicate ids across both lists, missing refs) are
+ * enforced in validate.ts after this structural parse succeeds.
  */
 export const configSpecSchema: z.ZodType<ConfigSpec> = z.object({
   version: z.literal(1),
   steps: z.array(configStepSchema),
+  orderedSteps: z.array(configStepSchema).optional(),
 });

@@ -11,11 +11,18 @@
  * never throws on untrusted input (the zod parse is wrapped in try/catch to
  * guard against stack overflows on pathological inputs).
  *
+ * Ordered vs. unordered steps:
+ *   Both `steps` (unordered) and `orderedSteps` (globally ordered) are validated
+ *   identically in terms of shape and ref resolution. They share the same step-id
+ *   namespace — a duplicate id that appears in `steps`, in `orderedSteps`, or
+ *   across both lists is rejected with a DUPLICATE_STEP_ID error. Cross-field
+ *   errors report paths as `steps[N]...` or `orderedSteps[N]...` respectively.
+ *
  * Ref resolution against a deployment:
  *   When a second argument (`deployment`) is passed, every ref-like field in
  *   the spec (step `target`, `source`, `into`, and any `account` or `args`
- *   entry of kind `"ref"`) is checked against the set of known deployed
- *   contract ids. Unknown refs produce a MISSING_REF error.
+ *   entry of kind `"ref"` or `"addressRef"`) is checked against the set of known
+ *   deployed contract ids. Unknown refs produce a MISSING_REF error.
  *
  *   Acceptable forms for `deployment`:
  *     - A `DeploymentSpec` (imported from @redeploy/core) — ids are extracted
@@ -128,18 +135,41 @@ function collectCrossFieldErrors(
 ): ConfigError[] {
   const errors: ConfigError[] = [];
 
+  const orderedSteps = spec.orderedSteps ?? [];
+
   // --- 1. Duplicate step ids ------------------------------------------------
-  const seenIds = new Map<string, number>(); // id → first occurrence index
+  // Both `steps` and `orderedSteps` share the same id namespace. We track
+  // the first occurrence with a path label so the error message is precise.
+  //
+  // Entry format: id → { index, listLabel } where listLabel is the path prefix
+  // ("steps" or "orderedSteps") to use in the error path.
+  const seenIds = new Map<string, { index: number; listLabel: string }>();
+
   for (let i = 0; i < spec.steps.length; i++) {
     const step = spec.steps[i];
     if (seenIds.has(step.id)) {
+      const first = seenIds.get(step.id)!;
       errors.push({
         path: `steps[${i}].id`,
         code: "DUPLICATE_STEP_ID",
-        message: `Duplicate step id "${step.id}" (first seen at steps[${seenIds.get(step.id)!}])`,
+        message: `Duplicate step id "${step.id}" (first seen at ${first.listLabel}[${first.index}])`,
       });
     } else {
-      seenIds.set(step.id, i);
+      seenIds.set(step.id, { index: i, listLabel: "steps" });
+    }
+  }
+
+  for (let i = 0; i < orderedSteps.length; i++) {
+    const step = orderedSteps[i];
+    if (seenIds.has(step.id)) {
+      const first = seenIds.get(step.id)!;
+      errors.push({
+        path: `orderedSteps[${i}].id`,
+        code: "DUPLICATE_STEP_ID",
+        message: `Duplicate step id "${step.id}" (first seen at ${first.listLabel}[${first.index}])`,
+      });
+    } else {
+      seenIds.set(step.id, { index: i, listLabel: "orderedSteps" });
     }
   }
 
@@ -151,7 +181,12 @@ function collectCrossFieldErrors(
   for (let i = 0; i < spec.steps.length; i++) {
     const step = spec.steps[i] as ConfigStep;
     const basePath = `steps[${i}]`;
+    collectStepRefErrors(step, i, basePath, deployedIds, errors);
+  }
 
+  for (let i = 0; i < orderedSteps.length; i++) {
+    const step = orderedSteps[i] as ConfigStep;
+    const basePath = `orderedSteps[${i}]`;
     collectStepRefErrors(step, i, basePath, deployedIds, errors);
   }
 
