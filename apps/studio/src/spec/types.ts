@@ -57,13 +57,18 @@ export interface ArgSlot {
   type?: string;
 }
 
-/** Callbacks injected into node data so React Flow custom nodes can call them. */
+/**
+ * Callbacks injected into node data so React Flow custom nodes can call them.
+ *
+ * Note: constructor arg slots are derived from the contract manifest when a
+ * node is created (one slot per constructor parameter) and are therefore fixed
+ * for the node's lifetime — there is intentionally no add/remove-slot callback.
+ * Slot values are edited in place via onUpdateArgSlot.
+ */
 export interface NodeCallbacks {
   onUpdateDeployId: (nodeId: string, value: string) => void;
   onUpdateContractName: (nodeId: string, value: string) => void;
   onUpdateArgSlot: (nodeId: string, slotIndex: number, value: string) => void;
-  onAddArg: (nodeId: string) => void;
-  onRemoveArg: (nodeId: string, slotIndex: number) => void;
 }
 
 /** Data stored on each contract node. */

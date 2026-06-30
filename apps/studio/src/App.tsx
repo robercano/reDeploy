@@ -103,7 +103,6 @@ interface AuthoringCanvasProps {
   onConnect: ReturnType<typeof useGraph>["onConnect"];
   onNodeClick: NodeMouseHandler;
   onPaneClick: () => void;
-  addContractNode: () => void;
   addContractFromManifest: ReturnType<typeof useGraph>["addContractFromManifest"];
   instantiateTemplate: ReturnType<typeof useGraph>["instantiateTemplate"];
   selectedNode: ReturnType<typeof useGraph>["nodes"][number] | undefined;
@@ -133,7 +132,6 @@ function AuthoringCanvas({
   onConnect,
   onNodeClick,
   onPaneClick,
-  addContractNode,
   addContractFromManifest,
   instantiateTemplate,
   selectedNode,
@@ -201,13 +199,6 @@ function AuthoringCanvas({
           data-testid="toggle-contracts-browser"
         >
           Contracts
-        </button>
-        <button
-          style={btnStyle}
-          onClick={addContractNode}
-          data-testid="add-contract-btn"
-        >
-          + Contract
         </button>
         <TemplateGallery
           onInstantiate={instantiateTemplate}
@@ -298,7 +289,6 @@ export function App() {
     onNodesChange,
     onEdgesChange,
     onConnect,
-    addContractNode,
     addContractFromManifest,
     instantiateTemplate,
     setSelectedNodeId,
@@ -401,7 +391,6 @@ export function App() {
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
-            addContractNode={addContractNode}
             addContractFromManifest={addContractFromManifest}
             instantiateTemplate={instantiateTemplate}
             selectedNode={selectedNode}

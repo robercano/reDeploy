@@ -55,12 +55,10 @@ function ArgRow({
   slot,
   nodeId,
   onUpdate,
-  onRemove,
 }: {
   slot: ArgSlot;
   nodeId: string;
   onUpdate: (index: number, value: string) => void;
-  onRemove: (index: number) => void;
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
   const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
@@ -95,13 +93,6 @@ function ArgRow({
           aria-label={`arg-${slot.index}`}
         />
       </div>
-      <button
-        style={{ fontSize: 10, padding: "1px 4px", cursor: "pointer" }}
-        onClick={() => onRemove(slot.index)}
-        title="Remove arg"
-      >
-        ×
-      </button>
     </div>
   );
 }
@@ -165,19 +156,10 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
               slot={slot}
               nodeId={id}
               onUpdate={(idx, val) => data.onUpdateArgSlot(id, idx, val)}
-              onRemove={(idx) => data.onRemoveArg(id, idx)}
             />
           ))}
         </div>
       )}
-
-      <button
-        style={{ fontSize: 10, padding: "2px 6px", cursor: "pointer", width: "100%" }}
-        onClick={() => data.onAddArg(id)}
-        title="Add constructor arg"
-      >
-        + arg
-      </button>
 
       <Handle
         type="source"

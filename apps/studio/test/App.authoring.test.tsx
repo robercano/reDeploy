@@ -6,6 +6,11 @@
  * React Flow interactions in jsdom are limited; we drive the serializer
  * thoroughly as pure function tests in graph-to-spec.test.ts.
  * Here we assert real UI behavior: rendering, input handling, export modal.
+ *
+ * Nodes are added through the Contracts Browser (the only add path now):
+ * open the browser via `toggle-contracts-browser`, then click a `contract-row-*`
+ * which calls addContractFromManifest. The arg slots are derived from the
+ * clicked manifest and are fixed for the node's lifetime.
  */
 
 import { render, screen, fireEvent, within } from "@testing-library/react";
@@ -15,6 +20,24 @@ import { graphToSpec } from "../src/spec/graph-to-spec";
 import { validateSpec } from "@redeploy/core";
 import { validateConfig } from "@redeploy/config";
 import type { GraphNode } from "../src/spec/graph-to-spec";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a contract node by name through the Contracts Browser.
+ * Opens the browser (if a toggle exists in the current DOM), clicks the row,
+ * and leaves the browser open so callers can add more.
+ */
+function addNodeByName(name: string) {
+  // Open the browser if not already open
+  if (!screen.queryByTestId("contracts-browser")) {
+    fireEvent.click(screen.getByTestId("toggle-contracts-browser"));
+  }
+  const browser = screen.getByTestId("contracts-browser");
+  fireEvent.click(within(browser).getByTestId(`contract-row-${name}`));
+}
 
 // ---------------------------------------------------------------------------
 // App smoke tests — canvas renders
@@ -27,22 +50,21 @@ describe("App — canvas renders", () => {
     expect(canvas).not.toBeNull();
   });
 
-  it("shows the + Contract toolbar button", () => {
-    render(<App />);
-    const btn = screen.getByTestId("add-contract-btn");
-    expect(btn).not.toBeNull();
-    expect(btn.textContent).toContain("Contract");
-  });
-
   it("shows the Export Spec button", () => {
     render(<App />);
     const btn = screen.getByTestId("export-spec-btn");
     expect(btn).not.toBeNull();
   });
+
+  it("shows the Contracts Browser toggle", () => {
+    render(<App />);
+    const btn = screen.getByTestId("toggle-contracts-browser");
+    expect(btn).not.toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
-// Adding and editing contract nodes
+// Adding and editing contract nodes (via Contracts Browser)
 // ---------------------------------------------------------------------------
 
 describe("App — add contract node", () => {
@@ -51,13 +73,12 @@ describe("App — add contract node", () => {
     document.body.innerHTML = "";
   });
 
-  it("adds a contract node when clicking + Contract", () => {
+  it("adds a contract node when clicking a contract row", () => {
     render(<App />);
-    const btn = screen.getByTestId("add-contract-btn");
 
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(0);
 
-    fireEvent.click(btn);
+    addNodeByName("Token");
 
     // React Flow node should appear in DOM
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
@@ -65,18 +86,17 @@ describe("App — add contract node", () => {
 
   it("adds multiple nodes", () => {
     render(<App />);
-    const btn = screen.getByTestId("add-contract-btn");
 
-    fireEvent.click(btn);
-    fireEvent.click(btn);
-    fireEvent.click(btn);
+    addNodeByName("Token");
+    addNodeByName("Registry");
+    addNodeByName("Vault");
 
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(3);
   });
 
   it("renders deploy-id input on the node", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Token");
 
     // The ContractNode renders an input with aria-label "deploy-id"
     const deployIdInput = screen.getByLabelText("deploy-id");
@@ -85,7 +105,7 @@ describe("App — add contract node", () => {
 
   it("editing deploy-id input updates the node data", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Token");
 
     const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
     fireEvent.change(deployIdInput, { target: { value: "myToken" } });
@@ -95,7 +115,7 @@ describe("App — add contract node", () => {
 
   it("editing contract-name input updates the node data", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Token");
 
     const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
     fireEvent.change(contractNameInput, { target: { value: "ERC20Token" } });
@@ -103,35 +123,12 @@ describe("App — add contract node", () => {
     expect(contractNameInput.value).toBe("ERC20Token");
   });
 
-  it("adds a constructor arg slot", () => {
+  it("derives constructor arg slots from the clicked manifest (Token → name_, symbol_)", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Token");
 
-    // Initially no arg inputs
-    expect(screen.queryAllByLabelText(/^arg-/)).toHaveLength(0);
-
-    // Click "+ arg"
-    const addArgBtn = screen.getByTitle("Add constructor arg");
-    fireEvent.click(addArgBtn);
-
-    // Now one arg input
-    expect(screen.queryAllByLabelText(/^arg-/)).toHaveLength(1);
-  });
-
-  it("removes a constructor arg slot", () => {
-    render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
-
-    const addArgBtn = screen.getByTitle("Add constructor arg");
-    fireEvent.click(addArgBtn);
-    fireEvent.click(addArgBtn);
-
+    // Token has two constructor args → two arg inputs, fixed for the node lifetime.
     expect(screen.queryAllByLabelText(/^arg-/)).toHaveLength(2);
-
-    const removeButtons = screen.getAllByTitle("Remove arg");
-    fireEvent.click(removeButtons[0]);
-
-    expect(screen.queryAllByLabelText(/^arg-/)).toHaveLength(1);
   });
 });
 
@@ -140,6 +137,10 @@ describe("App — add contract node", () => {
 // ---------------------------------------------------------------------------
 
 describe("App — config panel", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
   it("config panel not shown when no node selected", () => {
     render(<App />);
     expect(screen.queryByTestId("config-panel")).toBeNull();
@@ -147,7 +148,7 @@ describe("App — config panel", () => {
 
   it("config panel shown when node is clicked", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Registry");
 
     // Click on the node (ContractNode container)
     const node = document.querySelector(".react-flow__node") as HTMLElement;
@@ -159,7 +160,7 @@ describe("App — config panel", () => {
 
   it("can add a setX step via config panel", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Registry");
 
     const node = document.querySelector(".react-flow__node") as HTMLElement;
     fireEvent.click(node);
@@ -175,7 +176,7 @@ describe("App — config panel", () => {
 
   it("can add a grantRole step via config panel", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Registry");
 
     const node = document.querySelector(".react-flow__node") as HTMLElement;
     fireEvent.click(node);
@@ -190,7 +191,7 @@ describe("App — config panel", () => {
 
   it("can remove a config step", () => {
     render(<App />);
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Registry");
 
     const node = document.querySelector(".react-flow__node") as HTMLElement;
     fireEvent.click(node);
@@ -212,6 +213,10 @@ describe("App — config panel", () => {
 // ---------------------------------------------------------------------------
 
 describe("App — export modal", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
   it("opens export modal when clicking Export Spec", () => {
     render(<App />);
     fireEvent.click(screen.getByTestId("export-spec-btn"));
@@ -250,8 +255,8 @@ describe("App — export modal", () => {
     render(<App />);
 
     // Add two nodes, set same deploy id
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
-    fireEvent.click(screen.getByTestId("add-contract-btn"));
+    addNodeByName("Token");
+    addNodeByName("Registry");
 
     const deployIdInputs = screen.getAllByLabelText("deploy-id") as HTMLInputElement[];
     fireEvent.change(deployIdInputs[0], { target: { value: "dup" } });

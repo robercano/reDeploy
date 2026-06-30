@@ -40,8 +40,6 @@ function makeData(overrides: Partial<ContractNodeData> = {}): ContractNodeData {
     onUpdateDeployId: noop,
     onUpdateContractName: noop,
     onUpdateArgSlot: noop,
-    onAddArg: noop,
-    onRemoveArg: noop,
     ...overrides,
   };
 }
@@ -224,7 +222,7 @@ describe("ContractNode — ArgRow without name or type (plain slot)", () => {
     }
   });
 
-  it("does not render any param label when arg added via + arg button (blank slot)", () => {
+  it("does not render any param label for a literal slot with a value but no name/type", () => {
     const data = makeData({
       args: [
         { index: 0, kind: "literal", value: "someValue" },

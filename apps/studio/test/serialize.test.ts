@@ -8,12 +8,17 @@
  *   4. Params are built from the user's selection.
  *   5. Round-trip acceptance: build graph → serialize → instantiate → graphToSpec
  *      → validateSpec passes.
+ *
+ * Nodes are created via addContractFromManifest(manifest); the manifest's
+ * constructorArgs determine the fixed arg slots. Arg VALUES are then edited via
+ * onUpdateArgSlot. There is no add/remove-slot callback any more.
  */
 
 import { describe, it, expect } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useGraph } from "../src/hooks/useGraph";
 import type { ContractNodeData } from "../src/spec/types";
+import type { ContractManifest } from "../src/manifest/types";
 import { graphToTemplate } from "../src/templates/serialize";
 import type { ParamSelection } from "../src/templates/serialize";
 import { graphToSpec } from "../src/spec/graph-to-spec";
@@ -29,6 +34,26 @@ function nd(node: { data: Record<string, unknown> }): ContractNodeData {
   return node.data as unknown as ContractNodeData;
 }
 
+/** Build a minimal manifest with `argCount` literal constructor args. */
+function manifest(name: string, argCount: number): ContractManifest {
+  return {
+    name,
+    sourcePath: `src/${name}.sol`,
+    packageSegments: ["src"],
+    constructorArgs: Array.from({ length: argCount }, (_, i) => ({
+      name: `arg${i}`,
+      type: "string",
+    })),
+    inheritance: [name],
+    functions: [],
+  };
+}
+
+/** A no-arg manifest. */
+const NO_ARG = manifest("Registry", 0);
+/** A 1-arg manifest. */
+const ONE_ARG = manifest("Token", 1);
+
 // ---------------------------------------------------------------------------
 // 1. Basic serialization
 // ---------------------------------------------------------------------------
@@ -36,7 +61,7 @@ function nd(node: { data: Record<string, unknown> }): ContractNodeData {
 describe("graphToTemplate — basic serialization", () => {
   it("returns a template with the provided id, name, description", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(result.current.nodes[0].id, "MyToken"));
     act(() => nd(result.current.nodes[0]).onUpdateContractName(result.current.nodes[0].id, "Token"));
 
@@ -48,9 +73,9 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("node count equals graph node count", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.nodes).toHaveLength(3);
@@ -58,7 +83,7 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("local ids are derived from deployId slugs", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "MyToken"));
 
@@ -68,7 +93,7 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("local ids fall back to node-N when deployId is empty", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.nodes[0].id).toBe("node-1");
@@ -76,8 +101,8 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("local ids are collision-free when deployIds produce the same slug", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const [node1, node2] = result.current.nodes;
     act(() => nd(node1).onUpdateDeployId(node1.id, "Token"));
     act(() => nd(node2).onUpdateDeployId(node2.id, "Token")); // same slug → collision
@@ -91,7 +116,7 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("node data strips callbacks (no onUpdateDeployId etc.)", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "Token"));
 
@@ -100,13 +125,11 @@ describe("graphToTemplate — basic serialization", () => {
     expect(nodeData["onUpdateDeployId"]).toBeUndefined();
     expect(nodeData["onUpdateContractName"]).toBeUndefined();
     expect(nodeData["onUpdateArgSlot"]).toBeUndefined();
-    expect(nodeData["onAddArg"]).toBeUndefined();
-    expect(nodeData["onRemoveArg"]).toBeUndefined();
   });
 
   it("deployIdSeed is set from node deployId", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "VaultContract"));
 
@@ -116,7 +139,7 @@ describe("graphToTemplate — basic serialization", () => {
 
   it("contractName is preserved", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateContractName(nodeId, "ERC20Token"));
 
@@ -132,8 +155,8 @@ describe("graphToTemplate — basic serialization", () => {
 describe("graphToTemplate — position normalization", () => {
   it("top-left-most node has position (0, 0) in the template", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
     // Nodes are positioned by the hook at (100 + (n-1)*250, 100); let's use those defaults
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
@@ -146,8 +169,8 @@ describe("graphToTemplate — position normalization", () => {
 
   it("relative positions are preserved", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     // Original positions: node0 at x=100, node1 at x=350 (100 + 250)
@@ -166,8 +189,8 @@ describe("graphToTemplate — edges", () => {
   it("constructorRef edges are included with remapped local ids", () => {
     const { result } = renderHook(() => useGraph());
     // Set up two nodes with a constructorRef edge via onConnect
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(ONE_ARG));
     const [source, target] = result.current.nodes;
     act(() => nd(source).onUpdateDeployId(source.id, "Token"));
     act(() => nd(target).onUpdateDeployId(target.id, "Vault"));
@@ -189,8 +212,8 @@ describe("graphToTemplate — edges", () => {
 
   it("wire edges are NOT included in the template", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const [source, target] = result.current.nodes;
     act(() => nd(source).onUpdateDeployId(source.id, "Token"));
     act(() => nd(target).onUpdateDeployId(target.id, "Vault"));
@@ -209,7 +232,7 @@ describe("graphToTemplate — edges", () => {
 
   it("template with no edges has empty edges array", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.edges).toHaveLength(0);
@@ -218,8 +241,8 @@ describe("graphToTemplate — edges", () => {
   it("constructorRef edge referencing a node not in the provided nodes list is dropped", () => {
     // Build two real nodes and an edge between them
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(ONE_ARG));
     const [source, target] = result.current.nodes;
     act(() => nd(source).onUpdateDeployId(source.id, "Token"));
     act(() => nd(target).onUpdateDeployId(target.id, "Vault"));
@@ -244,7 +267,7 @@ describe("graphToTemplate — edges", () => {
 describe("graphToTemplate — params", () => {
   it("empty paramSelections produces empty params array", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.params).toHaveLength(0);
@@ -252,10 +275,9 @@ describe("graphToTemplate — params", () => {
 
   it("selected params are mapped to template-local node ids", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(ONE_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "Token"));
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
 
     const paramSelections: ParamSelection[] = [
       { nodeId, argIndex: 0, label: "Token name", hint: 'e.g. "USD Coin"' },
@@ -271,7 +293,7 @@ describe("graphToTemplate — params", () => {
 
   it("params without hint do not include hint field", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(ONE_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "Token"));
 
@@ -285,7 +307,7 @@ describe("graphToTemplate — params", () => {
 
   it("params referencing a non-existent nodeId are dropped", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
 
     const paramSelections: ParamSelection[] = [
       { nodeId: "does-not-exist", argIndex: 0, label: "Orphan param" },
@@ -302,17 +324,17 @@ describe("graphToTemplate — params", () => {
 
 describe("graphToTemplate → instantiateTemplate round-trip", () => {
   it("serialize then instantiate then validate passes for a 2-node graph with a ref edge", () => {
-    // Build a graph with Token + Vault + constructorRef edge
+    // Build a graph with Token + Vault + constructorRef edge.
+    // Vault is created from a 1-arg manifest so it has an arg slot 0 to bind.
     const { result: graphResult } = renderHook(() => useGraph());
-    act(() => graphResult.current.addContractNode());
-    act(() => graphResult.current.addContractNode());
+    act(() => graphResult.current.addContractFromManifest(NO_ARG));
+    act(() => graphResult.current.addContractFromManifest(manifest("VaultERC4626", 1)));
     const [srcNode, tgtNode] = graphResult.current.nodes;
 
     act(() => nd(srcNode).onUpdateDeployId(srcNode.id, "Token"));
     act(() => nd(srcNode).onUpdateContractName(srcNode.id, "Token"));
     act(() => nd(tgtNode).onUpdateDeployId(tgtNode.id, "Vault"));
     act(() => nd(tgtNode).onUpdateContractName(tgtNode.id, "VaultERC4626"));
-    act(() => nd(tgtNode).onAddArg(tgtNode.id)); // add arg slot 0
 
     act(() => graphResult.current.onConnect({
       source: srcNode.id,
@@ -364,36 +386,29 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
   });
 
   it("serialize then instantiate then validate passes for a 3-node ERC4626 graph with config steps", () => {
-    // Build graph that mirrors the ERC4626 Vault Stack template
+    // Build graph that mirrors the ERC4626 Vault Stack template.
+    // Each node is created from a manifest with the right arg count.
     const { result: graphResult } = renderHook(() => useGraph());
-    act(() => graphResult.current.addContractNode());
-    act(() => graphResult.current.addContractNode());
-    act(() => graphResult.current.addContractNode());
+    act(() => graphResult.current.addContractFromManifest(manifest("Token", 2)));
+    act(() => graphResult.current.addContractFromManifest(manifest("PriceOracle", 2)));
+    act(() => graphResult.current.addContractFromManifest(manifest("VaultERC4626", 4)));
     const [tokenNode, oracleNode, vaultNode] = graphResult.current.nodes;
 
     // Set up Token
     act(() => nd(tokenNode).onUpdateDeployId(tokenNode.id, "Token"));
     act(() => nd(tokenNode).onUpdateContractName(tokenNode.id, "Token"));
-    act(() => nd(tokenNode).onAddArg(tokenNode.id));
-    act(() => nd(tokenNode).onAddArg(tokenNode.id));
     act(() => nd(tokenNode).onUpdateArgSlot(tokenNode.id, 0, "USD Coin"));
     act(() => nd(tokenNode).onUpdateArgSlot(tokenNode.id, 1, "USDC"));
 
     // Set up PriceOracle
     act(() => nd(oracleNode).onUpdateDeployId(oracleNode.id, "PriceOracle"));
     act(() => nd(oracleNode).onUpdateContractName(oracleNode.id, "PriceOracle"));
-    act(() => nd(oracleNode).onAddArg(oracleNode.id));
-    act(() => nd(oracleNode).onAddArg(oracleNode.id));
     act(() => nd(oracleNode).onUpdateArgSlot(oracleNode.id, 0, "8"));
     act(() => nd(oracleNode).onUpdateArgSlot(oracleNode.id, 1, "100000000"));
 
     // Set up VaultERC4626 (4 args; first 2 will be refs)
     act(() => nd(vaultNode).onUpdateDeployId(vaultNode.id, "Vault"));
     act(() => nd(vaultNode).onUpdateContractName(vaultNode.id, "VaultERC4626"));
-    act(() => nd(vaultNode).onAddArg(vaultNode.id));
-    act(() => nd(vaultNode).onAddArg(vaultNode.id));
-    act(() => nd(vaultNode).onAddArg(vaultNode.id));
-    act(() => nd(vaultNode).onAddArg(vaultNode.id));
     act(() => nd(vaultNode).onUpdateArgSlot(vaultNode.id, 2, "USD Vault"));
     act(() => nd(vaultNode).onUpdateArgSlot(vaultNode.id, 3, "vUSD"));
 
@@ -469,8 +484,8 @@ describe("graphToTemplate → instantiateTemplate round-trip", () => {
     // only during instantiateTemplate from template data), we unit-test
     // graphToTemplate directly by constructing nodes with a hand-crafted 'after'.
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const [nodeA, nodeB] = result.current.nodes;
 
     act(() => nd(nodeA).onUpdateDeployId(nodeA.id, "ContractA"));
@@ -529,9 +544,8 @@ describe("graphToTemplate — edge cases", () => {
 
   it("args are deep-copied so mutating graph does not affect the template", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(ONE_ARG));
     const nodeId = result.current.nodes[0].id;
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
     act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, "originalValue"));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
@@ -546,7 +560,7 @@ describe("graphToTemplate — edge cases", () => {
 
   it("configSteps are deep-copied into the template", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "Token"));
     act(() => result.current.addConfigStep(nodeId, "setX"));

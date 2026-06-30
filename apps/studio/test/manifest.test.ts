@@ -181,24 +181,20 @@ describe("contractManifest — packageSegments", () => {
     }
   });
 
-  it("at least one OZ base contract has packageSegments starting with '@openzeppelin'", () => {
-    const ozEntry = contractManifest.find(
-      (c) => c.sourcePath.startsWith("lib/openzeppelin-contracts/"),
-    );
-    expect(ozEntry).toBeDefined();
-    expect(ozEntry!.packageSegments[0]).toBe("@openzeppelin");
+  it("the loader manifest only contains deployable src/ project contracts", () => {
+    // The generated manifest now excludes interfaces, libraries, and abstract
+    // bases (e.g. OZ ERC4626/ERC20/Context, forge-std bases). Only concrete,
+    // non-abstract project contracts under src/ remain.
+    for (const entry of contractManifest) {
+      expect(entry.packageSegments).toEqual(["src"]);
+      expect(entry.sourcePath).toMatch(/^src\//);
+    }
   });
 
-  it("OZ ERC20 has packageSegments ['@openzeppelin', 'token', 'ERC20']", () => {
-    const erc20 = contractManifest.find((c) => c.name === "ERC20");
-    expect(erc20).toBeDefined();
-    expect(erc20!.packageSegments).toEqual(["@openzeppelin", "token", "ERC20"]);
-  });
-
-  it("OZ Context has packageSegments ['@openzeppelin', 'utils']", () => {
-    const ctx = contractManifest.find((c) => c.name === "Context");
-    expect(ctx).toBeDefined();
-    expect(ctx!.packageSegments).toEqual(["@openzeppelin", "utils"]);
+  it("excludes OZ/abstract base contracts (ERC20, Context, ERC4626) from the loader manifest", () => {
+    expect(contractManifest.some((c) => c.name === "ERC20")).toBe(false);
+    expect(contractManifest.some((c) => c.name === "Context")).toBe(false);
+    expect(contractManifest.some((c) => c.name === "ERC4626")).toBe(false);
   });
 });
 
@@ -526,6 +522,145 @@ describe("deriveManifests -- interface filtering (fixture)", () => {
 
   it("IERC4626 (contractKind='interface') is excluded from manifests", () => {
     expect(manifests.some((m) => m.name === "IERC4626")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Abstract-contract filtering — synthetic outputs
+//
+// Builds a synthetic Foundry output array containing:
+//   (a) a concrete `contract` Concrete (inherits abstract Base),
+//   (b) an `abstract` contract Base (declares baseFn), and
+//   (c) an `interface` IThing.
+// deriveManifests must emit ONLY the concrete contract, while still resolving
+// functions inherited from the abstract base (abstract/interface nodes remain
+// indexed for resolution).
+// ---------------------------------------------------------------------------
+
+describe("deriveManifests -- abstract contract filtering (synthetic)", () => {
+  // ids: Concrete=1, Base=2, IThing=3
+  const syntheticOutputs: FoundryContractOutput[] = [
+    {
+      abi: [],
+      ast: {
+        absolutePath: "src/Concrete.sol",
+        nodeType: "SourceUnit",
+        nodes: [
+          {
+            nodeType: "ContractDefinition",
+            id: 1,
+            name: "Concrete",
+            contractKind: "contract",
+            // abstract intentionally omitted → treated as concrete (deployable)
+            linearizedBaseContracts: [1, 2, 3],
+            nodes: [
+              {
+                nodeType: "FunctionDefinition",
+                id: 11,
+                kind: "constructor",
+                name: "",
+                visibility: "public",
+                stateMutability: "nonpayable",
+                parameters: { parameters: [{ name: "owner_", typeDescriptions: { typeString: "address" } }] },
+              },
+              {
+                nodeType: "FunctionDefinition",
+                id: 12,
+                kind: "function",
+                name: "concreteFn",
+                visibility: "public",
+                stateMutability: "nonpayable",
+                parameters: { parameters: [] },
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      abi: [],
+      ast: {
+        absolutePath: "src/Base.sol",
+        nodeType: "SourceUnit",
+        nodes: [
+          {
+            nodeType: "ContractDefinition",
+            id: 2,
+            name: "Base",
+            contractKind: "contract",
+            abstract: true,
+            linearizedBaseContracts: [2, 3],
+            nodes: [
+              {
+                nodeType: "FunctionDefinition",
+                id: 21,
+                kind: "function",
+                name: "baseFn",
+                visibility: "external",
+                stateMutability: "view",
+                parameters: { parameters: [] },
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      abi: [],
+      ast: {
+        absolutePath: "src/IThing.sol",
+        nodeType: "SourceUnit",
+        nodes: [
+          {
+            nodeType: "ContractDefinition",
+            id: 3,
+            name: "IThing",
+            contractKind: "interface",
+            linearizedBaseContracts: [3],
+            nodes: [
+              {
+                nodeType: "FunctionDefinition",
+                id: 31,
+                kind: "function",
+                name: "thing",
+                visibility: "external",
+                stateMutability: "view",
+                parameters: { parameters: [] },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ] as unknown as FoundryContractOutput[];
+
+  const manifests = deriveManifests(syntheticOutputs);
+
+  it("returns only the concrete contract (abstract base + interface excluded)", () => {
+    expect(manifests.map((m) => m.name)).toEqual(["Concrete"]);
+  });
+
+  it("does not emit the abstract Base contract", () => {
+    expect(manifests.some((m) => m.name === "Base")).toBe(false);
+  });
+
+  it("does not emit the interface IThing", () => {
+    expect(manifests.some((m) => m.name === "IThing")).toBe(false);
+  });
+
+  it("still resolves functions inherited from the abstract base onto the concrete contract", () => {
+    const concrete = manifests.find((m) => m.name === "Concrete")!;
+    const baseFn = concrete.functions.find((f) => f.name === "baseFn");
+    expect(baseFn).toBeDefined();
+    // The abstract base is still indexed, so declaredIn resolves to its name.
+    expect(baseFn!.declaredIn).toBe("Base");
+    // The concrete contract's own function is also present.
+    expect(concrete.functions.some((f) => f.name === "concreteFn")).toBe(true);
+  });
+
+  it("preserves the concrete contract's own constructor args", () => {
+    const concrete = manifests.find((m) => m.name === "Concrete")!;
+    expect(concrete.constructorArgs).toEqual([{ name: "owner_", type: "address" }]);
   });
 });
 
