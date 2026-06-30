@@ -36,8 +36,6 @@ function makeNode(
     onUpdateDeployId: vi.fn(),
     onUpdateContractName: vi.fn(),
     onUpdateArgSlot: vi.fn(),
-    onAddArg: vi.fn(),
-    onRemoveArg: vi.fn(),
   };
   return {
     id,

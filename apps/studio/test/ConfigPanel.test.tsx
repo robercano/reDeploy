@@ -25,8 +25,6 @@ function makeData(overrides: Partial<ContractNodeData> = {}): ContractNodeData {
     onUpdateDeployId: () => {},
     onUpdateContractName: () => {},
     onUpdateArgSlot: () => {},
-    onAddArg: () => {},
-    onRemoveArg: () => {},
     ...overrides,
   };
 }

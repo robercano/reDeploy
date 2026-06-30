@@ -3,13 +3,18 @@
  *
  * Unit tests for the useGraph hook, covering functions not exercised by
  * the component-level App tests: onConnect paths, updateSetXStep,
- * updateGrantRoleStep, arg slot management.
+ * updateGrantRoleStep, arg slot updates.
+ *
+ * Nodes are added exclusively via addContractFromManifest(manifest) — the only
+ * public node-creation entry point. Synthetic ContractManifest fixtures supply
+ * the constructor arg slots (one ArgSlot per constructorArgs entry).
  */
 
 import { describe, it, expect } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useGraph } from "../src/hooks/useGraph";
 import type { ContractNodeData, StudioEdgeData } from "../src/spec/types";
+import type { ContractManifest } from "../src/manifest/types";
 
 // Helper to access typed node data from the widened Record<string, unknown>
 function nd(node: { data: Record<string, unknown> }): ContractNodeData {
@@ -21,30 +26,67 @@ function ed(edge: { data?: Record<string, unknown> }): StudioEdgeData | undefine
 }
 
 // ---------------------------------------------------------------------------
-// addContractNode
+// Synthetic manifest fixtures
 // ---------------------------------------------------------------------------
 
-describe("useGraph — addContractNode", () => {
+/** A no-arg manifest — produces a node with zero arg slots. */
+const REGISTRY_MANIFEST: ContractManifest = {
+  name: "Registry",
+  sourcePath: "src/Registry.sol",
+  packageSegments: ["src"],
+  constructorArgs: [],
+  inheritance: ["Registry"],
+  functions: [],
+};
+
+/** A single-arg manifest — produces a node with one arg slot at index 0. */
+const ONE_ARG_MANIFEST: ContractManifest = {
+  name: "Token",
+  sourcePath: "src/Token.sol",
+  packageSegments: ["src"],
+  constructorArgs: [{ name: "name_", type: "string" }],
+  inheritance: ["Token"],
+  functions: [],
+};
+
+/** VaultERC4626-style fixture with four constructor args. */
+const VAULT_MANIFEST: ContractManifest = {
+  name: "VaultERC4626",
+  sourcePath: "src/VaultERC4626.sol",
+  packageSegments: ["src"],
+  constructorArgs: [
+    { name: "asset_", type: "contract IERC20" },
+    { name: "oracle_", type: "contract IOracle" },
+    { name: "name_", type: "string" },
+    { name: "symbol_", type: "string" },
+  ],
+  inheritance: ["VaultERC4626", "ERC4626"],
+  functions: [],
+};
+
+// ---------------------------------------------------------------------------
+// addContractFromManifest — basics
+// ---------------------------------------------------------------------------
+
+describe("useGraph — addContractFromManifest basics", () => {
   it("starts with empty nodes", () => {
     const { result } = renderHook(() => useGraph());
     expect(result.current.nodes).toHaveLength(0);
   });
 
-  it("adds a node on addContractNode", () => {
+  it("adds a node on addContractFromManifest", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     expect(result.current.nodes).toHaveLength(1);
     expect(result.current.nodes[0].type).toBe("contractNode");
   });
 
   it("node data contains callback functions", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const data = result.current.nodes[0].data;
     expect(typeof data.onUpdateDeployId).toBe("function");
     expect(typeof data.onUpdateContractName).toBe("function");
-    expect(typeof data.onAddArg).toBe("function");
-    expect(typeof data.onRemoveArg).toBe("function");
     expect(typeof data.onUpdateArgSlot).toBe("function");
   });
 });
@@ -56,7 +98,7 @@ describe("useGraph — addContractNode", () => {
 describe("useGraph — node data callbacks", () => {
   it("onUpdateDeployId updates deployId", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "myToken"));
@@ -65,58 +107,21 @@ describe("useGraph — node data callbacks", () => {
 
   it("onUpdateContractName updates contractName", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => nd(result.current.nodes[0]).onUpdateContractName(nodeId, "Token"));
     expect(nd(result.current.nodes[0]).contractName).toBe("Token");
   });
 
-  it("onAddArg adds an arg slot starting at index 0", () => {
-    const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    const nodeId = result.current.nodes[0].id;
-
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
-    expect(nd(result.current.nodes[0]).args).toHaveLength(1);
-    expect(nd(result.current.nodes[0]).args[0].index).toBe(0);
-  });
-
-  it("onAddArg increments index for subsequent args", () => {
-    const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    const nodeId = result.current.nodes[0].id;
-
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
-    const args = nd(result.current.nodes[0]).args;
-    expect(args).toHaveLength(2);
-    expect(args[0].index).toBe(0);
-    expect(args[1].index).toBe(1);
-  });
-
   it("onUpdateArgSlot updates the arg value at given index", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(ONE_ARG_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
+    expect(nd(result.current.nodes[0]).args).toHaveLength(1);
     act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, "hello"));
     expect(nd(result.current.nodes[0]).args[0].value).toBe("hello");
-  });
-
-  it("onRemoveArg removes the arg at given index", () => {
-    const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
-    const nodeId = result.current.nodes[0].id;
-
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
-    act(() => nd(result.current.nodes[0]).onAddArg(nodeId));
-    expect(nd(result.current.nodes[0]).args).toHaveLength(2);
-
-    act(() => nd(result.current.nodes[0]).onRemoveArg(nodeId, 0));
-    expect(nd(result.current.nodes[0]).args).toHaveLength(1);
-    expect(nd(result.current.nodes[0]).args[0].index).toBe(1);
   });
 });
 
@@ -128,8 +133,8 @@ describe("useGraph — onConnect (constructorRef)", () => {
   it("adds a constructorRef edge when target handle contains -arg-", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
-      result.current.addContractNode();
-      result.current.addContractNode();
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(VAULT_MANIFEST);
     });
 
     const [n1, n2] = result.current.nodes;
@@ -152,8 +157,8 @@ describe("useGraph — onConnect (constructorRef)", () => {
   it("parses arg index correctly from handle", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
-      result.current.addContractNode();
-      result.current.addContractNode();
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(VAULT_MANIFEST);
     });
 
     const [n1, n2] = result.current.nodes;
@@ -181,8 +186,8 @@ describe("useGraph — onConnect (wire)", () => {
   it("adds a wire edge when target handle does not contain -arg-", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
-      result.current.addContractNode();
-      result.current.addContractNode();
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
     });
 
     const [n1, n2] = result.current.nodes;
@@ -206,8 +211,8 @@ describe("useGraph — onConnect (wire)", () => {
   it("adds a wire edge when targetHandle is null", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
-      result.current.addContractNode();
-      result.current.addContractNode();
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
     });
 
     const [n1, n2] = result.current.nodes;
@@ -232,7 +237,7 @@ describe("useGraph — onConnect (wire)", () => {
 describe("useGraph — config steps", () => {
   it("addConfigStep adds a setX step", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "setX"));
@@ -242,7 +247,7 @@ describe("useGraph — config steps", () => {
 
   it("addConfigStep adds a grantRole step", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "grantRole"));
@@ -252,7 +257,7 @@ describe("useGraph — config steps", () => {
 
   it("removeConfigStep removes by step id", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "setX"));
@@ -264,7 +269,7 @@ describe("useGraph — config steps", () => {
 
   it("updateSetXStep updates functionName", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "setX"));
@@ -281,7 +286,7 @@ describe("useGraph — config steps", () => {
 
   it("updateSetXStep updates args", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "setX"));
@@ -296,7 +301,7 @@ describe("useGraph — config steps", () => {
 
   it("updateGrantRoleStep updates role and accountValue", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "grantRole"));
@@ -319,7 +324,7 @@ describe("useGraph — config steps", () => {
 
   it("updateSetXStep does not affect grantRole steps", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "grantRole"));
@@ -333,7 +338,7 @@ describe("useGraph — config steps", () => {
 
   it("updateGrantRoleStep does not affect setX steps", () => {
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
     act(() => result.current.addConfigStep(nodeId, "setX"));
@@ -371,25 +376,8 @@ describe("useGraph — selectedNodeId", () => {
 });
 
 // ---------------------------------------------------------------------------
-// addContractFromManifest
+// addContractFromManifest — arg-slot derivation
 // ---------------------------------------------------------------------------
-
-import type { ContractManifest } from "../src/manifest/types";
-
-/** VaultERC4626-style fixture with four constructor args. */
-const VAULT_MANIFEST: ContractManifest = {
-  name: "VaultERC4626",
-  sourcePath: "src/VaultERC4626.sol",
-  packageSegments: ["src"],
-  constructorArgs: [
-    { name: "asset_", type: "contract IERC20" },
-    { name: "oracle_", type: "contract IOracle" },
-    { name: "name_", type: "string" },
-    { name: "symbol_", type: "string" },
-  ],
-  inheritance: ["VaultERC4626", "ERC4626"],
-  functions: [],
-};
 
 describe("useGraph — addContractFromManifest", () => {
   it("creates one node with contractName set to manifest name", () => {
@@ -495,8 +483,6 @@ describe("useGraph — addContractFromManifest", () => {
     const data = result.current.nodes[0].data;
     expect(typeof data.onUpdateDeployId).toBe("function");
     expect(typeof data.onUpdateContractName).toBe("function");
-    expect(typeof data.onAddArg).toBe("function");
-    expect(typeof data.onRemoveArg).toBe("function");
     expect(typeof data.onUpdateArgSlot).toBe("function");
   });
 
@@ -528,16 +514,8 @@ describe("useGraph — addContractFromManifest", () => {
   });
 
   it("handles a manifest with zero constructor args", () => {
-    const noArgManifest: ContractManifest = {
-      name: "Registry",
-      sourcePath: "src/Registry.sol",
-      packageSegments: ["src"],
-      constructorArgs: [],
-      inheritance: ["Registry"],
-      functions: [],
-    };
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractFromManifest(noArgManifest));
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
 
     expect(nd(result.current.nodes[0]).contractName).toBe("Registry");
     expect(nd(result.current.nodes[0]).args).toHaveLength(0);

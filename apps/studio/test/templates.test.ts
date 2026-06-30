@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useGraph } from "../src/hooks/useGraph";
 import type { ContractNodeData, StudioEdgeData } from "../src/spec/types";
+import type { ContractManifest } from "../src/manifest/types";
 import { BUILTIN_TEMPLATES } from "../src/templates/builtin";
 import { graphToSpec } from "../src/spec/graph-to-spec";
 import type { GraphNode, GraphEdge } from "../src/spec/graph-to-spec";
@@ -41,6 +42,16 @@ function ed(edge: { data?: Record<string, unknown> }): StudioEdgeData | undefine
 const vaultTemplate = BUILTIN_TEMPLATES.find((t) => t.id === "erc4626-vault-stack");
 if (!vaultTemplate) throw new Error("ERC4626 Vault Stack template not found in BUILTIN_TEMPLATES");
 const VAULT_TEMPLATE = vaultTemplate;
+
+/** A no-arg manifest used to add a plain node via the single add path. */
+const REGISTRY_MANIFEST: ContractManifest = {
+  name: "Registry",
+  sourcePath: "src/Registry.sol",
+  packageSegments: ["src"],
+  constructorArgs: [],
+  inheritance: ["Registry"],
+  functions: [],
+};
 
 // ---------------------------------------------------------------------------
 // 1. instantiateTemplate — node/edge counts
@@ -84,8 +95,6 @@ describe("instantiateTemplate — ERC4626 Vault Stack", () => {
       expect(typeof data.onUpdateDeployId).toBe("function");
       expect(typeof data.onUpdateContractName).toBe("function");
       expect(typeof data.onUpdateArgSlot).toBe("function");
-      expect(typeof data.onAddArg).toBe("function");
-      expect(typeof data.onRemoveArg).toBe("function");
     }
   });
 
@@ -200,10 +209,10 @@ describe("instantiateTemplate — collision-free ids", () => {
   });
 
   it("template Token node gets a deduped deployId when an existing node's deployId collides", () => {
-    // Arrange: manually add a node via addContractNode and then set its deployId to "Token"
-    // to simulate a collision with the template's Token seed.
+    // Arrange: manually add a node via addContractFromManifest and then set its
+    // deployId to "Token" to simulate a collision with the template's Token seed.
     const { result } = renderHook(() => useGraph());
-    act(() => result.current.addContractNode());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     // Set the deployId of the manually added node to "Token" (same seed as template)
     act(() => {
       const existingNode = result.current.nodes[0];

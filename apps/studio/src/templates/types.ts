@@ -11,7 +11,7 @@
  * ## Node shape
  * TemplateNode carries the fields needed to build a ContractNodeData MINUS the
  * injected callbacks (onUpdateDeployId, etc.). Callbacks are added at
- * instantiation time, exactly like addContractNode / addContractFromManifest.
+ * instantiation time, exactly like addContractFromManifest.
  *
  * ## Edge shape
  * TemplateEdge describes source template-local-id → target template-local-id

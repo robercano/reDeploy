@@ -41,6 +41,11 @@ interface ContractDefinitionNode extends AstNode {
   id: number;
   name: string;
   contractKind: "contract" | "interface" | "library";
+  /**
+   * True for `abstract contract` declarations. Absent on older solc output,
+   * in which case the contract is treated as concrete (deployable).
+   */
+  abstract?: boolean;
   linearizedBaseContracts: number[];
   nodes: AstNode[];
 }
@@ -263,8 +268,12 @@ function deriveManifest(
  *   1. Deduplicates outputs by absolutePath (the same source file's AST appears
  *      in multiple contract output files when contracts share a source).
  *   2. Builds a global id→name map across all ASTs for cross-contract resolution.
- *   3. For each unique source file, walks ContractDefinition nodes whose
- *      contractKind === "contract".
+ *   3. For each unique source file, walks ContractDefinition nodes that are
+ *      deployable: contractKind === "contract" AND not `abstract`. Interfaces,
+ *      libraries, and abstract bases (e.g. OZ ERC4626, forge-std Test) are
+ *      excluded from the manifest so they never appear as deployable in the
+ *      studio's Contracts Browser. Note: abstract/interface/library nodes are
+ *      still indexed in buildIdMaps so inherited functions resolve correctly.
  *   4. Returns manifests sorted by (sourcePath, contractName) for stable output.
  */
 export function deriveManifests(outputs: FoundryContractOutput[]): ContractManifest[] {
@@ -290,7 +299,10 @@ export function deriveManifests(outputs: FoundryContractOutput[]): ContractManif
     for (const node of ast.nodes) {
       if (node.nodeType !== "ContractDefinition") continue;
       const c = node as ContractDefinitionNode;
+      // Deployable contracts only: concrete `contract` declarations.
+      // Interfaces, libraries, and abstract contracts are not deployable.
       if (c.contractKind !== "contract") continue;
+      if (c.abstract === true) continue;
 
       manifests.push(deriveManifest(c, sourcePath, idToName, idToContractNodes));
     }

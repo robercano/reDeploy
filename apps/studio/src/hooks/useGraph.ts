@@ -64,17 +64,21 @@ interface UseGraphReturn {
   onNodesChange: OnNodesChange<ContractFlowNode>;
   onEdgesChange: OnEdgesChange<StudioFlowEdge>;
   onConnect: (connection: Connection) => void;
-  addContractNode: () => void;
   /**
    * Add a pre-filled contract node from a ContractManifest entry.
+   *
+   * This is the single entry point for adding contracts to the canvas: nodes
+   * are always created from the Contracts Browser manifest, so their
+   * constructor arg slots are derived from the real ABI (one ArgSlot per
+   * constructor parameter) and are fixed for the node's lifetime.
    *
    * Sets contractName = manifest.name, deployId = "" (user fills it),
    * and creates one ArgSlot per constructorArg with the param name and type
    * stored for display purposes only (not serialized to the spec).
    *
    * @param manifest  - The ContractManifest to pre-fill from.
-   * @param position  - Optional canvas position. When omitted, uses the same
-   *                    auto-offset pattern as addContractNode.
+   * @param position  - Optional canvas position. When omitted, uses an
+   *                    auto-offset based on the node counter.
    */
   addContractFromManifest: (
     manifest: ContractManifest,
@@ -167,28 +171,6 @@ export function useGraph(): UseGraphReturn {
     [updateNodeData],
   );
 
-  const addArgSlot = useCallback(
-    (nodeId: string) =>
-      updateNodeData(nodeId, (d) => {
-        const nextIndex =
-          d.args.length > 0 ? Math.max(...d.args.map((a) => a.index)) + 1 : 0;
-        return {
-          ...d,
-          args: [...d.args, { index: nextIndex, kind: "literal" as const, value: "" }],
-        };
-      }),
-    [updateNodeData],
-  );
-
-  const removeArgSlot = useCallback(
-    (nodeId: string, slotIndex: number) =>
-      updateNodeData(nodeId, (d) => ({
-        ...d,
-        args: d.args.filter((slot) => slot.index !== slotIndex),
-      })),
-    [updateNodeData],
-  );
-
   // ---- React Flow change handlers -------------------------------------------
 
   const onNodesChange: OnNodesChange<ContractFlowNode> = useCallback((changes) => {
@@ -233,29 +215,6 @@ export function useGraph(): UseGraphReturn {
 
   // ---- Node management ------------------------------------------------------
 
-  const addContractNode = useCallback(() => {
-    const id = makeNodeId();
-    const nodeData: ContractNodeData = {
-      deployId: "",
-      contractName: "",
-      args: [],
-      after: [],
-      configSteps: [],
-      onUpdateDeployId: updateDeployId,
-      onUpdateContractName: updateContractName,
-      onUpdateArgSlot: updateArgSlot,
-      onAddArg: addArgSlot,
-      onRemoveArg: removeArgSlot,
-    };
-    const newNode: ContractFlowNode = {
-      id,
-      type: "contractNode",
-      position: { x: 100 + (nodeCounter - 1) * 250, y: 100 },
-      data: nodeData as unknown as Record<string, unknown>,
-    };
-    setNodes((nds) => [...nds, newNode]);
-  }, [updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot]);
-
   const addContractFromManifest = useCallback(
     (manifest: ContractManifest, position?: { x: number; y: number }) => {
       const id = makeNodeId();
@@ -275,8 +234,6 @@ export function useGraph(): UseGraphReturn {
         onUpdateDeployId: updateDeployId,
         onUpdateContractName: updateContractName,
         onUpdateArgSlot: updateArgSlot,
-        onAddArg: addArgSlot,
-        onRemoveArg: removeArgSlot,
       };
       const newNode: ContractFlowNode = {
         id,
@@ -286,7 +243,7 @@ export function useGraph(): UseGraphReturn {
       };
       setNodes((nds) => [...nds, newNode]);
     },
-    [updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot],
+    [updateDeployId, updateContractName, updateArgSlot],
   );
 
   // ---- Template instantiation -----------------------------------------------
@@ -294,9 +251,8 @@ export function useGraph(): UseGraphReturn {
   const instantiateTemplate = useCallback(
     (template: Template) => {
       // Collect existing deployIds from the current nodes closure value to detect
-      // collisions. This mirrors the pattern used in addContractNode (reads from
-      // closure rather than inside an updater) so both nodes and edges are built
-      // from the same consistent snapshot.
+      // collisions. Reads from the closure value rather than inside an updater
+      // so both nodes and edges are built from the same consistent snapshot.
       const existingDeployIds = new Set<string>(
         nodes.map((n) => (n.data as unknown as ContractNodeData).deployId),
       );
@@ -343,8 +299,6 @@ export function useGraph(): UseGraphReturn {
           onUpdateDeployId: updateDeployId,
           onUpdateContractName: updateContractName,
           onUpdateArgSlot: updateArgSlot,
-          onAddArg: addArgSlot,
-          onRemoveArg: removeArgSlot,
         };
         return {
           id: realId,
@@ -381,7 +335,7 @@ export function useGraph(): UseGraphReturn {
       setNodes((prev) => [...prev, ...newNodes]);
       setEdges((prev) => [...prev, ...newEdges]);
     },
-    [nodes, updateDeployId, updateContractName, updateArgSlot, addArgSlot, removeArgSlot],
+    [nodes, updateDeployId, updateContractName, updateArgSlot],
   );
 
   // ---- Config steps ---------------------------------------------------------
@@ -449,7 +403,6 @@ export function useGraph(): UseGraphReturn {
     onNodesChange,
     onEdgesChange,
     onConnect,
-    addContractNode,
     addContractFromManifest,
     instantiateTemplate,
     setSelectedNodeId,
