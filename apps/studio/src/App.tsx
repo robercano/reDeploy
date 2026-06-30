@@ -55,6 +55,7 @@ import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
 import type { ContractNodeData } from "./spec/types.js";
+import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
@@ -325,45 +326,14 @@ export function App() {
     return graphToSpec(graphNodes, graphEdges);
   }, [nodes, edges]);
 
-  // Compute refSourceDeployIds for each node: maps argIndex → source deployId
-  // for every slot that has an incoming constructorRef edge.
-  // This is DISPLAY-ONLY data — not serialized. Recomputed on any nodes/edges change.
-  const enrichedNodes = useMemo(() => {
-    // Build a lookup: nodeId → deployId (for source node resolution)
-    const deployIdByNodeId = new Map<string, string>(
-      nodes.map((n) => {
-        const d = n.data as unknown as ContractNodeData;
-        return [n.id, d.deployId];
-      }),
-    );
-
-    // Build per-target-node map: targetNodeId → (argIndex → sourceDeployId)
-    const refMap = new Map<string, Map<number, string>>();
-    for (const edge of edges) {
-      const edgeData = edge.data as unknown as { edgeKind?: string; argIndex?: number } | undefined;
-      if (!edgeData || edgeData.edgeKind === "constructorRef") {
-        const argIndex = edgeData?.argIndex ?? 0;
-        const sourceDeployId = deployIdByNodeId.get(edge.source) ?? edge.source;
-        if (!refMap.has(edge.target)) {
-          refMap.set(edge.target, new Map());
-        }
-        refMap.get(edge.target)!.set(argIndex, sourceDeployId);
-      }
-    }
-
-    // Return nodes enriched with refSourceDeployIds in their data
-    return nodes.map((n) => {
-      const refSourceDeployIds = refMap.get(n.id);
-      if (!refSourceDeployIds) return n;
-      return {
-        ...n,
-        data: {
-          ...n.data,
-          refSourceDeployIds,
-        },
-      };
-    });
-  }, [nodes, edges]);
+  // Enrich nodes with display-only refSourceDeployIds maps derived from
+  // constructorRef edges. The derivation logic lives in enrich-nodes.ts
+  // (pure, UI-agnostic, and unit-tested there). Recomputed whenever nodes
+  // or edges change so the displayed "{deployId}.address" stays live.
+  const enrichedNodes = useMemo(
+    () => enrichNodesWithRefSources(nodes, edges),
+    [nodes, edges],
+  );
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
