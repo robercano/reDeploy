@@ -325,6 +325,46 @@ export function App() {
     return graphToSpec(graphNodes, graphEdges);
   }, [nodes, edges]);
 
+  // Compute refSourceDeployIds for each node: maps argIndex → source deployId
+  // for every slot that has an incoming constructorRef edge.
+  // This is DISPLAY-ONLY data — not serialized. Recomputed on any nodes/edges change.
+  const enrichedNodes = useMemo(() => {
+    // Build a lookup: nodeId → deployId (for source node resolution)
+    const deployIdByNodeId = new Map<string, string>(
+      nodes.map((n) => {
+        const d = n.data as unknown as ContractNodeData;
+        return [n.id, d.deployId];
+      }),
+    );
+
+    // Build per-target-node map: targetNodeId → (argIndex → sourceDeployId)
+    const refMap = new Map<string, Map<number, string>>();
+    for (const edge of edges) {
+      const edgeData = edge.data as unknown as { edgeKind?: string; argIndex?: number } | undefined;
+      if (!edgeData || edgeData.edgeKind === "constructorRef") {
+        const argIndex = edgeData?.argIndex ?? 0;
+        const sourceDeployId = deployIdByNodeId.get(edge.source) ?? edge.source;
+        if (!refMap.has(edge.target)) {
+          refMap.set(edge.target, new Map());
+        }
+        refMap.get(edge.target)!.set(argIndex, sourceDeployId);
+      }
+    }
+
+    // Return nodes enriched with refSourceDeployIds in their data
+    return nodes.map((n) => {
+      const refSourceDeployIds = refMap.get(n.id);
+      if (!refSourceDeployIds) return n;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          refSourceDeployIds,
+        },
+      };
+    });
+  }, [nodes, edges]);
+
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
     [setSelectedNodeId],
@@ -332,7 +372,7 @@ export function App() {
 
   const onPaneClick = useCallback(() => setSelectedNodeId(null), [setSelectedNodeId]);
 
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  const selectedNode = enrichedNodes.find((n) => n.id === selectedNodeId);
 
   // Derive deploy targets from all graph nodes — used by ConfigPanel's setX target picker.
   // Dedup by deployId so the picker never receives duplicate keys (duplicate deployIds are
@@ -384,7 +424,7 @@ export function App() {
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
-            nodes={nodes}
+            nodes={enrichedNodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}

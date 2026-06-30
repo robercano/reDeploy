@@ -74,9 +74,10 @@ describe("App — handleDrop (canvas-drop-target)", () => {
     // A node should have been added
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
 
-    // The node should display the contract name in the contract-name input
-    const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
-    expect(contractNameInput.value).toBe("VaultERC4626");
+    // The node should display the contract name as a read-only label (not an input)
+    const contractNameLabel = screen.getByLabelText("contract-name");
+    expect(contractNameLabel.tagName.toLowerCase()).not.toBe("input");
+    expect(contractNameLabel.textContent).toBe("VaultERC4626");
   });
 
   it("drops a known Vault uniqueId and adds a node with contractName Vault", () => {
@@ -95,8 +96,9 @@ describe("App — handleDrop (canvas-drop-target)", () => {
     });
 
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
-    const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
-    expect(contractNameInput.value).toBe("Vault");
+    const contractNameLabel = screen.getByLabelText("contract-name");
+    expect(contractNameLabel.tagName.toLowerCase()).not.toBe("input");
+    expect(contractNameLabel.textContent).toBe("Vault");
   });
 
   it("NEGATIVE: dropping an empty uniqueId adds NO node (covers if (!uniqueId) return)", () => {
@@ -203,9 +205,10 @@ describe("App — click-add through ContractsBrowser", () => {
     // A node should have been added
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
 
-    // The contract-name input should be pre-filled with "Vault"
-    const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
-    expect(contractNameInput.value).toBe("Vault");
+    // The contract-name should be shown as a read-only label pre-filled with "Vault"
+    const contractNameLabel = screen.getByLabelText("contract-name");
+    expect(contractNameLabel.tagName.toLowerCase()).not.toBe("input");
+    expect(contractNameLabel.textContent).toBe("Vault");
   });
 
   it("clicking two different contract rows adds two nodes", () => {
@@ -219,9 +222,9 @@ describe("App — click-add through ContractsBrowser", () => {
 
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(2);
 
-    // Both contract names should be pre-filled
-    const contractNameInputs = screen.getAllByLabelText("contract-name") as HTMLInputElement[];
-    const names = contractNameInputs.map((i) => i.value);
+    // Both contract names should be pre-filled as read-only labels
+    const contractNameLabels = screen.getAllByLabelText("contract-name");
+    const names = contractNameLabels.map((el) => el.textContent);
     expect(names).toContain("Vault");
     expect(names).toContain("Registry");
   });
@@ -252,9 +255,10 @@ describe("App — click-add through ContractsBrowser", () => {
     const vaultRow = screen.getByTestId("contract-row-VaultERC4626");
     fireEvent.click(vaultRow);
 
-    // Node should appear with contractName = "VaultERC4626"
+    // Node should appear with contractName = "VaultERC4626" shown as a read-only label
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
-    const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
-    expect(contractNameInput.value).toBe("VaultERC4626");
+    const contractNameLabel = screen.getByLabelText("contract-name");
+    expect(contractNameLabel.tagName.toLowerCase()).not.toBe("input");
+    expect(contractNameLabel.textContent).toBe("VaultERC4626");
   });
 });

@@ -113,14 +113,15 @@ describe("App — add contract node", () => {
     expect(deployIdInput.value).toBe("myToken");
   });
 
-  it("editing contract-name input updates the node data", () => {
+  it("contract-name is rendered as read-only label (not an editable input)", () => {
     render(<App />);
     addNodeByName("Token");
 
-    const contractNameInput = screen.getByLabelText("contract-name") as HTMLInputElement;
-    fireEvent.change(contractNameInput, { target: { value: "ERC20Token" } });
-
-    expect(contractNameInput.value).toBe("ERC20Token");
+    // Contract name is now a static div label, not an editable input.
+    // It should be present as a labeled element with the manifest-derived name.
+    const contractNameLabel = screen.getByLabelText("contract-name");
+    expect(contractNameLabel.tagName.toLowerCase()).not.toBe("input");
+    expect(contractNameLabel.textContent).toBe("Token");
   });
 
   it("derives constructor arg slots from the clicked manifest (Token → name_, symbol_)", () => {
