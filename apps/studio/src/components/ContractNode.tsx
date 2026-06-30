@@ -83,12 +83,15 @@ function ArgRow({
   nodeId,
   onUpdate,
   refSourceDeployId,
+  isOverview,
 }: {
   slot: ArgSlot;
   nodeId: string;
   onUpdate: (index: number, value: string) => void;
   /** When defined, the slot is bound by a constructorRef edge to this deploy ID. */
   refSourceDeployId?: string;
+  /** When true, the visible arg content is hidden (overview mode). */
+  isOverview?: boolean;
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
   const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
@@ -96,45 +99,56 @@ function ArgRow({
 
   return (
     <div style={argRowStyle}>
+      {/*
+        The Handle MUST always be mounted (even in overview mode) so that
+        constructor-ref edges remain anchored and don't crash React Flow.
+        In overview mode the dot is made invisible via opacity:0 so it doesn't
+        clutter the compact view, while still occupying its layout box so React
+        Flow continues to anchor edge lines to the correct position.
+        DO NOT use display:none — that removes the layout box and drops the anchor.
+      */}
       <Handle
         type="target"
         position={Position.Left}
         id={handleId}
-        style={{ top: "50%", left: -8, background: "#555" }}
+        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? { opacity: 0 } : {}) }}
       />
-      <span style={{ fontSize: 10, color: "#999", minWidth: 12 }}>
-        [{slot.index}]
-      </span>
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
-        {hasParamInfo && (
-          <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
-            {slot.name !== undefined && (
-              <span style={{ ...labelStyle, marginBottom: 0 }}>{slot.name}</span>
-            )}
-            {slot.type !== undefined && (
-              <span style={paramTypeStyle}>{slot.type}</span>
-            )}
-          </div>
-        )}
-        {isBoundByEdge ? (
-          <div
-            style={readonlyValueStyle}
-            title={`Bound by edge to ${refSourceDeployId}`}
-            aria-label={`arg-${slot.index}`}
-            data-ref-value={`${refSourceDeployId}.address`}
-          >
-            {refSourceDeployId}.address
-          </div>
-        ) : (
-          <input
-            style={inputStyle}
-            value={slot.value}
-            placeholder="value"
-            title={`Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
-            onChange={(e) => onUpdate(slot.index, e.target.value)}
-            aria-label={`arg-${slot.index}`}
-          />
-        )}
+      {/* Collapse visible content in overview mode; keep Handle above for edges. */}
+      <div style={isOverview ? { height: 0, overflow: "hidden" } : { flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
+        <span style={{ fontSize: 10, color: "#999", minWidth: 12 }}>
+          [{slot.index}]
+        </span>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
+          {hasParamInfo && (
+            <div style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
+              {slot.name !== undefined && (
+                <span style={{ ...labelStyle, marginBottom: 0 }}>{slot.name}</span>
+              )}
+              {slot.type !== undefined && (
+                <span style={paramTypeStyle}>{slot.type}</span>
+              )}
+            </div>
+          )}
+          {isBoundByEdge ? (
+            <div
+              style={readonlyValueStyle}
+              title={`Bound by edge to ${refSourceDeployId}`}
+              aria-label={`arg-${slot.index}`}
+              data-ref-value={`${refSourceDeployId}.address`}
+            >
+              {refSourceDeployId}.address
+            </div>
+          ) : (
+            <input
+              style={inputStyle}
+              value={slot.value}
+              placeholder="value"
+              title={`Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
+              onChange={(e) => onUpdate(slot.index, e.target.value)}
+              aria-label={`arg-${slot.index}`}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -148,6 +162,7 @@ function ArgRow({
 function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
   // Cast data to our precise type — React Flow stores it as Record<string, unknown>
   const data = rawData as unknown as ContractNodeData;
+  const isOverview = data.viewMode === "overview";
 
   const containerStyle: React.CSSProperties = {
     background: "#fff",
@@ -161,11 +176,15 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
 
   return (
     <div style={containerStyle} data-testid={`contract-node-${id}`}>
+      {/*
+        Wire-target handle: hidden in overview via opacity:0 (layout box preserved
+        so any wire edges remain anchored). Visible in detailed mode.
+      */}
       <Handle
         type="target"
         position={Position.Left}
         id={`${id}-input`}
-        style={{ top: "50%", left: -8, background: "#1a73e8" }}
+        style={{ top: "50%", left: -8, background: "#1a73e8", ...(isOverview ? { opacity: 0 } : {}) }}
       />
 
       <div style={{ marginBottom: 6 }}>
@@ -192,7 +211,9 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
 
       {data.args.length > 0 && (
         <div style={{ marginBottom: 4 }}>
-          <div style={labelStyle}>Constructor Args</div>
+          {/* In overview mode, the section label is also hidden to keep the
+              node compact, but each ArgRow's Handle remains mounted. */}
+          {!isOverview && <div style={labelStyle}>Constructor Args</div>}
           {data.args.map((slot) => (
             <ArgRow
               key={slot.index}
@@ -200,16 +221,21 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
               nodeId={id}
               onUpdate={(idx, val) => data.onUpdateArgSlot(id, idx, val)}
               refSourceDeployId={data.refSourceDeployIds?.get(slot.index)}
+              isOverview={isOverview}
             />
           ))}
         </div>
       )}
 
+      {/*
+        Source output handle: hidden in overview via opacity:0 (layout box
+        preserved so constructor-ref / wire edges remain anchored).
+      */}
       <Handle
         type="source"
         position={Position.Right}
         id={`${id}-output`}
-        style={{ top: "50%", right: -8, background: "#e8711a" }}
+        style={{ top: "50%", right: -8, background: "#e8711a", ...(isOverview ? { opacity: 0 } : {}) }}
       />
     </div>
   );

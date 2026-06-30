@@ -71,6 +71,19 @@ export interface NodeCallbacks {
   onUpdateArgSlot: (nodeId: string, slotIndex: number, value: string) => void;
 }
 
+/**
+ * DISPLAY-ONLY: presentation mode for the canvas.
+ * - "detailed" (default): all constructor arg rows visible and editable.
+ * - "overview": only Deploy ID and Contract Name are shown;
+ *               constructor arg rows are collapsed (height:0/overflow:hidden)
+ *               BUT their React Flow <Handle> elements remain mounted so edges
+ *               stay anchored.
+ * This value is injected into node data by App.tsx and MUST NOT reach
+ * graphToSpec output (graph-to-spec.ts only reads deployId / contractName /
+ * args / after / configSteps).
+ */
+export type ViewMode = "detailed" | "overview";
+
 /** Data stored on each contract node. */
 export interface ContractNodeData extends NodeCallbacks {
   /** Unique deployment id (e.g. "token", "registry"). */
@@ -95,6 +108,12 @@ export interface ContractNodeData extends NodeCallbacks {
    * the entry is absent here, restoring the editable literal input.
    */
   refSourceDeployIds?: Map<number, string>;
+  /**
+   * DISPLAY-ONLY: current canvas presentation mode ("detailed" | "overview").
+   * Injected by App.tsx into each enriched node. NOT serialized by graph-to-spec.ts.
+   * Absent nodes default to "detailed".
+   */
+  viewMode?: ViewMode;
 }
 
 // ---- Config step shapes (studio-internal) ----------------------------------
