@@ -198,9 +198,11 @@ function deriveManifest(
     .filter((n): n is string => n !== undefined);
 
   // functions: collect public/external functions from the entire inheritance chain.
-  // Walk linearizedBaseContracts most-derived-first, collect functions, de-dup by name
-  // (first occurrence wins = most-derived declaration).
-  const seenFunctions = new Set<string>();
+  // Walk linearizedBaseContracts most-derived-first, collect functions, de-dup by
+  // CANONICAL SIGNATURE = name(type1,type2,...) so overloaded functions with the same
+  // name but different parameter types are kept as distinct entries. First occurrence
+  // wins per signature = most-derived declaration.
+  const seenSignatures = new Set<string>();
   const functions: ManifestFunction[] = [];
 
   for (const baseId of contractNode.linearizedBaseContracts) {
@@ -216,17 +218,22 @@ function deriveManifest(
       if (fn.visibility !== "public" && fn.visibility !== "external") continue;
 
       const fnName = fn.name;
-      // De-dup: keep most-derived declaration (first seen)
-      if (seenFunctions.has(fnName)) continue;
-      seenFunctions.add(fnName);
-
       const inputs: ManifestFunctionInput[] = fn.parameters.parameters.map((p) => ({
         name: p.name,
         type: p.typeDescriptions.typeString,
       }));
 
+      // Build canonical signature: name(type1,type2,...) — no spaces between types
+      const signature = `${fnName}(${inputs.map((i) => i.type).join(",")})`;
+
+      // De-dup by signature: keep most-derived declaration (first seen per signature).
+      // Distinct signatures with the same name are kept as separate entries.
+      if (seenSignatures.has(signature)) continue;
+      seenSignatures.add(signature);
+
       functions.push({
         name: fnName,
+        signature,
         declaredIn: baseName,
         inputs,
         stateMutability: fn.stateMutability,

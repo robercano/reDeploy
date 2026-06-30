@@ -1,16 +1,21 @@
 /**
  * TemplateGallery.tsx
  *
- * A toolbar button ("Templates") that opens a modal listing built-in templates.
- * Choosing a template calls onInstantiate(template) and then surfaces the
- * template's params so the user knows which arg slots to fill.
+ * A toolbar button ("Templates") that opens a modal listing built-in templates
+ * AND user-saved templates. Choosing a template calls onInstantiate(template)
+ * and then surfaces the template's params so the user knows which arg slots to
+ * fill. User templates have a delete button; built-in templates do not.
  *
  * Styling mirrors SpecExporter.tsx (overlayStyle/modalStyle, close button,
  * data-testid conventions).
  *
  * ## Usage
  *
- *   <TemplateGallery onInstantiate={instantiateTemplate} />
+ *   <TemplateGallery
+ *     onInstantiate={instantiateTemplate}
+ *     userTemplates={userTemplates}
+ *     onDelete={deleteTemplate}
+ *   />
  *
  * The actual arg editing happens in the existing ContractNode UI — the gallery
  * only shows a read-only checklist of param labels/hints after instantiation.
@@ -112,9 +117,11 @@ function ParamChecklist({ params }: { params: TemplateParam[] }) {
 function TemplateCard({
   template,
   onChoose,
+  onDelete,
 }: {
   template: Template;
   onChoose: (t: Template) => void;
+  onDelete?: (id: string) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -133,11 +140,38 @@ function TemplateCard({
         }
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{template.name}</div>
-      <div style={{ fontSize: 12, color: "#718096" }}>{template.description}</div>
-      <div style={{ fontSize: 11, color: "#a0aec0", marginTop: 6 }}>
-        {template.nodes.length} contract{template.nodes.length !== 1 ? "s" : ""},
-        {" "}{template.edges.length} edge{template.edges.length !== 1 ? "s" : ""}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{template.name}</div>
+          <div style={{ fontSize: 12, color: "#718096" }}>{template.description}</div>
+          <div style={{ fontSize: 11, color: "#a0aec0", marginTop: 6 }}>
+            {template.nodes.length} contract{template.nodes.length !== 1 ? "s" : ""},
+            {" "}{template.edges.length} edge{template.edges.length !== 1 ? "s" : ""}
+          </div>
+        </div>
+        {onDelete && (
+          <button
+            style={{
+              marginLeft: 8,
+              padding: "2px 8px",
+              cursor: "pointer",
+              borderRadius: 4,
+              border: "1px solid #fed7d7",
+              background: "#fff5f5",
+              color: "#c53030",
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(template.id);
+            }}
+            data-testid={`template-delete-${template.id}`}
+            title="Delete this template"
+          >
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );
@@ -149,13 +183,17 @@ function TemplateCard({
 
 interface TemplateGalleryProps {
   onInstantiate: (template: Template) => void;
+  /** User-saved templates to show alongside built-ins. */
+  userTemplates?: Template[];
+  /** Called when a user template's delete button is clicked. */
+  onDelete?: (id: string) => void;
 }
 
 // ---------------------------------------------------------------------------
 // TemplateGallery
 // ---------------------------------------------------------------------------
 
-export function TemplateGallery({ onInstantiate }: TemplateGalleryProps) {
+export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }: TemplateGalleryProps) {
   const [open, setOpen] = useState(false);
   const [instantiated, setInstantiated] = useState<Template | null>(null);
 
@@ -184,6 +222,8 @@ export function TemplateGallery({ onInstantiate }: TemplateGalleryProps) {
     setInstantiated(null);
   }
 
+  const allTemplatesEmpty = BUILTIN_TEMPLATES.length === 0 && userTemplates.length === 0;
+
   return (
     <div style={overlayStyle} data-testid="template-gallery-modal">
       <div style={modalStyle}>
@@ -208,10 +248,37 @@ export function TemplateGallery({ onInstantiate }: TemplateGalleryProps) {
               Select a template to add a pre-arranged set of contracts to the canvas.
               Fill in the highlighted arg slots before exporting.
             </p>
-            {BUILTIN_TEMPLATES.map((t) => (
-              <TemplateCard key={t.id} template={t} onChoose={handleChoose} />
-            ))}
-            {BUILTIN_TEMPLATES.length === 0 && (
+
+            {/* Built-in templates */}
+            {BUILTIN_TEMPLATES.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#a0aec0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                  Built-in
+                </div>
+                {BUILTIN_TEMPLATES.map((t) => (
+                  <TemplateCard key={t.id} template={t} onChoose={handleChoose} />
+                ))}
+              </div>
+            )}
+
+            {/* User-saved templates */}
+            {userTemplates.length > 0 && (
+              <div style={{ marginTop: BUILTIN_TEMPLATES.length > 0 ? 12 : 0 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#a0aec0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                  My Templates
+                </div>
+                {userTemplates.map((t) => (
+                  <TemplateCard
+                    key={t.id}
+                    template={t}
+                    onChoose={handleChoose}
+                    onDelete={onDelete}
+                  />
+                ))}
+              </div>
+            )}
+
+            {allTemplatesEmpty && (
               <p style={{ color: "#a0aec0", fontSize: 13 }}>No templates available.</p>
             )}
           </div>

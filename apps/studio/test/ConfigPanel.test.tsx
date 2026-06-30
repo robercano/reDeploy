@@ -353,8 +353,13 @@ describe("ConfigPanel — setX step (manifest-driven: Token)", () => {
       />,
     );
     const select = screen.getByLabelText("setx-function-select-n1-step-m1") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "mint" } });
-    expect(onUpdateSetXStep).toHaveBeenCalledWith("n1", "step-m1", { functionName: "mint", args: [] });
+    // The select value is now the canonical signature, not the bare name.
+    fireEvent.change(select, { target: { value: "mint(address,uint256)" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledWith("n1", "step-m1", {
+      functionName: "mint",
+      functionSignature: "mint(address,uint256)",
+      args: [],
+    });
   });
 });
 
@@ -364,6 +369,7 @@ describe("ConfigPanel — setX step (manifest-driven: Token)", () => {
 
 describe("ConfigPanel — setX step (manifest arg labels: Token.mint)", () => {
   // Step with mint selected — has inputs: [to: address, amount: uint256]
+  // The functionSignature must be set to get per-input arg labels.
   const dataWithMint = makeData({
     deployId: "token",
     contractName: "Token",
@@ -372,6 +378,7 @@ describe("ConfigPanel — setX step (manifest arg labels: Token.mint)", () => {
         kind: "setX",
         id: "step-mint",
         functionName: "mint",
+        functionSignature: "mint(address,uint256)",
         args: ["0xabc", "1000"],
       },
     ],
@@ -703,6 +710,171 @@ describe("ConfigPanel — grantRole step", () => {
     );
     fireEvent.click(screen.getByTitle("Remove step"));
     expect(onRemoveStep).toHaveBeenCalledWith("n1", "step-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setX step — overloaded function picker (Overloaded contract)
+// ---------------------------------------------------------------------------
+// Tests use the Overloaded contract from src/Overloaded.sol which has:
+//   TWO setLimit overloads: setLimit(uint256) and setLimit(uint256,address).
+// When the name is overloaded, the picker must show full signatures as labels
+// and use the signature as the option value.
+
+const OVERLOADED_TARGET: DeployTarget = { deployId: "overloaded", contractName: "Overloaded" };
+
+describe("ConfigPanel — setX step (overloaded functions: Overloaded contract)", () => {
+  const dataWithSetX = makeData({
+    deployId: "overloaded",
+    contractName: "Overloaded",
+    configSteps: [
+      {
+        kind: "setX",
+        id: "step-ol",
+        functionName: "",
+        args: [],
+      },
+    ],
+  });
+
+  it("renders a function <select> for Overloaded contract", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSetX}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    expect(screen.getByLabelText("setx-function-select-n1-step-ol")).not.toBeNull();
+  });
+
+  it("shows both setLimit overloads as distinct options using full signature labels", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSetX}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    // Both full-signature options must be present (overload labels).
+    const opt1 = screen.getByRole("option", { name: "setLimit(uint256)" });
+    expect(opt1).not.toBeNull();
+    const opt2 = screen.getByRole("option", { name: "setLimit(uint256,address)" });
+    expect(opt2).not.toBeNull();
+  });
+
+  it("selecting setLimit(uint256) calls onUpdateSetXStep with signature", () => {
+    const onUpdateSetXStep = vi.fn();
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSetX}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={onUpdateSetXStep}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const select = screen.getByLabelText("setx-function-select-n1-step-ol") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "setLimit(uint256)" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledWith("n1", "step-ol", {
+      functionName: "setLimit",
+      functionSignature: "setLimit(uint256)",
+      args: [],
+    });
+  });
+
+  it("selecting setLimit(uint256,address) calls onUpdateSetXStep with that signature", () => {
+    const onUpdateSetXStep = vi.fn();
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSetX}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={onUpdateSetXStep}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const select = screen.getByLabelText("setx-function-select-n1-step-ol") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "setLimit(uint256,address)" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledWith("n1", "step-ol", {
+      functionName: "setLimit",
+      functionSignature: "setLimit(uint256,address)",
+      args: [],
+    });
+  });
+
+  it("arg labels resolve to correct inputs when setLimit(uint256,address) is selected", () => {
+    const dataWithSignature = makeData({
+      deployId: "overloaded",
+      contractName: "Overloaded",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-ol2",
+          functionName: "setLimit",
+          functionSignature: "setLimit(uint256,address)",
+          args: ["100", "0xabc"],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSignature}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const arg0 = screen.getByLabelText("setx-arg-n1-step-ol2-0") as HTMLInputElement;
+    expect(arg0.placeholder).toBe("uint256");
+    const arg1 = screen.getByLabelText("setx-arg-n1-step-ol2-1") as HTMLInputElement;
+    expect(arg1.placeholder).toBe("address");
+  });
+
+  it("arg labels resolve to correct inputs when setLimit(uint256) is selected", () => {
+    const dataWithSignature = makeData({
+      deployId: "overloaded",
+      contractName: "Overloaded",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-ol3",
+          functionName: "setLimit",
+          functionSignature: "setLimit(uint256)",
+          args: ["42"],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithSignature}
+        deployTargets={[OVERLOADED_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const arg0 = screen.getByLabelText("setx-arg-n1-step-ol3-0") as HTMLInputElement;
+    expect(arg0.placeholder).toBe("uint256");
+    // Only one arg for the one-arg overload.
+    expect(() => screen.getByLabelText("setx-arg-n1-step-ol3-1")).toThrow();
   });
 });
 

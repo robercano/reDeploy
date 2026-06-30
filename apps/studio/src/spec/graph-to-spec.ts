@@ -39,17 +39,18 @@ import type {
   ContractEntry,
   ContractArg,
   LiteralValue,
-} from "@redeploy/core";
+} from "@redeploy/core/spec";
 import type {
   ConfigSpec,
   ConfigStep,
   ConfigArg,
-} from "@redeploy/config";
+} from "@redeploy/config/steps";
 import type {
   StudioEdgeData,
   ArgSlot,
   StudioConfigStep,
 } from "./types";
+import { getContract } from "../manifest/index.js";
 
 // ---------------------------------------------------------------------------
 // Input types accepted by graphToSpec
@@ -156,12 +157,61 @@ function buildConfigArg(kind: "literal" | "ref", value: string): ConfigArg {
 }
 
 /**
+ * Resolve the `function` field value for a setX config step.
+ *
+ * Rules:
+ * - If `step.functionSignature` is set AND the function name is overloaded on the
+ *   TARGET contract (multiple manifest entries share the same bare name), emit the
+ *   full canonical signature (e.g. `"setLimit(uint256,address)"`).
+ * - Otherwise emit the bare name (e.g. `"setLimit"`). This keeps backward
+ *   compatibility: existing non-overloaded specs continue to emit bare names.
+ * - If the contract is not in the manifest (free-text fallback), always emit the
+ *   bare `functionName`.
+ *
+ * IMPORTANT: `targetContractName` must be the Solidity artifact name of the step's
+ * TARGET contract (resolved from step.target's node, not the attached node). The
+ * ConfigPanel picker already resolves the manifest from the target deployId when
+ * storing functionSignature, so the serializer must mirror that resolution here.
+ *
+ * @param step               - The studio setX step.
+ * @param targetContractName - The Solidity artifact name of the TARGET contract
+ *                             (i.e. the contract that owns the function being called).
+ */
+function resolveSetXFunctionField(step: { functionName: string; functionSignature?: string }, targetContractName: string): string {
+  // No signature stored — free-text path, always bare name.
+  if (!step.functionSignature) return step.functionName;
+
+  // Look up the manifest for the TARGET contract.
+  const manifest = getContract(targetContractName);
+  if (!manifest) return step.functionName;
+
+  // Count how many manifest entries share the same bare function name on the TARGET.
+  const sameNameCount = manifest.functions.filter((f) => f.name === step.functionName).length;
+
+  // Overloaded on target: emit the full canonical signature.
+  if (sameNameCount > 1) return step.functionSignature;
+
+  // Unique name on target: emit the bare name for backward compatibility.
+  return step.functionName;
+}
+
+/**
  * Convert StudioConfigStep[] for a single node into ConfigStep[].
- * The node's deployId is used as the `target` for setX / grantRole steps.
+ * The node's deployId is used as the target for setX / grantRole steps.
+ *
+ * @param steps              - The config steps attached to the node.
+ * @param attachedTargetId   - The deploy-id of the attached node (used as fallback target).
+ * @param deployIdToContract - Map from deployId → contractName for ALL nodes, used to
+ *                             resolve the TARGET contract name for cross-node setX steps.
+ *                             Mirrors what ConfigPanel.tsx does when storing functionSignature.
+ * @param attachedContractName - The Solidity artifact name of the attached node's contract
+ *                               (used as fallback when target is the attached node itself).
  */
 function buildConfigSteps(
   steps: StudioConfigStep[],
-  targetId: string,
+  attachedTargetId: string,
+  deployIdToContract: Map<string, string>,
+  attachedContractName: string,
 ): ConfigStep[] {
   return steps.map((step): ConfigStep => {
     if (step.kind === "setX") {
@@ -169,11 +219,18 @@ function buildConfigSteps(
         kind: "literal" as const,
         value: parseLiteralValue(raw),
       }));
+      // Determine the explicit target deploy-id for cross-node setX steps.
+      const effectiveTargetId = step.target ?? attachedTargetId;
+      // Resolve the TARGET contract name from the deployId→contractName map.
+      // This is the contract whose manifest determines whether the function name
+      // is overloaded — matching the resolution ConfigPanel.tsx uses at pick time.
+      const targetContractName = deployIdToContract.get(effectiveTargetId) ?? attachedContractName;
+      const functionField = resolveSetXFunctionField(step, targetContractName);
       return {
         kind: "setX",
         id: step.id,
-        target: step.target ?? targetId,
-        function: step.functionName,
+        target: effectiveTargetId,
+        function: functionField,
         ...(args.length > 0 ? { args } : {}),
       };
     }
@@ -181,7 +238,7 @@ function buildConfigSteps(
     return {
       kind: "grantRole",
       id: step.id,
-      target: targetId,
+      target: attachedTargetId,
       role: step.role,
       account: buildConfigArg(step.accountKind, step.accountValue),
     };
@@ -259,9 +316,16 @@ export function graphToSpec(nodes: GraphNode[], edges: GraphEdge[]): SpecPair {
     contracts,
   };
 
-  // Step 3: Build ConfigStep[] from node-attached steps + wire edges
+  // Step 3: Build a deployId → contractName map for ALL nodes.
+  // This is used by buildConfigSteps to resolve the TARGET contract name
+  // for cross-node setX steps, mirroring what ConfigPanel.tsx does at pick time.
+  const deployIdToContract = new Map<string, string>(
+    nodes.map((n) => [n.data.deployId, n.data.contractName]),
+  );
+
+  // Step 4: Build ConfigStep[] from node-attached steps + wire edges
   const nodeConfigSteps: ConfigStep[] = nodes.flatMap((node) =>
-    buildConfigSteps(node.data.configSteps, node.data.deployId),
+    buildConfigSteps(node.data.configSteps, node.data.deployId, deployIdToContract, node.data.contractName),
   );
 
   const allSteps: ConfigStep[] = [...nodeConfigSteps, ...wireSteps];

@@ -13,8 +13,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateSpec } from "@redeploy/core";
-import { validateConfig } from "@redeploy/config";
+import { validateSpec } from "@redeploy/core/spec";
+import { validateConfig } from "@redeploy/config/steps";
 import { graphToSpec } from "../src/spec/graph-to-spec";
 import type { GraphNode, GraphEdge, ContractNodePayload } from "../src/spec/graph-to-spec";
 import type { ConstructorRefEdgeData, WireEdgeData } from "../src/spec/types";
@@ -587,6 +587,259 @@ describe("graphToSpec — named/typed ArgSlots do not leak into spec", () => {
     const { deployment, config } = graphToSpec(nodes, []);
     expect(validateSpec(deployment).ok).toBe(true);
     expect(validateConfig(config, deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (i) Overloaded function support — serialization of function field
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — overloaded function serialization", () => {
+  it("serializes FULL CANONICAL SIGNATURE when function name is overloaded and functionSignature is set", () => {
+    // Overloaded contract has two setLimit overloads in the manifest.
+    // The step carries functionSignature = "setLimit(uint256,address)" to disambiguate.
+    const nodes: GraphNode[] = [
+      makeNode("n1", "overloaded", "Overloaded", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-setlimit2",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256,address)",
+            args: ["100", "0xabc"],
+          },
+        ],
+      }),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    // Must emit the full canonical signature because setLimit is overloaded on Overloaded.
+    expect(step.function).toBe("setLimit(uint256,address)");
+  });
+
+  it("serializes FULL CANONICAL SIGNATURE for the one-arg overload too", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "overloaded", "Overloaded", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-setlimit1",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256)",
+            args: ["42"],
+          },
+        ],
+      }),
+    ];
+
+    const { config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, { version: 1, contracts: [{ id: "overloaded", contract: "Overloaded" }] });
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    expect(step.function).toBe("setLimit(uint256)");
+  });
+
+  it("serializes BARE NAME for a unique function even when functionSignature is set", () => {
+    // Token.mint is unique (only one overload). Should emit bare name "mint".
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-mint",
+            functionName: "mint",
+            functionSignature: "mint(address,uint256)",
+            args: ["0xabc", "1000"],
+          },
+        ],
+      }),
+    ];
+
+    const { config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, { version: 1, contracts: [{ id: "token", contract: "Token" }] });
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    // Bare name because mint is unique on Token.
+    expect(step.function).toBe("mint");
+  });
+
+  it("serializes BARE NAME for free-text step (no functionSignature)", () => {
+    // Legacy / fallback path: no functionSignature present. Always bare name.
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-setfee",
+            functionName: "setFee",
+            // functionSignature: absent (free-text input path)
+            args: [],
+          },
+        ],
+      }),
+    ];
+
+    const { config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, { version: 1, contracts: [{ id: "token", contract: "Token" }] });
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    // Free-text: bare name regardless of overloads.
+    expect(step.function).toBe("setFee");
+  });
+
+  it("emitted ConfigSpec with overload signature passes validateConfig", () => {
+    // End-to-end: graph → spec → validateConfig. The overloaded signature
+    // "setLimit(uint256,address)" must be accepted as a valid function name.
+    const deployment = { version: 1 as const, contracts: [{ id: "overloaded", contract: "Overloaded" }] };
+    const nodes: GraphNode[] = [
+      makeNode("n1", "overloaded", "Overloaded", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-ol",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256,address)",
+            args: ["99", "0xdeadbeef"],
+          },
+        ],
+      }),
+    ];
+    const { config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// (j) Cross-node overload resolution — TARGET contract drives the decision
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — cross-node setX overload resolution", () => {
+  it("emits FULL CANONICAL SIGNATURE when step is attached to Registry but targets Overloaded (which has the overload)", () => {
+    // Reproduction case 1 from reviewer:
+    // Attached node: Registry (no setLimit), target node: Overloaded (setLimit is overloaded).
+    // The serializer must look up Overloaded's manifest (the TARGET), not Registry's,
+    // to decide whether to emit the full canonical signature.
+    // This would FAIL against the old buggy serializer (it would emit bare "setLimit").
+    const nodes: GraphNode[] = [
+      makeNode("n1", "registry", "Registry", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-cross-overload",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256,address)",
+            args: ["100", "0xabc"],
+            target: "overloaded", // targets Overloaded deploy-id
+          },
+        ],
+      }),
+      makeNode("n2", "overloaded", "Overloaded"),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    expect(step.target).toBe("overloaded");
+    // Must emit full canonical signature because setLimit is overloaded on the TARGET (Overloaded).
+    expect(step.function).toBe("setLimit(uint256,address)");
+  });
+
+  it("emits BARE NAME when step is attached to Overloaded but targets Registry (which has no setLimit overload)", () => {
+    // Reproduction case 2 from reviewer:
+    // Attached node: Overloaded (setLimit is overloaded), target node: Registry (no setLimit).
+    // The serializer must look up Registry's manifest (the TARGET), not Overloaded's.
+    // Registry has no setLimit at all (sameNameCount = 0, not > 1), so emit bare name.
+    // This would FAIL against the old buggy serializer (it would emit "setLimit(uint256)" signature).
+    const nodes: GraphNode[] = [
+      makeNode("n1", "overloaded", "Overloaded", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-cross-unique",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256)",
+            args: ["42"],
+            target: "registry", // targets Registry deploy-id
+          },
+        ],
+      }),
+      makeNode("n2", "registry", "Registry"),
+    ];
+
+    const { deployment, config } = graphToSpec(nodes, []);
+    expect(validateSpec(deployment).ok).toBe(true);
+
+    const cResult = validateConfig(config, deployment);
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    expect(step.target).toBe("registry");
+    // Must emit bare name because Registry has no setLimit overload (target has sameNameCount=0).
+    expect(step.function).toBe("setLimit");
+  });
+
+  it("self-targeting step still resolves correctly against the attached node contract", () => {
+    // When step.target is absent (defaults to attached node's deployId),
+    // the attached contract name is used — same behavior as before the fix.
+    // Ensures backward-compat is preserved for same-node setX steps.
+    const nodes: GraphNode[] = [
+      makeNode("n1", "overloaded", "Overloaded", {
+        configSteps: [
+          {
+            kind: "setX",
+            id: "step-self",
+            functionName: "setLimit",
+            functionSignature: "setLimit(uint256,address)",
+            args: ["99", "0xdeadbeef"],
+            // No target override — defaults to attached node
+          },
+        ],
+      }),
+    ];
+
+    const { config } = graphToSpec(nodes, []);
+    const cResult = validateConfig(config, { version: 1, contracts: [{ id: "overloaded", contract: "Overloaded" }] });
+    expect(cResult.ok).toBe(true);
+    if (!cResult.ok) return;
+
+    const step = cResult.spec.steps[0];
+    expect(step.kind).toBe("setX");
+    if (step.kind !== "setX") return;
+    // Self-targeting: Overloaded has setLimit overloaded, so full canonical signature emitted.
+    expect(step.function).toBe("setLimit(uint256,address)");
   });
 });
 

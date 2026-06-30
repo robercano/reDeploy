@@ -46,8 +46,12 @@ import type { DeployTarget } from "./components/ConfigPanel.js";
 import { ContractsBrowser, DRAG_TRANSFER_KEY } from "./components/ContractsBrowser.js";
 import { SpecExporter } from "./components/SpecExporter.js";
 import { TemplateGallery } from "./components/TemplateGallery.js";
+import { SaveTemplateModal } from "./components/SaveTemplateModal.js";
 import { Inspector } from "./components/Inspector.js";
 import { useGraph } from "./hooks/useGraph.js";
+import { useUserTemplates } from "./hooks/useUserTemplates.js";
+import { graphToTemplate } from "./templates/serialize.js";
+import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
 import type { ContractNodeData } from "./spec/types.js";
@@ -113,6 +117,12 @@ interface AuthoringCanvasProps {
   onToggleBrowser: () => void;
   /** All deploy targets in the graph, for the setX target picker in ConfigPanel. */
   deployTargets: DeployTarget[];
+  /** User-saved templates to pass to TemplateGallery. */
+  userTemplates: ReturnType<typeof useUserTemplates>["userTemplates"];
+  /** Called when a user template is deleted from the gallery. */
+  onDeleteTemplate: ReturnType<typeof useUserTemplates>["deleteTemplate"];
+  /** Called when "Save as Template" is confirmed. */
+  onSaveTemplate: (name: string, description: string, params: ParamSelection[]) => void;
 }
 
 function AuthoringCanvas({
@@ -136,8 +146,12 @@ function AuthoringCanvas({
   showBrowser,
   onToggleBrowser,
   deployTargets,
+  userTemplates,
+  onDeleteTemplate,
+  onSaveTemplate,
 }: AuthoringCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   // Build a stable lookup map from uniqueId (sourcePath::name) → ContractManifest
   const manifestById = useMemo(() => {
@@ -195,9 +209,32 @@ function AuthoringCanvas({
         >
           + Contract
         </button>
-        <TemplateGallery onInstantiate={instantiateTemplate} />
+        <TemplateGallery
+          onInstantiate={instantiateTemplate}
+          userTemplates={userTemplates}
+          onDelete={onDeleteTemplate}
+        />
+        <button
+          style={btnStyle}
+          onClick={() => setShowSaveModal(true)}
+          data-testid="save-template-btn"
+        >
+          Save as Template
+        </button>
         <SpecExporter deployment={deployment} config={config} />
       </div>
+
+      {/* Save as Template modal */}
+      {showSaveModal && (
+        <SaveTemplateModal
+          nodes={nodes}
+          onSave={(name, description, params) => {
+            onSaveTemplate(name, description, params);
+            setShowSaveModal(false);
+          }}
+          onClose={() => setShowSaveModal(false)}
+        />
+      )}
 
       {/* Contracts browser panel (left sidebar) */}
       {showBrowser && (
@@ -271,6 +308,8 @@ export function App() {
     updateGrantRoleStep,
   } = useGraph();
 
+  const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
+
   // Compute the spec pair for export whenever nodes/edges change.
   // Strip callbacks from node data — graphToSpec only needs the payload fields.
   const { deployment, config } = useMemo(() => {
@@ -323,6 +362,15 @@ export function App() {
 
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
 
+  const handleSaveTemplate = useCallback(
+    (name: string, description: string, params: ParamSelection[]) => {
+      const id = `user-${Date.now()}`;
+      const template = graphToTemplate(nodes, edges, id, name, description, params);
+      saveTemplate(template);
+    },
+    [nodes, edges, saveTemplate],
+  );
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
       {/* Mode toggle toolbar */}
@@ -366,6 +414,9 @@ export function App() {
             showBrowser={showBrowser}
             onToggleBrowser={onToggleBrowser}
             deployTargets={deployTargets}
+            userTemplates={userTemplates}
+            onDeleteTemplate={deleteTemplate}
+            onSaveTemplate={handleSaveTemplate}
           />
         </ReactFlowProvider>
       )}

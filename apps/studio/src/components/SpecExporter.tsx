@@ -7,10 +7,10 @@
  */
 
 import { useState } from "react";
-import { validateSpec } from "@redeploy/core";
-import { validateConfig } from "@redeploy/config";
-import type { DeploymentSpec } from "@redeploy/core";
-import type { ConfigSpec } from "@redeploy/config";
+import { validateSpec } from "@redeploy/core/spec";
+import { validateConfig } from "@redeploy/config/steps";
+import type { DeploymentSpec } from "@redeploy/core/spec";
+import type { ConfigSpec } from "@redeploy/config/steps";
 
 interface SpecExporterProps {
   deployment: DeploymentSpec;
