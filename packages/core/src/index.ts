@@ -16,7 +16,7 @@ export { validateSpec } from "./spec/validate.js";
 
 // Spec compiler — converts a validated DeploymentSpec into an Ignition module
 export type { CompileOptions, CompiledModule } from "./compile/compile.js";
-export { compileSpec } from "./compile/compile.js";
+export { compileSpec, buildCreationOrder } from "./compile/compile.js";
 export type { CompileErrorCode } from "./compile/errors.js";
 export { CompileError } from "./compile/errors.js";
 
@@ -25,3 +25,12 @@ export type { DeployOptions, DeployResult } from "./deploy/deploy.js";
 export { deploy } from "./deploy/deploy.js";
 export type { DeployErrorCode } from "./deploy/errors.js";
 export { DeployError } from "./deploy/errors.js";
+
+// Dry-run / plan-only simulation — no chain, no provider, no journal
+export type {
+  SimulateErrorCode,
+  SimulateError,
+  PlannedStep,
+  SimulateResult,
+} from "./simulate/simulate.js";
+export { simulate } from "./simulate/simulate.js";
