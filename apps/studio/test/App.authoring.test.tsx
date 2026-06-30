@@ -134,7 +134,7 @@ describe("App — add contract node", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Config panel
+// Config panel (per-node inline config section)
 // ---------------------------------------------------------------------------
 
 describe("App — config panel", () => {
@@ -143,35 +143,38 @@ describe("App — config panel", () => {
   });
 
   it("config panel not shown when no node selected", () => {
+    // The old side-panel config-panel testid no longer exists (replaced by
+    // per-node inline config sections). With no nodes, no config section exists.
     render(<App />);
     expect(screen.queryByTestId("config-panel")).toBeNull();
+    expect(document.querySelectorAll("[data-testid^='node-config-section-']")).toHaveLength(0);
   });
 
   it("config panel shown when node is clicked", () => {
+    // Per-node config section is always visible (not click-gated) when
+    // configCallbacks are injected. Check that the section exists on the node.
     render(<App />);
     addNodeByName("Registry");
 
-    // Click on the node (ContractNode container)
-    const node = document.querySelector(".react-flow__node") as HTMLElement;
-    fireEvent.click(node);
-
-    // Config panel should appear
-    expect(screen.queryByTestId("config-panel")).not.toBeNull();
+    // The per-node config section should be visible
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
   });
 
   it("can add a setX step via config panel", () => {
     render(<App />);
     addNodeByName("Registry");
 
-    const node = document.querySelector(".react-flow__node") as HTMLElement;
-    fireEvent.click(node);
+    // Find the per-node config section
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
 
-    const panel = screen.getByTestId("config-panel");
-    const addSetXBtn = within(panel).getByText("+ setX");
+    const addSetXBtn = within(configSection).getByText("+ setX");
     fireEvent.click(addSetXBtn);
 
-    // Should show a step card
-    const steps = panel.querySelectorAll("[data-testid^='step-']");
+    // Should show a step card (each step has a card div; the remove button is a
+    // child element with a more specific testid so we match only card divs here)
+    const steps = document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])");
     expect(steps).toHaveLength(1);
   });
 
@@ -179,14 +182,13 @@ describe("App — config panel", () => {
     render(<App />);
     addNodeByName("Registry");
 
-    const node = document.querySelector(".react-flow__node") as HTMLElement;
-    fireEvent.click(node);
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
 
-    const panel = screen.getByTestId("config-panel");
-    const addGrantBtn = within(panel).getByText("+ grantRole");
+    const addGrantBtn = within(configSection).getByText("+ grantRole");
     fireEvent.click(addGrantBtn);
 
-    const steps = panel.querySelectorAll("[data-testid^='step-']");
+    const steps = document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])");
     expect(steps).toHaveLength(1);
   });
 
@@ -194,18 +196,16 @@ describe("App — config panel", () => {
     render(<App />);
     addNodeByName("Registry");
 
-    const node = document.querySelector(".react-flow__node") as HTMLElement;
-    fireEvent.click(node);
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
 
-    const panel = screen.getByTestId("config-panel");
-    fireEvent.click(within(panel).getByText("+ setX"));
+    fireEvent.click(within(configSection).getByText("+ setX"));
+    expect(document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])")).toHaveLength(1);
 
-    expect(panel.querySelectorAll("[data-testid^='step-']")).toHaveLength(1);
-
-    const removeBtn = within(panel).getByTitle("Remove step");
+    const removeBtn = within(configSection).getByTitle("Remove config call");
     fireEvent.click(removeBtn);
 
-    expect(panel.querySelectorAll("[data-testid^='step-']")).toHaveLength(0);
+    expect(configSection.querySelectorAll("[data-testid^='node-config-step-']")).toHaveLength(0);
   });
 });
 

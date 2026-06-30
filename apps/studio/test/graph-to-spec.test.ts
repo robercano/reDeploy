@@ -17,7 +17,7 @@ import { validateSpec } from "@redeploy/core/spec";
 import { validateConfig } from "@redeploy/config/steps";
 import { graphToSpec } from "../src/spec/graph-to-spec";
 import type { GraphNode, GraphEdge, ContractNodePayload } from "../src/spec/graph-to-spec";
-import type { ConstructorRefEdgeData, WireEdgeData } from "../src/spec/types";
+import type { ConstructorRefEdgeData } from "../src/spec/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -314,19 +314,21 @@ describe("graphToSpec — config steps", () => {
     expect(step.account).toEqual({ kind: "ref", contract: "admin" });
   });
 
-  it("maps a wire edge to a WireStep in the config", () => {
+  it("stale wire edges are silently ignored (wire edges have been removed)", () => {
+    // Wire edges are no longer created by the UI. Any stale wire edge data
+    // in graph state is silently ignored by graphToSpec (unknown edgeKind).
     const nodes: GraphNode[] = [
       makeNode("n1", "oracle", "Oracle"),
       makeNode("n2", "vault", "Vault"),
     ];
-    const wireData: WireEdgeData = {
-      edgeKind: "wire",
-      wireStepId: "wire-1",
-      wireFunction: "setOracle",
+    // Simulate a stale wire edge with unknown edgeKind — graphToSpec ignores it.
+    const staleWireEdge: GraphEdge = {
+      id: "e1",
+      source: "n1",
+      target: "n2",
+      data: { edgeKind: "wire" } as unknown as GraphEdge["data"],
     };
-    const edges: GraphEdge[] = [
-      { id: "e1", source: "n1", target: "n2", data: wireData },
-    ];
+    const edges: GraphEdge[] = [staleWireEdge];
 
     const { deployment, config } = graphToSpec(nodes, edges);
     expect(validateSpec(deployment).ok).toBe(true);
@@ -335,16 +337,12 @@ describe("graphToSpec — config steps", () => {
     expect(cResult.ok).toBe(true);
     if (!cResult.ok) return;
 
-    const step = cResult.spec.steps[0];
-    expect(step.kind).toBe("wire");
-    if (step.kind !== "wire") return;
-    expect(step.id).toBe("wire-1");
-    expect(step.source).toBe("oracle");
-    expect(step.into).toBe("vault");
-    expect(step.function).toBe("setOracle");
+    // The wire edge is silently ignored — no steps emitted for it.
+    expect(cResult.spec.steps).toHaveLength(0);
   });
 
-  it("exercises all three config step kinds simultaneously", () => {
+  it("exercises setX and grantRole config step kinds simultaneously (wire removed)", () => {
+    // Wire steps now come from config steps with address-ref args, not edges.
     const nodes: GraphNode[] = [
       makeNode("n1", "oracle", "Oracle"),
       makeNode("n2", "registry", "Registry"),
@@ -366,16 +364,8 @@ describe("graphToSpec — config steps", () => {
         ],
       }),
     ];
-    const wireData: WireEdgeData = {
-      edgeKind: "wire",
-      wireStepId: "wire-oracle",
-      wireFunction: "setOracle",
-    };
-    const edges: GraphEdge[] = [
-      { id: "e1", source: "n1", target: "n3", data: wireData },
-    ];
-
-    const { deployment, config } = graphToSpec(nodes, edges);
+    // No wire edges — cross-contract wiring now uses config steps with address-ref args.
+    const { deployment, config } = graphToSpec(nodes, []);
 
     expect(validateSpec(deployment).ok).toBe(true);
 
@@ -386,7 +376,6 @@ describe("graphToSpec — config steps", () => {
     const kinds = cResult.spec.steps.map((s) => s.kind);
     expect(kinds).toContain("setX");
     expect(kinds).toContain("grantRole");
-    expect(kinds).toContain("wire");
   });
 });
 
@@ -460,6 +449,8 @@ describe("graphToSpec — invalid graphs (permissive emit + validator surfaces e
   });
 
   it("emits and validator rejects: config step referencing missing contract", () => {
+    // A setX config step that targets a contract not in the graph.
+    // graphToSpec serializes it permissively; validateConfig rejects the missing ref.
     const nodes: GraphNode[] = [
       makeNode("n1", "vault", "Vault", {
         configSteps: [
@@ -467,28 +458,19 @@ describe("graphToSpec — invalid graphs (permissive emit + validator surfaces e
             kind: "setX",
             id: "step-wire",
             functionName: "setFoo",
+            target: "ghost-contract", // target not in deployment
             args: [],
           },
         ],
       }),
     ];
 
-    // wire edge references a node not in graph
-    const wireData: WireEdgeData = {
-      edgeKind: "wire",
-      wireStepId: "wire-ghost",
-      wireFunction: "setOracle",
-    };
-    const edges: GraphEdge[] = [
-      { id: "e1", source: "ghost-node", target: "n1", data: wireData },
-    ];
-
-    const { deployment, config } = graphToSpec(nodes, edges);
+    const { deployment, config } = graphToSpec(nodes, []);
 
     // Deployment is valid (vault exists)
     expect(validateSpec(deployment).ok).toBe(true);
 
-    // Config should fail because source "ghost-node" is not in deployment
+    // Config should fail because target "ghost-contract" is not in deployment
     const cResult = validateConfig(config, deployment);
     expect(cResult.ok).toBe(false);
     if (cResult.ok) return;

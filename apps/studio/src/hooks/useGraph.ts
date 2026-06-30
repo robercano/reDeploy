@@ -3,7 +3,7 @@
  *
  * React state management for the authoring canvas graph.
  * Provides callbacks for adding/updating/removing nodes and for managing
- * config steps attached to nodes.
+ * config steps attached to nodes, plus the global ordered config steps list.
  *
  * Callbacks are injected into node data so that React Flow custom nodes
  * can call them directly (React Flow only passes `data` to custom nodes).
@@ -14,6 +14,11 @@
  * technically does not satisfy that constraint. We therefore use
  * `Node<Record<string, unknown>>` at the React Flow API boundary and cast
  * `node.data` to `ContractNodeData` wherever we access it internally.
+ *
+ * ## Wire edges (removed)
+ * The wire-edge path has been removed from onConnect. Cross-contract wiring is
+ * now expressed as a config call step with an address-ref arg. Only
+ * constructorRef edges are created by onConnect now.
  */
 
 import { useState, useCallback, useRef } from "react";
@@ -24,7 +29,8 @@ import type {
   StudioEdgeData,
   StudioSetXStep,
   StudioGrantRoleStep,
-} from "../spec/types";
+  StudioOrderedConfigStep,
+} from "../spec/types.js";
 import type { ContractManifest } from "../manifest/index.js";
 import type { Template } from "../templates/types.js";
 
@@ -61,6 +67,8 @@ interface UseGraphReturn {
   nodes: ContractFlowNode[];
   edges: StudioFlowEdge[];
   selectedNodeId: string | null;
+  /** Global ordered config steps (serialized to ConfigSpec.orderedSteps). */
+  orderedSteps: StudioOrderedConfigStep[];
   onNodesChange: OnNodesChange<ContractFlowNode>;
   onEdgesChange: OnEdgesChange<StudioFlowEdge>;
   onConnect: (connection: Connection) => void;
@@ -97,6 +105,20 @@ interface UseGraphReturn {
     stepId: string,
     update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>,
   ) => void;
+  // ---- Global ordered steps ------------------------------------------------
+  /** Add a new ordered setX step at the end of the ordered list. */
+  addOrderedStep: () => void;
+  /** Remove a step from the ordered list by id. */
+  removeOrderedStep: (stepId: string) => void;
+  /** Update fields of an ordered setX step. */
+  updateOrderedStep: (
+    stepId: string,
+    update: Partial<Omit<StudioSetXStep, "kind" | "id">>,
+  ) => void;
+  /** Move a step up (toward index 0) in the ordered list. */
+  moveOrderedStepUp: (stepId: string) => void;
+  /** Move a step down (toward last index) in the ordered list. */
+  moveOrderedStepDown: (stepId: string) => void;
   /**
    * Instantiate a template onto the current canvas.
    *
@@ -120,6 +142,7 @@ export function useGraph(): UseGraphReturn {
   const [nodes, setNodes] = useState<ContractFlowNode[]>([]);
   const [edges, setEdges] = useState<StudioFlowEdge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [orderedSteps, setOrderedSteps] = useState<StudioOrderedConfigStep[]>([]);
 
   // Stable ref to setNodes so embedded node-data callbacks can call it
   const setNodesRef = useRef(setNodes);
@@ -181,6 +204,11 @@ export function useGraph(): UseGraphReturn {
     setEdges((eds) => applyEdgeChanges(changes, eds));
   }, []);
 
+  /**
+   * onConnect: only creates constructorRef edges (wire edges removed).
+   * If the target handle matches `-arg-N`, creates a constructorRef edge.
+   * Any other connection is silently ignored (no wire edges created).
+   */
   const onConnect = useCallback((connection: Connection) => {
     const targetHandle = connection.targetHandle ?? "";
     const argMatch = targetHandle.match(/-arg-(\d+)$/);
@@ -193,24 +221,9 @@ export function useGraph(): UseGraphReturn {
           eds,
         ),
       );
-    } else {
-      const wireStepId = makeStepId("wire");
-      const edgeData: StudioEdgeData = {
-        edgeKind: "wire",
-        wireStepId,
-        wireFunction: "setAddress",
-      };
-      setEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            data: edgeData as unknown as Record<string, unknown>,
-            label: `wire: setAddress`,
-          },
-          eds,
-        ),
-      );
     }
+    // No wire edge path: connections to non-arg handles are ignored.
+    // Cross-contract wiring is now done via config call steps with address-ref args.
   }, []);
 
   // ---- Node management ------------------------------------------------------
@@ -338,7 +351,7 @@ export function useGraph(): UseGraphReturn {
     [nodes, updateDeployId, updateContractName, updateArgSlot],
   );
 
-  // ---- Config steps ---------------------------------------------------------
+  // ---- Per-node config steps ------------------------------------------------
 
   const addConfigStep = useCallback(
     (nodeId: string, kind: "setX" | "grantRole") => {
@@ -396,10 +409,52 @@ export function useGraph(): UseGraphReturn {
     [updateNodeData],
   );
 
+  // ---- Global ordered steps -------------------------------------------------
+
+  const addOrderedStep = useCallback(() => {
+    const stepId = makeStepId("ordered");
+    const step: StudioOrderedConfigStep = { kind: "setX", id: stepId, functionName: "", args: [] };
+    setOrderedSteps((prev) => [...prev, step]);
+  }, []);
+
+  const removeOrderedStep = useCallback((stepId: string) => {
+    setOrderedSteps((prev) => prev.filter((s) => s.id !== stepId));
+  }, []);
+
+  const updateOrderedStep = useCallback(
+    (stepId: string, update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => {
+      setOrderedSteps((prev) =>
+        prev.map((s) => (s.id === stepId ? { ...s, ...update } : s)),
+      );
+    },
+    [],
+  );
+
+  const moveOrderedStepUp = useCallback((stepId: string) => {
+    setOrderedSteps((prev) => {
+      const idx = prev.findIndex((s) => s.id === stepId);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      return next;
+    });
+  }, []);
+
+  const moveOrderedStepDown = useCallback((stepId: string) => {
+    setOrderedSteps((prev) => {
+      const idx = prev.findIndex((s) => s.id === stepId);
+      if (idx < 0 || idx >= prev.length - 1) return prev;
+      const next = [...prev];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      return next;
+    });
+  }, []);
+
   return {
     nodes,
     edges,
     selectedNodeId,
+    orderedSteps,
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -410,5 +465,10 @@ export function useGraph(): UseGraphReturn {
     removeConfigStep,
     updateSetXStep,
     updateGrantRoleStep,
+    addOrderedStep,
+    removeOrderedStep,
+    updateOrderedStep,
+    moveOrderedStepUp,
+    moveOrderedStepDown,
   };
 }

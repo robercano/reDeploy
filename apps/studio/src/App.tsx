@@ -6,8 +6,9 @@
  *
  * ## Authoring mode (default)
  * React Flow canvas with contract nodes, a toolbar for adding nodes and
- * exporting, and a config panel for the selected node. A toggleable Contracts
+ * exporting, and a per-node inline config section. A toggleable Contracts
  * Browser panel lets users add contracts to the canvas by clicking or dragging.
+ * A toolbar-openable Ordered Config panel lists globally ordered config steps.
  *
  * ## Inspector mode
  * Read-only React Flow canvas rendering a DeploymentView (passed as a
@@ -21,11 +22,17 @@
  * into an outer `App` (holds state + provider) and an inner `AuthoringCanvas`
  * (calls useReactFlow for drop position resolution).
  *
+ * ## ConfigCallbacks injection
+ * Per-node config call callbacks (addConfigStep, removeConfigStep, etc.) and
+ * the current deployTargets are injected into each node's data.configCallbacks
+ * field so that ContractNode can render the inline config section without
+ * receiving them as direct React props (React Flow only passes `data`).
+ *
  * ## Type note
  * React Flow requires `Node<T>` where `T extends Record<string, unknown>`.
  * Our `ContractNodeData` interface does not declare a string index signature
  * so we use `Node<Record<string, unknown>>` at the React Flow API boundary
- * and cast `node.data` to `ContractNodeData` when passing it to ConfigPanel.
+ * and cast `node.data` to `ContractNodeData` when accessing it internally.
  */
 
 import { useMemo, useCallback, useState } from "react";
@@ -41,13 +48,14 @@ import type { NodeMouseHandler, NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import { ContractNode } from "./components/ContractNode.js";
-import { ConfigPanel } from "./components/ConfigPanel.js";
-import type { DeployTarget } from "./components/ConfigPanel.js";
+import type { ConfigCallbacks, CanvasDeployTarget } from "./components/ContractNode.js";
 import { ContractsBrowser, DRAG_TRANSFER_KEY } from "./components/ContractsBrowser.js";
 import { SpecExporter } from "./components/SpecExporter.js";
 import { TemplateGallery } from "./components/TemplateGallery.js";
 import { SaveTemplateModal } from "./components/SaveTemplateModal.js";
 import { Inspector } from "./components/Inspector.js";
+import { OrderedConfigPanelToggle } from "./components/OrderedConfigPanel.js";
+import type { OrderedPanelDeployTarget } from "./components/OrderedConfigPanel.js";
 import { useGraph } from "./hooks/useGraph.js";
 import { useUserTemplates } from "./hooks/useUserTemplates.js";
 import { graphToTemplate } from "./templates/serialize.js";
@@ -108,27 +116,28 @@ interface AuthoringCanvasProps {
   onPaneClick: () => void;
   addContractFromManifest: ReturnType<typeof useGraph>["addContractFromManifest"];
   instantiateTemplate: ReturnType<typeof useGraph>["instantiateTemplate"];
-  selectedNode: ReturnType<typeof useGraph>["nodes"][number] | undefined;
   deployment: ReturnType<typeof graphToSpec>["deployment"];
   config: ReturnType<typeof graphToSpec>["config"];
-  addConfigStep: ReturnType<typeof useGraph>["addConfigStep"];
-  removeConfigStep: ReturnType<typeof useGraph>["removeConfigStep"];
-  updateSetXStep: ReturnType<typeof useGraph>["updateSetXStep"];
-  updateGrantRoleStep: ReturnType<typeof useGraph>["updateGrantRoleStep"];
   showBrowser: boolean;
   onToggleBrowser: () => void;
   /** Current view mode ("detailed" | "overview"). */
   viewMode: ViewMode;
   /** Callback to toggle viewMode. */
   onToggleViewMode: () => void;
-  /** All deploy targets in the graph, for the setX target picker in ConfigPanel. */
-  deployTargets: DeployTarget[];
   /** User-saved templates to pass to TemplateGallery. */
   userTemplates: ReturnType<typeof useUserTemplates>["userTemplates"];
   /** Called when a user template is deleted from the gallery. */
   onDeleteTemplate: ReturnType<typeof useUserTemplates>["deleteTemplate"];
   /** Called when "Save as Template" is confirmed. */
   onSaveTemplate: (name: string, description: string, params: ParamSelection[]) => void;
+  // Ordered config panel props
+  orderedSteps: ReturnType<typeof useGraph>["orderedSteps"];
+  deployTargets: OrderedPanelDeployTarget[];
+  onAddOrderedStep: ReturnType<typeof useGraph>["addOrderedStep"];
+  onRemoveOrderedStep: ReturnType<typeof useGraph>["removeOrderedStep"];
+  onUpdateOrderedStep: ReturnType<typeof useGraph>["updateOrderedStep"];
+  onMoveOrderedStepUp: ReturnType<typeof useGraph>["moveOrderedStepUp"];
+  onMoveOrderedStepDown: ReturnType<typeof useGraph>["moveOrderedStepDown"];
 }
 
 function AuthoringCanvas({
@@ -141,21 +150,22 @@ function AuthoringCanvas({
   onPaneClick,
   addContractFromManifest,
   instantiateTemplate,
-  selectedNode,
   deployment,
   config,
-  addConfigStep,
-  removeConfigStep,
-  updateSetXStep,
-  updateGrantRoleStep,
   showBrowser,
   onToggleBrowser,
   viewMode,
   onToggleViewMode,
-  deployTargets,
   userTemplates,
   onDeleteTemplate,
   onSaveTemplate,
+  orderedSteps,
+  deployTargets,
+  onAddOrderedStep,
+  onRemoveOrderedStep,
+  onUpdateOrderedStep,
+  onMoveOrderedStepUp,
+  onMoveOrderedStepDown,
 }: AuthoringCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -228,6 +238,17 @@ function AuthoringCanvas({
         >
           Save as Template
         </button>
+        <OrderedConfigPanelToggle
+          orderedSteps={orderedSteps}
+          deployTargets={deployTargets}
+          onAddStep={onAddOrderedStep}
+          onRemoveStep={onRemoveOrderedStep}
+          onUpdateStep={onUpdateOrderedStep}
+          onMoveUp={onMoveOrderedStepUp}
+          onMoveDown={onMoveOrderedStepDown}
+          btnStyle={btnStyle}
+          activeBtnStyle={activeBtnStyle}
+        />
         <SpecExporter deployment={deployment} config={config} />
       </div>
 
@@ -273,19 +294,6 @@ function AuthoringCanvas({
           <MiniMap />
         </ReactFlow>
       </div>
-
-      {/* Config panel for selected node */}
-      {selectedNode && (
-        <ConfigPanel
-          nodeId={selectedNode.id}
-          data={selectedNode.data as unknown as ContractNodeData}
-          deployTargets={deployTargets}
-          onAddStep={addConfigStep}
-          onRemoveStep={removeConfigStep}
-          onUpdateSetXStep={updateSetXStep}
-          onUpdateGrantRoleStep={updateGrantRoleStep}
-        />
-      )}
     </>
   );
 }
@@ -303,6 +311,7 @@ export function App() {
     nodes,
     edges,
     selectedNodeId,
+    orderedSteps,
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -313,11 +322,43 @@ export function App() {
     removeConfigStep,
     updateSetXStep,
     updateGrantRoleStep,
+    addOrderedStep,
+    removeOrderedStep,
+    updateOrderedStep,
+    moveOrderedStepUp,
+    moveOrderedStepDown,
   } = useGraph();
 
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
 
-  // Compute the spec pair for export whenever nodes/edges change.
+  // Derive deploy targets from all graph nodes.
+  const deployTargets = useMemo<CanvasDeployTarget[]>(() => {
+    const seen = new Set<string>();
+    const targets: CanvasDeployTarget[] = [];
+    for (const n of nodes) {
+      const d = n.data as unknown as ContractNodeData;
+      if (d.deployId !== "" && !seen.has(d.deployId)) {
+        seen.add(d.deployId);
+        targets.push({ deployId: d.deployId, contractName: d.contractName });
+      }
+    }
+    return targets;
+  }, [nodes]);
+
+  // Build stable configCallbacks object to inject into each node's data.
+  // These callbacks allow ContractNode to render the inline per-node config section.
+  const configCallbacks = useMemo<ConfigCallbacks>(
+    () => ({
+      onAddConfigStep: addConfigStep,
+      onRemoveConfigStep: removeConfigStep,
+      onUpdateSetXStep: updateSetXStep,
+      onUpdateGrantRoleStep: updateGrantRoleStep,
+      deployTargets,
+    }),
+    [addConfigStep, removeConfigStep, updateSetXStep, updateGrantRoleStep, deployTargets],
+  );
+
+  // Compute the spec pair for export whenever nodes/edges/orderedSteps change.
   // toGraphNodes strips all display-only fields (viewMode, refSourceDeployIds)
   // and callbacks — graphToSpec only reads the five payload fields.
   const { deployment, config } = useMemo(() => {
@@ -328,14 +369,13 @@ export function App() {
       target: e.target,
       data: e.data as unknown as GraphEdge["data"],
     }));
-    return graphToSpec(graphNodes, graphEdges);
-  }, [nodes, edges]);
+    return graphToSpec(graphNodes, graphEdges, orderedSteps);
+  }, [nodes, edges, orderedSteps]);
 
-  // Enrich nodes in two steps:
+  // Enrich nodes in three steps:
   // 1. enrichNodesWithRefSources — inject refSourceDeployIds from edges (#54).
   // 2. Inject viewMode — presentation-only, never reaches graphToSpec (#55).
-  // Composition: viewMode is applied ON TOP of the enriched nodes so both
-  // display-only fields coexist without conflicts.
+  // 3. Inject configCallbacks — per-node config section callbacks (#56).
   const enrichedNodes = useMemo(() => {
     const withRefSources = enrichNodesWithRefSources(nodes, edges);
     return withRefSources.map((n) => ({
@@ -343,9 +383,10 @@ export function App() {
       data: {
         ...n.data,
         viewMode,
+        configCallbacks,
       },
     }));
-  }, [nodes, edges, viewMode]);
+  }, [nodes, edges, viewMode, configCallbacks]);
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
@@ -354,23 +395,8 @@ export function App() {
 
   const onPaneClick = useCallback(() => setSelectedNodeId(null), [setSelectedNodeId]);
 
-  const selectedNode = enrichedNodes.find((n) => n.id === selectedNodeId);
-
-  // Derive deploy targets from all graph nodes — used by ConfigPanel's setX target picker.
-  // Dedup by deployId so the picker never receives duplicate keys (duplicate deployIds are
-  // a user error caught by validateSpec, but the UI must not crash before validation runs).
-  const deployTargets = useMemo<DeployTarget[]>(() => {
-    const seen = new Set<string>();
-    const targets: DeployTarget[] = [];
-    for (const n of nodes) {
-      const d = n.data as unknown as ContractNodeData;
-      if (d.deployId !== "" && !seen.has(d.deployId)) {
-        seen.add(d.deployId);
-        targets.push({ deployId: d.deployId, contractName: d.contractName });
-      }
-    }
-    return targets;
-  }, [nodes]);
+  // Keep selectedNodeId in scope for any downstream usage (e.g. future panel targeting)
+  void selectedNodeId;
 
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
   const onToggleViewMode = useCallback(
@@ -419,13 +445,8 @@ export function App() {
             onPaneClick={onPaneClick}
             addContractFromManifest={addContractFromManifest}
             instantiateTemplate={instantiateTemplate}
-            selectedNode={selectedNode}
             deployment={deployment}
             config={config}
-            addConfigStep={addConfigStep}
-            removeConfigStep={removeConfigStep}
-            updateSetXStep={updateSetXStep}
-            updateGrantRoleStep={updateGrantRoleStep}
             showBrowser={showBrowser}
             onToggleBrowser={onToggleBrowser}
             viewMode={viewMode}
@@ -434,6 +455,12 @@ export function App() {
             userTemplates={userTemplates}
             onDeleteTemplate={deleteTemplate}
             onSaveTemplate={handleSaveTemplate}
+            orderedSteps={orderedSteps}
+            onAddOrderedStep={addOrderedStep}
+            onRemoveOrderedStep={removeOrderedStep}
+            onUpdateOrderedStep={updateOrderedStep}
+            onMoveOrderedStepUp={moveOrderedStepUp}
+            onMoveOrderedStepDown={moveOrderedStepDown}
           />
         </ReactFlowProvider>
       )}

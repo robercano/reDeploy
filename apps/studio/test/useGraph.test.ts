@@ -182,8 +182,10 @@ describe("useGraph — onConnect (constructorRef)", () => {
 // onConnect — wire path
 // ---------------------------------------------------------------------------
 
-describe("useGraph — onConnect (wire)", () => {
-  it("adds a wire edge when target handle does not contain -arg-", () => {
+// Wire edges have been removed from the studio. Cross-contract wiring is now
+// expressed as a config call step with an address-ref arg, not via edges.
+describe("useGraph — onConnect (no wire, only constructorRef)", () => {
+  it("does NOT add any edge when target handle does not contain -arg- (wire path removed)", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
       result.current.addContractFromManifest(REGISTRY_MANIFEST);
@@ -196,19 +198,16 @@ describe("useGraph — onConnect (wire)", () => {
         source: n1.id,
         target: n2.id,
         sourceHandle: `${n1.id}-output`,
-        targetHandle: `${n2.id}-input`,
+        // Connecting to an arbitrary non-arg handle (no wire edge created)
+        targetHandle: `${n2.id}-something-else`,
       });
     });
 
-    expect(result.current.edges).toHaveLength(1);
-    expect(ed(result.current.edges[0])?.edgeKind).toBe("wire");
-    if (ed(result.current.edges[0])?.edgeKind === "wire") {
-      expect((ed(result.current.edges[0]) as unknown as { wireFunction: unknown }).wireFunction).toBe("setAddress");
-      expect((ed(result.current.edges[0]) as unknown as { wireStepId: unknown }).wireStepId).toMatch(/^wire-/);
-    }
+    // No edge is created — only constructorRef edges are produced by onConnect now.
+    expect(result.current.edges).toHaveLength(0);
   });
 
-  it("adds a wire edge when targetHandle is null", () => {
+  it("does NOT add any edge when targetHandle is null (wire path removed)", () => {
     const { result } = renderHook(() => useGraph());
     act(() => {
       result.current.addContractFromManifest(REGISTRY_MANIFEST);
@@ -225,8 +224,8 @@ describe("useGraph — onConnect (wire)", () => {
       });
     });
 
-    expect(result.current.edges).toHaveLength(1);
-    expect(ed(result.current.edges[0])?.edgeKind).toBe("wire");
+    // Null targetHandle doesn't match -arg- → no edge created.
+    expect(result.current.edges).toHaveLength(0);
   });
 });
 
