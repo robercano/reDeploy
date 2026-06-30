@@ -54,7 +54,7 @@ import { graphToTemplate } from "./templates/serialize.js";
 import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphNode, GraphEdge } from "./spec/graph-to-spec.js";
-import type { ContractNodeData } from "./spec/types.js";
+import type { ContractNodeData, ViewMode } from "./spec/types.js";
 import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { contractManifest } from "./manifest/index.js";
@@ -115,6 +115,10 @@ interface AuthoringCanvasProps {
   updateGrantRoleStep: ReturnType<typeof useGraph>["updateGrantRoleStep"];
   showBrowser: boolean;
   onToggleBrowser: () => void;
+  /** Current view mode ("detailed" | "overview"). */
+  viewMode: ViewMode;
+  /** Callback to toggle viewMode. */
+  onToggleViewMode: () => void;
   /** All deploy targets in the graph, for the setX target picker in ConfigPanel. */
   deployTargets: DeployTarget[];
   /** User-saved templates to pass to TemplateGallery. */
@@ -144,6 +148,8 @@ function AuthoringCanvas({
   updateGrantRoleStep,
   showBrowser,
   onToggleBrowser,
+  viewMode,
+  onToggleViewMode,
   deployTargets,
   userTemplates,
   onDeleteTemplate,
@@ -200,6 +206,13 @@ function AuthoringCanvas({
           data-testid="toggle-contracts-browser"
         >
           Contracts
+        </button>
+        <button
+          style={viewMode === "overview" ? activeBtnStyle : btnStyle}
+          onClick={onToggleViewMode}
+          data-testid="toggle-view-mode"
+        >
+          {viewMode === "overview" ? "Overview" : "Detailed"}
         </button>
         <TemplateGallery
           onInstantiate={instantiateTemplate}
@@ -282,6 +295,7 @@ function AuthoringCanvas({
 export function App() {
   const [mode, setMode] = useState<AppMode>("authoring");
   const [showBrowser, setShowBrowser] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("detailed");
 
   const {
     nodes,
@@ -326,14 +340,21 @@ export function App() {
     return graphToSpec(graphNodes, graphEdges);
   }, [nodes, edges]);
 
-  // Enrich nodes with display-only refSourceDeployIds maps derived from
-  // constructorRef edges. The derivation logic lives in enrich-nodes.ts
-  // (pure, UI-agnostic, and unit-tested there). Recomputed whenever nodes
-  // or edges change so the displayed "{deployId}.address" stays live.
-  const enrichedNodes = useMemo(
-    () => enrichNodesWithRefSources(nodes, edges),
-    [nodes, edges],
-  );
+  // Enrich nodes in two steps:
+  // 1. enrichNodesWithRefSources — inject refSourceDeployIds from edges (#54).
+  // 2. Inject viewMode — presentation-only, never reaches graphToSpec (#55).
+  // Composition: viewMode is applied ON TOP of the enriched nodes so both
+  // display-only fields coexist without conflicts.
+  const enrichedNodes = useMemo(() => {
+    const withRefSources = enrichNodesWithRefSources(nodes, edges);
+    return withRefSources.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        viewMode,
+      },
+    }));
+  }, [nodes, edges, viewMode]);
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
@@ -361,6 +382,10 @@ export function App() {
   }, [nodes]);
 
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
+  const onToggleViewMode = useCallback(
+    () => setViewMode((v) => (v === "detailed" ? "overview" : "detailed")),
+    [],
+  );
 
   const handleSaveTemplate = useCallback(
     (name: string, description: string, params: ParamSelection[]) => {
@@ -412,6 +437,8 @@ export function App() {
             updateGrantRoleStep={updateGrantRoleStep}
             showBrowser={showBrowser}
             onToggleBrowser={onToggleBrowser}
+            viewMode={viewMode}
+            onToggleViewMode={onToggleViewMode}
             deployTargets={deployTargets}
             userTemplates={userTemplates}
             onDeleteTemplate={deleteTemplate}
