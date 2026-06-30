@@ -1,0 +1,24 @@
+{
+  "name": "@redeploy/deploy-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP deploy server: exposes deployment simulation and execution as an API. Built on node:http, no framework deps.",
+  "scripts": {
+    "dev": "node --watch dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@redeploy/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}
