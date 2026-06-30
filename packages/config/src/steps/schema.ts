@@ -113,14 +113,14 @@ export const configArgSchema: z.ZodType<ConfigArg> = z.discriminatedUnion("kind"
 // ---------------------------------------------------------------------------
 
 /**
- * Schema for `AddressRef`: an explicit reference to a deployed contract's
- * on-chain address by its deploy-id.
+ * Schema for `AddressRef` — a studio-internal address-of-contract reference.
  *
  * `{ kind: "addressRef", deployId: "<non-empty deploy-id>" }`
  *
- * This is semantically equivalent to `{ kind: "ref", contract: deployId }`
- * in an args position. The `"addressRef"` kind is provided as a self-
- * documenting alternative for tooling and studio consumers.
+ * NOTE: `AddressRef` is NOT accepted by `configStepSchema` / the execution
+ * engine. Studio components that hold `AddressRef` values must normalise them
+ * to `{ kind: "ref", contract: deployId }` before placing them in a
+ * `ConfigSpec` that will be validated or executed.
  */
 export const addressRefSchema: z.ZodType<AddressRef> = z.object({
   kind: z.literal("addressRef"),
@@ -128,10 +128,13 @@ export const addressRefSchema: z.ZodType<AddressRef> = z.object({
 });
 
 /**
- * Extended ConfigArg schema that includes `AddressRef` in addition to the
- * core `RefArg` and `LiteralArg`.
+ * Extended arg schema for studio-internal use — accepts `RefArg`, `LiteralArg`,
+ * and `AddressRef`.
  *
- * Use this schema when parsing step args that may contain `"addressRef"` values.
+ * NOTE: this schema is for validating studio-internal arg representations only.
+ * It is NOT used by `configStepSchema` or the execution engine. Any `AddressRef`
+ * parsed with this schema must be normalised to a `RefArg` before being placed
+ * in a `ConfigSpec` for validation or execution.
  */
 export const configArgExtendedSchema: z.ZodType<ConfigArgExtended> = z.discriminatedUnion("kind", [
   refArgSchema,

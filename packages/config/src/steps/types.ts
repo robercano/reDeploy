@@ -25,10 +25,10 @@
  *     calls matters (e.g. step B depends on the state written by step A).
  *
  *   Both lists share the same step-id namespace — duplicate ids across the two
- *   lists are rejected by the validator. Steps in both lists may reference
- *   deployed contract addresses via `{ kind: "ref", contract: "<deploy-id>" }`
- *   in arg fields, or a deploy-id address via `{ kind: "addressRef",
- *   deployId: "<deploy-id>" }` in target / source / into fields.
+ *   lists are rejected by the validator. Steps in both lists reference deployed
+ *   contract addresses via `{ kind: "ref", contract: "<deploy-id>" }` in arg
+ *   fields; target / source / into fields are plain deploy-id strings resolved
+ *   to addresses by the execution engine.
  */
 
 // Re-export the argument types from core so consumers of @redeploy/config do
@@ -53,47 +53,54 @@ export type ConfigArg = RefArg | LiteralArg;
 // ---------------------------------------------------------------------------
 
 /**
- * An explicit reference to a deployed contract's on-chain address, by its
- * deploy-id. At execution time the engine resolves `deployId` to the contract's
- * address from `deployedAddresses`.
+ * A studio-facing tooling type that names an address-of-contract reference
+ * explicitly by deploy-id.
  *
- * This is syntactically equivalent to `{ kind: "ref", contract: deployId }`
- * when used in an `args` position. `AddressRef` is provided as a named,
- * self-documenting alias so studio tooling and consumers do not need to use the
- * generic "ref" nomenclature when the intent is specifically "the address of
- * this deployed contract".
+ * IMPORTANT — `AddressRef` is NOT accepted inside a validated `ConfigSpec` or
+ * `ConfigStep`. The `configStepSchema` / `validate.ts` / `execute.ts` pipeline
+ * only recognises `ConfigArg` (`RefArg | LiteralArg`). Studio tooling that
+ * builds specs internally using `AddressRef` MUST normalise each `AddressRef`
+ * to a `RefArg` (`{ kind: "ref", contract: deployId }`) before placing it in a
+ * `ConfigSpec` that will be validated or executed.
  *
- * @example
+ * The `addressRefSchema` and `configArgExtendedSchema` exports are provided so
+ * that studio components can parse and validate their internal representation
+ * before performing that normalisation step.
+ *
+ * @example Studio normalisation before emitting a ConfigSpec:
  * ```ts
- * const ref: AddressRef = { kind: "addressRef", deployId: "token" };
- * // Step arg usage — resolves to token's on-chain address at execution time.
- * const step: SetXStep = {
- *   kind: "setX",
- *   id: "register-token",
- *   target: "registry",
- *   function: "register",
- *   args: [ref],
- * };
+ * function toConfigArg(arg: ConfigArgExtended): ConfigArg {
+ *   if (arg.kind === "addressRef") {
+ *     return { kind: "ref", contract: arg.deployId };
+ *   }
+ *   return arg; // RefArg or LiteralArg pass through unchanged
+ * }
  * ```
  */
 export interface AddressRef {
   /** Discriminant — always `"addressRef"`. */
   readonly kind: "addressRef";
   /**
-   * The deploy-id of the contract whose address should be resolved.
-   * Must match a key in `deployedAddresses` at execution time.
+   * The deploy-id of the contract whose address is intended.
+   * Studio must convert this to `{ kind: "ref", contract: deployId }` before
+   * the arg is placed in a validated `ConfigSpec`.
    */
   readonly deployId: string;
 }
 
 /**
- * Extended step argument type that includes `AddressRef` in addition to the
- * core `RefArg` and `LiteralArg`. Use `ConfigArgExtended` when you want to
- * express an address-of-contract reference with the explicit `"addressRef"` kind.
+ * Studio-facing extended argument type that adds `AddressRef` to the
+ * validated `ConfigArg` union.
  *
- * The execution engine accepts both `ConfigArg` (with `RefArg`) and
- * `ConfigArgExtended` (with `AddressRef`). Both resolve to the same on-chain
- * address at execution time.
+ * IMPORTANT — `ConfigArgExtended` is a studio-internal type only. The
+ * validated `ConfigSpec` / `ConfigStep` pipeline (schema, validator, executor)
+ * only accepts `ConfigArg` (`RefArg | LiteralArg`). Studio components that
+ * work with `ConfigArgExtended` internally MUST normalise any `AddressRef`
+ * value to a `RefArg` (`{ kind: "ref", contract: deployId }`) before producing
+ * a `ConfigSpec` for validation or execution.
+ *
+ * Use `configArgExtendedSchema` to validate studio-internal arg values that
+ * may contain `AddressRef` before that normalisation step.
  */
 export type ConfigArgExtended = RefArg | LiteralArg | AddressRef;
 
@@ -115,14 +122,14 @@ export type ConfigArgExtended = RefArg | LiteralArg | AddressRef;
  * };
  * ```
  *
- * @example With an address reference:
+ * @example Passing a deployed contract's address as an arg via RefArg:
  * ```ts
  * const step: SetXStep = {
  *   kind: "setX",
  *   id: "register-token",
  *   target: "registry",
  *   function: "register",
- *   args: [{ kind: "addressRef", deployId: "token" }],
+ *   args: [{ kind: "ref", contract: "token" }],
  * };
  * ```
  */
