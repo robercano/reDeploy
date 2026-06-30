@@ -6,6 +6,10 @@
  * 1. The `hasParamInfo` branch in ArgRow — when arg slots carry name/type,
  *    the visible label and type are rendered.
  * 2. Plain slots (no name, no type) — the label spans should NOT be present.
+ * 3. Contract Name is read-only (rendered as a label, not an input).
+ * 4. Ref slots (bound by a constructorRef edge) display "{sourceDeployId}.address"
+ *    as a read-only element instead of an editable input.
+ * 5. Literal slots (no incoming edge) remain editable.
  *
  * These tests prove the issue #37 acceptance criterion at the render layer:
  * "constructor arg rows are labeled with real param name and type from the
@@ -241,5 +245,193 @@ describe("ContractNode — ArgRow without name or type (plain slot)", () => {
       (s) => s.style.fontStyle === "italic",
     );
     expect(italicSpans).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Contract Name is read-only (rendered as a label, not an input)
+// ---------------------------------------------------------------------------
+
+describe("ContractNode — Contract Name is read-only", () => {
+  it("renders contract name as a static label element, not an input", () => {
+    const data = makeData({ contractName: "ERC20Token" });
+    renderContractNode(data);
+
+    // The contract name should be visible
+    const label = screen.getByLabelText("contract-name");
+    expect(label.tagName.toLowerCase()).not.toBe("input");
+    expect(label.textContent).toBe("ERC20Token");
+  });
+
+  it("shows the contract name text in the node", () => {
+    const data = makeData({ contractName: "Registry" });
+    renderContractNode(data);
+
+    // Text should appear in the rendered node
+    expect(screen.getByText("Registry")).not.toBeNull();
+  });
+
+  it("renders deploy-id as an editable input (not read-only)", () => {
+    const data = makeData({ deployId: "myToken" });
+    renderContractNode(data);
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.tagName.toLowerCase()).toBe("input");
+    expect(deployIdInput.value).toBe("myToken");
+  });
+
+  it("no editable input with aria-label contract-name exists", () => {
+    const data = makeData({ contractName: "Vault" });
+    renderContractNode(data);
+
+    // The aria-label should be on a non-input element
+    const el = screen.getByLabelText("contract-name");
+    // It should NOT be an HTMLInputElement
+    expect(el instanceof HTMLInputElement).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: Ref slots are read-only and display "{sourceDeployId}.address"
+// ---------------------------------------------------------------------------
+
+describe("ContractNode — ref slots (bound by constructorRef edge)", () => {
+  it("renders a ref slot as a non-editable div showing '{deployId}.address'", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "" }],
+      refSourceDeployIds: new Map([[0, "token"]]),
+    });
+
+    renderContractNode(data);
+
+    // The slot should show "token.address"
+    const el = screen.getByLabelText("arg-0");
+    expect(el.tagName.toLowerCase()).not.toBe("input");
+    expect(el.textContent).toBe("token.address");
+  });
+
+  it("updates the displayed text when source deployId changes", () => {
+    // First render with source "token"
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "" }],
+      refSourceDeployIds: new Map([[0, "token"]]),
+    });
+
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <ContractNode
+          {...({
+            id: "test-node",
+            data: data as unknown as Record<string, unknown>,
+            selected: false,
+            type: "contractNode",
+            zIndex: 0,
+            isConnectable: true,
+            xPos: 0,
+            yPos: 0,
+            dragging: false,
+            positionAbsoluteX: 0,
+            positionAbsoluteY: 0,
+          } as unknown as NodeProps)}
+        />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.getByLabelText("arg-0").textContent).toBe("token.address");
+
+    // Rerender with updated source deployId "myToken"
+    const updatedData = makeData({
+      args: [{ index: 0, kind: "literal", value: "" }],
+      refSourceDeployIds: new Map([[0, "myToken"]]),
+    });
+
+    rerender(
+      <ReactFlowProvider>
+        <ContractNode
+          {...({
+            id: "test-node",
+            data: updatedData as unknown as Record<string, unknown>,
+            selected: false,
+            type: "contractNode",
+            zIndex: 0,
+            isConnectable: true,
+            xPos: 0,
+            yPos: 0,
+            dragging: false,
+            positionAbsoluteX: 0,
+            positionAbsoluteY: 0,
+          } as unknown as NodeProps)}
+        />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.getByLabelText("arg-0").textContent).toBe("myToken.address");
+  });
+
+  it("only the ref-bound slot is read-only; other slots remain editable inputs", () => {
+    const data = makeData({
+      args: [
+        { index: 0, kind: "literal", value: "" },   // bound by edge → ref
+        { index: 1, kind: "literal", value: "99" },  // not bound → literal input
+      ],
+      refSourceDeployIds: new Map([[0, "oracle"]]),
+    });
+
+    renderContractNode(data);
+
+    // Slot 0: ref display div showing "oracle.address"
+    const slot0 = screen.getByLabelText("arg-0");
+    expect(slot0.tagName.toLowerCase()).not.toBe("input");
+    expect(slot0.textContent).toBe("oracle.address");
+
+    // Slot 1: still an editable input with value "99"
+    const slot1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(slot1.tagName.toLowerCase()).toBe("input");
+    expect(slot1.value).toBe("99");
+  });
+
+  it("when no refSourceDeployIds, all slots are editable inputs", () => {
+    const data = makeData({
+      args: [
+        { index: 0, kind: "literal", value: "" },
+        { index: 1, kind: "literal", value: "hello" },
+      ],
+      // no refSourceDeployIds — means no incoming edges
+    });
+
+    renderContractNode(data);
+
+    const slot0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+    expect(slot0.tagName.toLowerCase()).toBe("input");
+
+    const slot1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(slot1.tagName.toLowerCase()).toBe("input");
+    expect(slot1.value).toBe("hello");
+  });
+
+  it("ref slot with name and type still renders the name/type labels alongside the ref display", () => {
+    const data = makeData({
+      args: [
+        {
+          index: 0,
+          kind: "literal",
+          value: "",
+          name: "asset_",
+          type: "contract IERC20",
+        },
+      ],
+      refSourceDeployIds: new Map([[0, "token"]]),
+    });
+
+    renderContractNode(data);
+
+    // The param name label and type should still appear
+    expect(screen.getByText("asset_")).not.toBeNull();
+    expect(screen.getByText("contract IERC20")).not.toBeNull();
+
+    // The arg slot itself should be the ref display, not an input
+    const slot = screen.getByLabelText("arg-0");
+    expect(slot.tagName.toLowerCase()).not.toBe("input");
+    expect(slot.textContent).toBe("token.address");
   });
 });

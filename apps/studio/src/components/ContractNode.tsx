@@ -2,7 +2,7 @@
  * ContractNode.tsx
  *
  * Custom React Flow node for a deployable contract.
- * Shows: deployment id, contract name, constructor arg slots.
+ * Shows: deployment id, contract name (read-only), constructor arg slots.
  * Handles: output handle (for outgoing edges), arg input handles, and
  *          a general input handle for wire edges.
  *
@@ -15,6 +15,13 @@
  * `NodeProps<Node<YourDataType>>`. We use `NodeProps` directly and cast `data`
  * to `ContractNodeData` since our data type does not have a string index
  * signature (required by `Record<string, unknown>`).
+ *
+ * ## Read-only fields
+ * - Contract Name: authoritative from the manifest; rendered as static text.
+ * - Constructor arg slots bound by a constructorRef edge: rendered as
+ *   "{sourceDeployId}.address" (read-only). The source deploy ID is supplied
+ *   via data.refSourceDeployIds (populated by App.tsx from live edge state).
+ *   When the edge is removed, the slot reverts to an editable literal input.
  */
 
 import { memo } from "react";
@@ -29,6 +36,26 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
+};
+
+const readonlyValueStyle: React.CSSProperties = {
+  fontSize: 11,
+  padding: "2px 4px",
+  border: "1px solid #ccc",
+  borderRadius: 3,
+  width: "100%",
+  boxSizing: "border-box",
+  background: "#f5f5f5",
+  color: "#444",
+  fontStyle: "italic",
+  userSelect: "none",
+} as React.CSSProperties;
+
+const staticLabelValueStyle: React.CSSProperties = {
+  fontSize: 11,
+  padding: "2px 4px",
+  color: "#333",
+  fontWeight: 500,
 };
 
 const labelStyle: React.CSSProperties = {
@@ -55,13 +82,18 @@ function ArgRow({
   slot,
   nodeId,
   onUpdate,
+  refSourceDeployId,
 }: {
   slot: ArgSlot;
   nodeId: string;
   onUpdate: (index: number, value: string) => void;
+  /** When defined, the slot is bound by a constructorRef edge to this deploy ID. */
+  refSourceDeployId?: string;
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
   const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
+  const isBoundByEdge = refSourceDeployId !== undefined;
+
   return (
     <div style={argRowStyle}>
       <Handle
@@ -84,14 +116,25 @@ function ArgRow({
             )}
           </div>
         )}
-        <input
-          style={inputStyle}
-          value={slot.value}
-          placeholder={slot.kind === "ref" ? "(ref)" : "value"}
-          title={`Constructor arg ${slot.index}${slot.kind === "ref" ? " (bound by edge)" : ""}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
-          onChange={(e) => onUpdate(slot.index, e.target.value)}
-          aria-label={`arg-${slot.index}`}
-        />
+        {isBoundByEdge ? (
+          <div
+            style={readonlyValueStyle}
+            title={`Bound by edge to ${refSourceDeployId}`}
+            aria-label={`arg-${slot.index}`}
+            data-ref-value={`${refSourceDeployId}.address`}
+          >
+            {refSourceDeployId}.address
+          </div>
+        ) : (
+          <input
+            style={inputStyle}
+            value={slot.value}
+            placeholder="value"
+            title={`Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
+            onChange={(e) => onUpdate(slot.index, e.target.value)}
+            aria-label={`arg-${slot.index}`}
+          />
+        )}
       </div>
     </div>
   );
@@ -138,13 +181,13 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
 
       <div style={{ marginBottom: 6 }}>
         <div style={labelStyle}>Contract Name</div>
-        <input
-          style={inputStyle}
-          value={data.contractName}
-          placeholder="e.g. ERC20Token"
-          onChange={(e) => data.onUpdateContractName(id, e.target.value)}
+        <div
+          style={staticLabelValueStyle}
           aria-label="contract-name"
-        />
+          data-testid="contract-name-label"
+        >
+          {data.contractName}
+        </div>
       </div>
 
       {data.args.length > 0 && (
@@ -156,6 +199,7 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
               slot={slot}
               nodeId={id}
               onUpdate={(idx, val) => data.onUpdateArgSlot(id, idx, val)}
+              refSourceDeployId={data.refSourceDeployIds?.get(slot.index)}
             />
           ))}
         </div>
