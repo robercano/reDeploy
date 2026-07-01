@@ -475,7 +475,7 @@ describe("jsonRpcProvider -- read methods forward verbatim to transport", () => 
 // ---------------------------------------------------------------------------
 
 describe("jsonRpcProvider -- private key security", () => {
-  it("does not include the private key in error messages on request failure", async () => {
+  it("does not include the private key in error messages on READ-path failure", async () => {
     transportRequestSpy.mockRejectedValueOnce(new Error("Connection refused"));
 
     const provider = jsonRpcProvider({ rpcUrl: FAKE_RPC_URL, privateKey: FAKE_PRIVATE_KEY });
@@ -488,6 +488,35 @@ describe("jsonRpcProvider -- private key security", () => {
     }
 
     expect(thrownError).toBeDefined();
+    expect(thrownError!.message).not.toContain(FAKE_PRIVATE_KEY);
+    expect(thrownError!.message).not.toContain(FAKE_PRIVATE_KEY.slice(2));
+  });
+
+  it("does not include the private key in error messages on SIGNING-path failure", async () => {
+    // Force a failure on the signing path so the private key is actually in scope
+    // when the error is thrown.  A transport mock error (eth_chainId) never brings
+    // the key into scope, so that test is intentionally kept separately above.
+    signTransactionSpy.mockRejectedValueOnce(new Error("signing boom"));
+
+    const provider = jsonRpcProvider({ rpcUrl: FAKE_RPC_URL, privateKey: FAKE_PRIVATE_KEY });
+
+    let thrownError: Error | undefined;
+    try {
+      await provider.request({
+        method: "eth_sendTransaction",
+        params: [{
+          from: FAKE_ACCOUNT_ADDRESS,
+          to: "0x1234567890123456789012345678901234567890",
+          gas: "0x5208",
+          gasPrice: "0x3b9aca00",
+        }],
+      });
+    } catch (e) {
+      thrownError = e as Error;
+    }
+
+    expect(thrownError).toBeDefined();
+    // The key must not appear in either its full 0x-prefixed form or the bare hex
     expect(thrownError!.message).not.toContain(FAKE_PRIVATE_KEY);
     expect(thrownError!.message).not.toContain(FAKE_PRIVATE_KEY.slice(2));
   });
