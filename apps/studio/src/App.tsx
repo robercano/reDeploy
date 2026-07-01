@@ -35,7 +35,7 @@
  * and cast `node.data` to `ContractNodeData` when accessing it internally.
  */
 
-import { useMemo, useCallback, useState, useRef } from "react";
+import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -311,6 +311,8 @@ export function App() {
   const [simulating, setSimulating] = useState(false);
   const [liveView, setLiveView] = useState<DeploymentView | null>(null);
   const [simulateError, setSimulateError] = useState<string | null>(null);
+  const [simulateSuccess, setSimulateSuccess] = useState<string | null>(null);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep a ref to the current deployment so the callback always has the latest value
   // without being stale-closed.
@@ -384,6 +386,15 @@ export function App() {
   // Keep ref in sync so the simulate callback is never stale-closed.
   deploymentRef.current = deployment;
 
+  // Clean up the success banner auto-dismiss timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current !== null) {
+        clearTimeout(successTimerRef.current);
+      }
+    };
+  }, []);
+
   // Enrich nodes in three steps:
   // 1. enrichNodesWithRefSources — inject refSourceDeployIds from edges (#54).
   // 2. Inject viewMode — presentation-only, never reaches graphToSpec (#55).
@@ -429,6 +440,12 @@ export function App() {
     if (simulating) return;
     setSimulating(true);
     setSimulateError(null);
+    // Clear any prior success banner and cancel its timer before a new run.
+    setSimulateSuccess(null);
+    if (successTimerRef.current !== null) {
+      clearTimeout(successTimerRef.current);
+      successTimerRef.current = null;
+    }
 
     const spec = deploymentRef.current;
     const result = await runSimulate(spec);
@@ -436,6 +453,14 @@ export function App() {
     if (result.ok) {
       setLiveView(result.view);
       setMode("inspector");
+      const n = result.view.contracts.length;
+      const msg = `Simulation complete — ${n} planned step(s). No contracts deployed (dry run).`;
+      setSimulateSuccess(msg);
+      // Auto-dismiss after 5 seconds.
+      successTimerRef.current = setTimeout(() => {
+        setSimulateSuccess(null);
+        successTimerRef.current = null;
+      }, 5000);
     } else {
       setSimulateError(result.error);
     }
@@ -459,6 +484,21 @@ export function App() {
     background: "#fce8e6",
     color: "#c5221f",
     border: "1px solid #f28b82",
+    borderRadius: 4,
+    padding: "6px 14px",
+    fontSize: 13,
+    maxWidth: 600,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+  };
+
+  const successBannerStyle: React.CSSProperties = {
+    position: "fixed",
+    top: 92,
+    left: 12,
+    zIndex: 20,
+    background: "#e6f4ea",
+    color: "#137333",
+    border: "1px solid #a8dab5",
     borderRadius: 4,
     padding: "6px 14px",
     fontSize: 13,
@@ -501,6 +541,13 @@ export function App() {
         </div>
       )}
 
+      {/* Simulation success banner */}
+      {simulateSuccess !== null && (
+        <div style={successBannerStyle} data-testid="deploy-simulate-success">
+          {simulateSuccess}
+        </div>
+      )}
+
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
@@ -534,7 +581,10 @@ export function App() {
       )}
 
       {mode === "inspector" && (
-        <Inspector view={liveView ?? SAMPLE_DEPLOYMENT_VIEW} />
+        <Inspector
+          view={liveView ?? SAMPLE_DEPLOYMENT_VIEW}
+          contextLabel={liveView !== null ? "Simulated plan (dry run)" : undefined}
+        />
       )}
     </div>
   );

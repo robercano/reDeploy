@@ -173,3 +173,44 @@ describe("Inspector — BigInt args rendered", () => {
     expect(tokenNode.textContent).toContain("500");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Inspector — contextLabel / dry-run badge
+// ---------------------------------------------------------------------------
+
+describe("Inspector — contextLabel badge", () => {
+  it("renders the inspector-context-badge when contextLabel is provided", () => {
+    render(<Inspector view={view} contextLabel="Simulated plan (dry run)" />);
+    const badge = screen.queryByTestId("inspector-context-badge");
+    expect(badge).not.toBeNull();
+  });
+
+  it("inspector-context-badge text matches the contextLabel prop", () => {
+    render(<Inspector view={view} contextLabel="Simulated plan (dry run)" />);
+    const badge = screen.getByTestId("inspector-context-badge");
+    expect(badge.textContent).toBe("Simulated plan (dry run)");
+  });
+
+  it("inspector-context-badge is absent by default (no contextLabel prop)", () => {
+    render(<Inspector view={view} />);
+    expect(screen.queryByTestId("inspector-context-badge")).toBeNull();
+  });
+
+  it("inspector-context-badge is absent when contextLabel is undefined", () => {
+    render(<Inspector view={view} contextLabel={undefined} />);
+    expect(screen.queryByTestId("inspector-context-badge")).toBeNull();
+  });
+
+  it("renders a custom contextLabel text correctly", () => {
+    render(<Inspector view={view} contextLabel="Live deployment" />);
+    const badge = screen.getByTestId("inspector-context-badge");
+    expect(badge.textContent).toBe("Live deployment");
+  });
+
+  it("existing contract nodes still render when contextLabel is set", () => {
+    render(<Inspector view={view} contextLabel="Simulated plan (dry run)" />);
+    expect(screen.getByTestId("inspector-node-registry")).not.toBeNull();
+    expect(screen.getByTestId("inspector-node-token")).not.toBeNull();
+    expect(screen.getByTestId("inspector-node-vault")).not.toBeNull();
+  });
+});

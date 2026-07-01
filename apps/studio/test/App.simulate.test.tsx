@@ -11,7 +11,7 @@
  */
 
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import App from "../src/App.js";
 
 // ---------------------------------------------------------------------------
@@ -371,5 +371,215 @@ describe("App — in-flight simulating state", () => {
 
     // Button should be re-enabled (present in DOM)
     expect(btn.disabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Success banner (deploy-simulate-success)
+// ---------------------------------------------------------------------------
+
+describe("App — simulate success banner", () => {
+  it("shows the success banner after a successful simulation", async () => {
+    const raw =
+      stepFrame("token", "ERC20Token", []) +
+      stepFrame("vault", "Vault", ["token"]) +
+      doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("deploy-simulate-success")).not.toBeNull();
+    });
+  });
+
+  it("success banner contains the correct planned step count (2 contracts)", async () => {
+    // The fixture sends 2 step frames → view.contracts.length === 2
+    const raw =
+      stepFrame("token", "ERC20Token", []) +
+      stepFrame("vault", "Vault", ["token"]) +
+      doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      const banner = screen.queryByTestId("deploy-simulate-success");
+      expect(banner).not.toBeNull();
+      expect(banner!.textContent).toContain("2 planned step(s)");
+    });
+  });
+
+  it("success banner contains the dry-run message", async () => {
+    const raw = stepFrame("token", "ERC20Token", []) + doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      const banner = screen.queryByTestId("deploy-simulate-success");
+      expect(banner).not.toBeNull();
+      expect(banner!.textContent).toContain("No contracts deployed (dry run)");
+    });
+  });
+
+  it("success banner shows 1 planned step(s) for a single-contract simulation", async () => {
+    const raw = stepFrame("token", "ERC20Token", []) + doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      const banner = screen.queryByTestId("deploy-simulate-success");
+      expect(banner).not.toBeNull();
+      expect(banner!.textContent).toContain("1 planned step(s)");
+    });
+  });
+
+  it("success banner shows 0 planned step(s) when done arrives with no step frames", async () => {
+    // Only a done frame, no step frames → contracts.length === 0
+    const raw = doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      const banner = screen.queryByTestId("deploy-simulate-success");
+      expect(banner).not.toBeNull();
+      expect(banner!.textContent).toContain("0 planned step(s)");
+    });
+  });
+
+  it("error path shows deploy-simulate-error and NOT deploy-simulate-success", async () => {
+    const raw = doneErrorFrame([{ message: "contract A reverted" }]);
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("deploy-simulate-error")).not.toBeNull();
+    });
+
+    expect(screen.queryByTestId("deploy-simulate-success")).toBeNull();
+  });
+
+  it("starting a new run clears a prior success banner", async () => {
+    // First run succeeds
+    const raw1 = stepFrame("token", "ERC20Token", []) + doneOkFrame();
+    vi.stubGlobal("fetch", mockFetchOk(raw1));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("deploy-simulate-success")).not.toBeNull();
+    });
+
+    // Second run: network error — success banner must disappear immediately on click
+    vi.stubGlobal("fetch", mockFetchNetworkError());
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    // After the error resolves the success banner should be gone and error shown
+    await waitFor(() => {
+      expect(screen.queryByTestId("deploy-simulate-error")).not.toBeNull();
+    });
+
+    expect(screen.queryByTestId("deploy-simulate-success")).toBeNull();
+  });
+
+  it("auto-dismisses the success banner after 5 seconds", async () => {
+    // Use fake timers so we can advance past the 5s auto-dismiss synchronously.
+    // We only fake setTimeout/setInterval (not Date or microtask queue) so the
+    // Promise-based fetch chain still resolves via normal microtask processing.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const raw = stepFrame("token", "ERC20Token", []) + doneOkFrame();
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    // Flush all microtasks/promises so the async handleSimulate completes and
+    // sets the success state (this works because Promise resolution goes through
+    // the microtask queue, not through fake timers).
+    await act(async () => {
+      // Repeatedly yield until the success banner appears or we time out.
+      // We use a loop of Promise.resolve() flushes to drain the async chain.
+      for (let i = 0; i < 20; i++) {
+        await Promise.resolve();
+      }
+    });
+
+    // The success banner should be visible now.
+    expect(screen.queryByTestId("deploy-simulate-success")).not.toBeNull();
+
+    // Advance fake timers past the 5-second auto-dismiss.
+    act(() => {
+      vi.advanceTimersByTime(5001);
+    });
+
+    expect(screen.queryByTestId("deploy-simulate-success")).toBeNull();
+
+    vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inspector dry-run context badge (inspector-context-badge)
+// ---------------------------------------------------------------------------
+
+describe("App — inspector dry-run context badge", () => {
+  it("shows the inspector-context-badge after a successful simulate", async () => {
+    const raw =
+      stepFrame("token", "ERC20Token", []) +
+      stepFrame("vault", "Vault", ["token"]) +
+      doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("inspector-context-badge")).not.toBeNull();
+    });
+  });
+
+  it("inspector-context-badge contains 'dry run' text", async () => {
+    const raw =
+      stepFrame("token", "ERC20Token", []) +
+      doneOkFrame();
+
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    render(<App />);
+    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+
+    await waitFor(() => {
+      const badge = screen.queryByTestId("inspector-context-badge");
+      expect(badge).not.toBeNull();
+      expect(badge!.textContent?.toLowerCase()).toContain("dry run");
+    });
+  });
+
+  it("inspector-context-badge is absent when viewing sample (no live simulate)", () => {
+    render(<App />);
+
+    // Switch to inspector mode manually (no simulate run) — shows SAMPLE view
+    fireEvent.click(screen.getByTestId("mode-inspector"));
+
+    // Badge should NOT be present (sample view has no contextLabel)
+    expect(screen.queryByTestId("inspector-context-badge")).toBeNull();
   });
 });
