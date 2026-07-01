@@ -97,7 +97,7 @@ export type CompiledModule = IgnitionModule<
  * dependency edges we embed in the futures (constructor-arg ContractFutures
  * and the `after` option) — we never override or duplicate that logic.
  */
-function buildCreationOrder(entries: readonly ContractEntry[]): ContractEntry[] {
+export function buildCreationOrder(entries: readonly ContractEntry[]): ContractEntry[] {
   // Build id→entry index and id→dependsOn (set of ids this entry depends on)
   const idToEntry = new Map<string, ContractEntry>();
   // inDegree[id] = number of dependencies of entry[id] not yet placed
