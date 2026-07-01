@@ -52,6 +52,23 @@ const panelStyle: React.CSSProperties = {
   fontSize: 13,
 };
 
+const contextBadgeStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 12,
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 20,
+  background: "#fff8e1",
+  color: "#e65100",
+  border: "1px solid #ffcc02",
+  borderRadius: 4,
+  padding: "4px 16px",
+  fontSize: 13,
+  fontWeight: 600,
+  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+  whiteSpace: "nowrap",
+};
+
 const sectionTitleStyle: React.CSSProperties = {
   fontWeight: 600,
   marginBottom: 8,
@@ -139,9 +156,16 @@ function ConfigStepCard({ step }: { step: ConfigStepStatus }) {
 export interface InspectorProps {
   /** The deployment view to render (passed from parent; no disk I/O here). */
   view: DeploymentView;
+  /**
+   * Optional context label to display as a badge header above the canvas.
+   * When present, renders a visible badge (e.g. "Simulated plan (dry run)").
+   * When absent (default), no badge is shown — sample and real deployment views
+   * are visually unchanged.
+   */
+  contextLabel?: string;
 }
 
-export function Inspector({ view }: InspectorProps) {
+export function Inspector({ view, contextLabel }: InspectorProps) {
   const { nodes, edges } = useMemo(
     () => deploymentViewToFlow(view),
     [view],
@@ -149,6 +173,13 @@ export function Inspector({ view }: InspectorProps) {
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
+      {/* Dry-run / context badge — only shown when contextLabel is provided */}
+      {contextLabel !== undefined && (
+        <div style={contextBadgeStyle} data-testid="inspector-context-badge">
+          {contextLabel}
+        </div>
+      )}
+
       {/* Read-only React Flow canvas */}
       <div style={{ width: "calc(100vw - 280px)", height: "100vh" }}>
         <ReactFlow

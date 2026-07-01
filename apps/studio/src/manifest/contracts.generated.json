@@ -14,7 +14,10 @@
     "inheritance": [
       "Overloaded",
       "AccessControl",
-      "IAccessControl"
+      "ERC165",
+      "IERC165",
+      "IAccessControl",
+      "Context"
     ],
     "functions": [
       {
@@ -154,7 +157,8 @@
     "inheritance": [
       "PriceOracle",
       "AggregatorV3Interface",
-      "Ownable"
+      "Ownable",
+      "Context"
     ],
     "functions": [
       {
@@ -821,7 +825,12 @@
     "inheritance": [
       "VaultERC4626",
       "ERC4626",
-      "IERC4626"
+      "IERC4626",
+      "ERC20",
+      "IERC20Errors",
+      "IERC20Metadata",
+      "IERC20",
+      "Context"
     ],
     "functions": [
       {
@@ -1047,6 +1056,107 @@
           {
             "name": "owner",
             "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "name",
+        "signature": "name()",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "symbol",
+        "signature": "symbol()",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "totalSupply",
+        "signature": "totalSupply()",
+        "declaredIn": "ERC20",
+        "inputs": [],
+        "stateMutability": "view"
+      },
+      {
+        "name": "balanceOf",
+        "signature": "balanceOf(address)",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "account",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "transfer",
+        "signature": "transfer(address,uint256)",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "allowance",
+        "signature": "allowance(address,address)",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "name": "spender",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view"
+      },
+      {
+        "name": "approve",
+        "signature": "approve(address,uint256)",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable"
+      },
+      {
+        "name": "transferFrom",
+        "signature": "transferFrom(address,address,uint256)",
+        "declaredIn": "ERC20",
+        "inputs": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
           }
         ],
         "stateMutability": "nonpayable"
