@@ -516,19 +516,27 @@ export function App() {
     setDeploySuccess(null);
 
     const spec = deploymentRef.current;
-    const result = await runDeploy(spec);
+    try {
+      const result = await runDeploy(spec);
 
-    if (result.ok) {
-      setLiveView(result.view);
-      setViewKind("deploy");
-      setMode("inspector");
-      const n = result.view.contracts.length;
-      setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
-    } else {
-      setDeployError(result.error);
+      if (result.ok) {
+        setLiveView(result.view);
+        setViewKind("deploy");
+        setMode("inspector");
+        const n = result.view.contracts.length;
+        setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
+      } else {
+        setDeployError(result.error);
+      }
+    } catch (err) {
+      // Defence in depth: runDeploy is expected to resolve with an ok:false
+      // result rather than throw, but if anything unexpected escapes we still
+      // surface it and (via finally) clear the in-flight flag so the button
+      // can never get stuck on "Deploying…".
+      setDeployError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeploying(false);
     }
-
-    setDeploying(false);
   }, [deploying]);
 
   const deployBtnStyle: React.CSSProperties = {

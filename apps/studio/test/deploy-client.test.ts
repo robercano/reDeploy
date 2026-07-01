@@ -190,6 +190,30 @@ describe("runDeploy — success path", () => {
     expect(result.view.contracts).toHaveLength(0);
     expect(result.view.warnings).toContain("could not read journal");
   });
+
+  it("resolves ok:true with an empty view when the done frame omits the deployment field entirely", async () => {
+    // done{success:true} with NO `deployment` key at all → the field is
+    // `undefined`, not an explicit `null`. This must be treated the same as the
+    // null case (empty view + warning) and must NOT throw.
+    const raw = progressFrame() + `event: done\ndata: {"success":true}\n\n`;
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([raw]), { status: 200 }),
+    );
+
+    let result: Awaited<ReturnType<typeof runDeploy>>;
+    // The call must resolve, never throw.
+    await expect(
+      (async () => {
+        result = await runDeploy({}, mockFetch);
+      })(),
+    ).resolves.toBeUndefined();
+
+    expect(result!.ok).toBe(true);
+    if (!result!.ok) throw new Error("expected ok");
+    expect(result!.view.contracts).toHaveLength(0);
+    // Same default journal warning the deployment:null case surfaces.
+    expect(result!.view.warnings.some((w) => /journal/i.test(w))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

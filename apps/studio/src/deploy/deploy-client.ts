@@ -199,8 +199,11 @@ export async function runDeploy(
   // If the journal could not be read the server sends deployment:null + warning;
   // surface an empty-but-valid view carrying the warning so the app still shows
   // a (contract-less) deployed context rather than crashing.
+  // Loose `== null` catches both an explicit `deployment:null` AND a done frame
+  // where the field is entirely absent (`undefined`) — without this, `undefined`
+  // would fall through and throw on `deployment.contracts.map(...)`.
   const deployment = doneEvent.deployment;
-  if (deployment === null) {
+  if (deployment == null) {
     const warning = doneEvent.warning ?? "deployment succeeded but the journal could not be read";
     const view: DeploymentView = {
       contracts: [],
