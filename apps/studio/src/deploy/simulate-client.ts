@@ -116,14 +116,19 @@ export function parseSseFrame(frame: string): SimulateEvent | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the SSE response body via the WHATWG ReadableStream API (browser-safe).
- * Yields SimulateEvents in arrival order.
+ * Read the SSE response body via the WHATWG ReadableStream API (browser-safe)
+ * and yield each complete SSE frame as a trimmed string (event-agnostic).
+ *
+ * This is the generic transport layer shared by both the simulate and deploy
+ * clients: it handles chunk-boundary buffering and the trailing-frame flush,
+ * but does NOT interpret event names — callers parse the yielded frames with
+ * their own event-specific parser.
  *
  * @param body  - The response body ReadableStream<Uint8Array>
  */
-export async function* consumeSseStream(
+export async function* consumeSseFrames(
   body: ReadableStream<Uint8Array>,
-): AsyncGenerator<SimulateEvent> {
+): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -144,8 +149,7 @@ export async function* consumeSseStream(
       for (const frame of parts) {
         const trimmed = frame.trim();
         if (!trimmed) continue;
-        const event = parseSseFrame(trimmed);
-        if (event) yield event;
+        yield trimmed;
       }
     }
 
@@ -156,14 +160,31 @@ export async function* consumeSseStream(
     // Process any trailing complete frame (e.g. if stream ended without a
     // final \n\n)
     if (buffer.trim()) {
-      const event = parseSseFrame(buffer.trim());
-      if (event) yield event;
+      yield buffer.trim();
     }
   } finally {
     // cancel() signals the underlying stream that no more data is needed
     // (e.g. when the consumer breaks early after a done event) and also
     // implicitly releases the lock, so we prefer it over releaseLock().
     await reader.cancel();
+  }
+}
+
+/**
+ * Read the SSE response body and yield SimulateEvents in arrival order.
+ *
+ * Thin wrapper over {@link consumeSseFrames} that applies {@link parseSseFrame}
+ * to each raw frame. Kept as the simulate-specific public API (its behavior and
+ * signature are unchanged).
+ *
+ * @param body  - The response body ReadableStream<Uint8Array>
+ */
+export async function* consumeSseStream(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<SimulateEvent> {
+  for await (const frame of consumeSseFrames(body)) {
+    const event = parseSseFrame(frame);
+    if (event) yield event;
   }
 }
 
