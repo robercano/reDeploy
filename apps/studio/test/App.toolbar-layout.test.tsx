@@ -8,15 +8,20 @@
  *
  * jsdom does not compute real layout, so we test inline style attributes and
  * DOM structure rather than getBoundingClientRect geometry.
+ *
+ * All queries are scoped to the render's container via `within(container)` so
+ * a stale mount from a prior test can never resolve a query in the current
+ * test. RTL `cleanup()` is called in afterEach to unmount trees and reset
+ * RTL's internal tracking.
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, within, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import App from "../src/App.js";
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
-  document.body.innerHTML = "";
 });
 
 // ---------------------------------------------------------------------------
@@ -25,10 +30,12 @@ afterEach(() => {
 
 describe("App toolbar layout — button presence", () => {
   it("renders all three mode-toggle buttons as distinct DOM nodes", () => {
-    render(<App />);
-    const authBtn = screen.getByTestId("mode-authoring");
-    const inspBtn = screen.getByTestId("mode-inspector");
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
+    const { container } = render(<App />);
+    const q = within(container);
+
+    const authBtn = q.getByTestId("mode-authoring");
+    const inspBtn = q.getByTestId("mode-inspector");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
 
     // All present
     expect(authBtn).not.toBeNull();
@@ -42,8 +49,8 @@ describe("App toolbar layout — button presence", () => {
   });
 
   it("renders the authoring toolbar button toggle-contracts-browser", () => {
-    render(<App />);
-    expect(screen.getByTestId("toggle-contracts-browser")).not.toBeNull();
+    const { container } = render(<App />);
+    expect(within(container).getByTestId("toggle-contracts-browser")).not.toBeNull();
   });
 });
 
@@ -53,19 +60,21 @@ describe("App toolbar layout — button presence", () => {
 
 describe("App toolbar layout — containers are separate and non-overlapping", () => {
   it("deploy-simulate-button and toggle-contracts-browser are in DIFFERENT parent containers", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
-    const contractsBtn = screen.getByTestId("toggle-contracts-browser");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
 
     // They must not share the same immediate parent (different toolbar rows)
     expect(deployBtn.parentElement).not.toBe(contractsBtn.parentElement);
   });
 
   it("mode-toggle toolbar (deploy-simulate-button parent) has top:12 inline style", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
     const modeToolbar = deployBtn.parentElement as HTMLElement;
 
     // The mode-toggle toolbar is fixed at top:12
@@ -74,10 +83,11 @@ describe("App toolbar layout — containers are separate and non-overlapping", (
   });
 
   it("authoring toolbar (toggle-contracts-browser parent) has a DIFFERENT top than mode-toggle toolbar", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
-    const contractsBtn = screen.getByTestId("toggle-contracts-browser");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
 
     const modeToolbarTop = (deployBtn.parentElement as HTMLElement).style.top;
     const authoringToolbarTop = (contractsBtn.parentElement as HTMLElement).style.top;
@@ -87,9 +97,10 @@ describe("App toolbar layout — containers are separate and non-overlapping", (
   });
 
   it("authoring toolbar (toggle-contracts-browser parent) is fixed and below the mode-toggle toolbar", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const contractsBtn = screen.getByTestId("toggle-contracts-browser");
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
     const authoringToolbar = contractsBtn.parentElement as HTMLElement;
 
     expect(authoringToolbar.style.position).toBe("fixed");
@@ -100,11 +111,12 @@ describe("App toolbar layout — containers are separate and non-overlapping", (
   });
 
   it("mode-authoring and mode-inspector share the same parent as deploy-simulate-button", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const authBtn = screen.getByTestId("mode-authoring");
-    const inspBtn = screen.getByTestId("mode-inspector");
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
+    const authBtn = q.getByTestId("mode-authoring");
+    const inspBtn = q.getByTestId("mode-inspector");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
 
     // All three mode-toggle buttons are siblings in the same toolbar container
     expect(authBtn.parentElement).toBe(inspBtn.parentElement);
@@ -118,8 +130,8 @@ describe("App toolbar layout — containers are separate and non-overlapping", (
 
 describe("App toolbar layout — deploy button style", () => {
   it("deploy-simulate-button has green background in idle state", () => {
-    render(<App />);
-    const btn = screen.getByTestId("deploy-simulate-button") as HTMLButtonElement;
+    const { container } = render(<App />);
+    const btn = within(container).getByTestId("deploy-simulate-button") as HTMLButtonElement;
 
     // idle green background (#34a853)
     expect(btn.style.background).toBe("rgb(52, 168, 83)");
@@ -133,9 +145,10 @@ describe("App toolbar layout — deploy button style", () => {
 
 describe("App toolbar layout — browser panel toggle", () => {
   it("authoring toolbar shifts left when browser panel opens", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const contractsBtn = screen.getByTestId("toggle-contracts-browser");
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
     const authoringToolbar = contractsBtn.parentElement as HTMLElement;
 
     const leftBefore = authoringToolbar.style.left;
@@ -152,13 +165,14 @@ describe("App toolbar layout — browser panel toggle", () => {
   });
 
   it("mode-toggle toolbar left remains unchanged when browser panel opens", () => {
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const deployBtn = screen.getByTestId("deploy-simulate-button");
+    const deployBtn = q.getByTestId("deploy-simulate-button");
     const modeToolbar = deployBtn.parentElement as HTMLElement;
     const leftBefore = modeToolbar.style.left;
 
-    fireEvent.click(screen.getByTestId("toggle-contracts-browser"));
+    fireEvent.click(q.getByTestId("toggle-contracts-browser"));
 
     // Mode-toggle toolbar is always at left:12 regardless of browser panel
     expect(modeToolbar.style.left).toBe(leftBefore);
@@ -178,22 +192,23 @@ describe("App toolbar layout — banners below toolbar rows", () => {
       vi.fn().mockResolvedValue(new Response("server error", { status: 500 })),
     );
 
-    render(<App />);
+    const { container } = render(<App />);
+    const q = within(container);
 
-    const contractsBtn = screen.getByTestId("toggle-contracts-browser");
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
     const authoringToolbarTop = parseInt(
       (contractsBtn.parentElement as HTMLElement).style.top,
       10,
     );
 
-    fireEvent.click(screen.getByTestId("deploy-simulate-button"));
+    fireEvent.click(q.getByTestId("deploy-simulate-button"));
 
     // Wait for the error banner to appear
     await waitFor(() => {
-      expect(screen.queryByTestId("deploy-simulate-error")).not.toBeNull();
+      expect(q.queryByTestId("deploy-simulate-error")).not.toBeNull();
     });
 
-    const errorBanner = screen.getByTestId("deploy-simulate-error") as HTMLElement;
+    const errorBanner = q.getByTestId("deploy-simulate-error") as HTMLElement;
     const bannerTop = parseInt(errorBanner.style.top, 10);
 
     // Banner must be positioned below the authoring toolbar row
