@@ -293,6 +293,41 @@ describe("POST /api/deploy — success", () => {
     expect(progressIdx).toBeGreaterThanOrEqual(0);
     expect(doneIdx).toBeGreaterThan(progressIdx);
   });
+
+  it("calls core.deploy with spec, provider, accounts, deploymentDir, and artifactResolver", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    // Capture the provider mock that jsonRpcProvider returns so we can inspect it
+    const mockProviderRequest = vi.fn().mockImplementation((args: { method: string }) => {
+      if (args.method === "eth_accounts" || args.method === "eth_requestAccounts") {
+        return Promise.resolve(["0xDeployer0000000000000000000000000000000001"]);
+      }
+      return Promise.resolve(null);
+    });
+    const mockProvider = { request: mockProviderRequest };
+    coreMod.jsonRpcProvider.mockReturnValue(mockProvider);
+
+    const mockArtifactResolver = { resolveArtifact: vi.fn() };
+    coreMod.foundryArtifactResolver.mockReturnValue(mockArtifactResolver);
+
+    await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    // The provider's eth_accounts method must have been called
+    expect(mockProviderRequest).toHaveBeenCalledWith({ method: "eth_accounts" });
+
+    // core.deploy must have been called with the correct wired-up arguments
+    expect(coreMod.deploy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accounts: ["0xDeployer0000000000000000000000000000000001"],
+        deploymentDir: expect.any(String),
+        spec: VALID_SPEC,
+        provider: mockProvider,
+        artifactResolver: mockArtifactResolver,
+      }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -465,28 +500,23 @@ describe("POST /api/deploy — secret leak prevention", () => {
     expect(res.body).not.toContain(SENTINEL_RPC);
   });
 
-  it("failure path (DeployError): sentinel key and rpcUrl do NOT appear in raw SSE output", async () => {
+  it("failure path (DeployError): neither sentinel appears in raw SSE output", async () => {
     process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
     process.env["RPC_URL"] = SENTINEL_RPC;
 
     const { DeployError } = await import("@redeploy/core");
     const coreMod = vi.mocked(await import("@redeploy/core"));
+    // DeployError message intentionally does NOT embed any sentinel —
+    // env-var leaks never come through DeployError anyway.
     coreMod.deploy.mockRejectedValueOnce(
-      new DeployError("INVALID_SPEC", "Spec validation failed with secret: " + SENTINEL_KEY),
+      new DeployError("INVALID_SPEC", "Spec validation failed"),
     );
 
     const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
 
-    // NOTE: The deploy error message above intentionally includes the sentinel to
-    // verify that even if a DeployError somehow embeds env values, our endpoint
-    // does NOT simply forward it verbatim.
-    // However per the implementation spec, for INVALID_SPEC with no specErrors
-    // we DO use err.message. So this test verifies that the RPC URL is not leaked,
-    // and that DeployError messages come from the error itself (not env vars we add).
+    // Neither the private key nor the RPC URL sentinel must appear in the response
+    expect(res.body).not.toContain(SENTINEL_KEY);
     expect(res.body).not.toContain(SENTINEL_RPC);
-    // The key sentinel is in the DeployError message itself — this test verifies
-    // we don't ADD extra env-var leaks beyond what the error itself says.
-    // The real guarantee is that we never interpolate privateKey or rpcUrl directly.
   });
 
   it("failure path (success:false): sentinel key and rpcUrl do NOT appear in raw SSE output", async () => {
@@ -513,6 +543,97 @@ describe("POST /api/deploy — secret leak prevention", () => {
     const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
 
     expect(res.body).not.toContain(SENTINEL_RPC);
+  });
+
+  it("unexpected deploy error: sentinels do NOT appear in stderr or client SSE, client receives done{success:false}", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
+    process.env["RPC_URL"] = SENTINEL_RPC;
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+    // Simulate a viem transport error whose message embeds the RPC URL
+    const transportError = new Error(
+      `HttpRequestError: URL: ${SENTINEL_RPC}/v3/apikey — request failed`,
+    );
+    coreMod.deploy.mockRejectedValueOnce(transportError);
+
+    // Spy on stderr to capture what gets written
+    const stderrChunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown, ...rest: unknown[]) => {
+        stderrChunks.push(String(chunk));
+        return origWrite(chunk as Parameters<typeof origWrite>[0], ...(rest as Parameters<typeof origWrite>[1][]));
+      });
+
+    try {
+      const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+      // (a) Neither sentinel must appear in stderr
+      const stderrOutput = stderrChunks.join("");
+      expect(stderrOutput).not.toContain(SENTINEL_RPC);
+      expect(stderrOutput).not.toContain(SENTINEL_KEY);
+
+      // (b) Neither sentinel must appear in the client SSE body
+      expect(res.body).not.toContain(SENTINEL_RPC);
+      expect(res.body).not.toContain(SENTINEL_KEY);
+
+      // (c) Client must still receive a terminal done{success:false} with a generic message
+      const events = parseSse(res.body);
+      const doneEvent = events.find((e) => e.event === "done");
+      expect(doneEvent).toBeDefined();
+      const done = doneEvent!.data as Record<string, unknown>;
+      expect(done["success"]).toBe(false);
+      expect(Array.isArray(done["errors"])).toBe(true);
+      const errors = done["errors"] as Array<Record<string, unknown>>;
+      expect(errors.length).toBeGreaterThan(0);
+      // The error message must be generic (not contain the sentinel)
+      expect(String(errors[0]!["message"])).not.toContain(SENTINEL_RPC);
+      expect(String(errors[0]!["message"])).not.toContain(SENTINEL_KEY);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/deploy — malformed/invalid private key (provider construction throws)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — malformed DEPLOYER_PRIVATE_KEY", () => {
+  it("emits terminal done{success:false} (generic message) when jsonRpcProvider throws, with no sentinel in output", async () => {
+    const SENTINEL_BAD_KEY = "NOT_A_VALID_KEY_0xbadbadbad";
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_BAD_KEY;
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+    // Simulate privateKeyToAccount throwing for a malformed key.
+    // The thrown message includes the bad-key sentinel to verify it doesn't leak.
+    coreMod.jsonRpcProvider.mockImplementationOnce(() => {
+      throw new Error(`Invalid private key: ${SENTINEL_BAD_KEY}`);
+    });
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    // Response must be SSE (stream was already opened before provider construction)
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+
+    // Client must receive a terminal done{success:false}
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+    expect(Array.isArray(done["errors"])).toBe(true);
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors.length).toBeGreaterThan(0);
+
+    // The caught error's message (containing the sentinel) must NOT appear in
+    // client output or stderr
+    expect(res.body).not.toContain(SENTINEL_BAD_KEY);
+
+    // core.deploy must NOT have been called (we bailed before reaching it)
+    expect(coreMod.deploy).not.toHaveBeenCalled();
   });
 });
 

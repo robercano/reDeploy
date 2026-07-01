@@ -264,13 +264,33 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
     return;
   }
 
-  const provider = core.jsonRpcProvider({ rpcUrl, privateKey });
-  const artifactResolver = core.foundryArtifactResolver(outDir);
+  // Wrap provider construction and account derivation in a try/catch.
+  // A malformed DEPLOYER_PRIVATE_KEY causes privateKeyToAccount (inside
+  // jsonRpcProvider) to throw synchronously. We must catch it here — AFTER the
+  // SSE stream is already open — and emit a terminal done frame so the client
+  // always receives a well-formed response.
+  // SECURITY: the caught error message is NOT forwarded (it may contain key
+  // material or a formatted hex string); we emit a generic message only.
+  let provider: ReturnType<typeof core.jsonRpcProvider>;
+  let artifactResolver: ReturnType<typeof core.foundryArtifactResolver>;
+  let accounts: string[];
+  try {
+    provider = core.jsonRpcProvider({ rpcUrl, privateKey });
+    artifactResolver = core.foundryArtifactResolver(outDir);
 
-  // Derive accounts from the provider (answered locally by viem, no RPC call).
-  // The provider's eth_accounts handler returns [account.address] synchronously
-  // without any network round-trip, so this is safe to await here.
-  const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+    // Derive accounts from the provider (answered locally by viem, no RPC call).
+    // The provider's eth_accounts handler returns [account.address] synchronously
+    // without any network round-trip, so this is safe to await here.
+    accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+  } catch {
+    // Do NOT log or forward the caught error — it may embed key material.
+    writeSseEvent(res, "done", {
+      success: false,
+      errors: [{ message: "Invalid deployer configuration" }],
+    });
+    res.end();
+    return;
+  }
 
   // --- Emit progress frame so clients know we started ---------------------
   writeSseEvent(res, "progress", { phase: "deploying" });
@@ -300,15 +320,16 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
       res.end();
       return;
     }
-    // Unexpected error — emit generic terminal and log to stderr (no secret values).
+    // Unexpected error (e.g. viem transport/RPC error whose message may embed
+    // the RPC URL including any API key in the path). SECURITY: emit only a
+    // generic message to the client and a generic line to stderr — never log
+    // or forward the error message itself.
     writeSseEvent(res, "done", {
       success: false,
-      errors: [{ message: "An unexpected error occurred during deployment" }],
+      errors: [{ message: "deployment failed" }],
     });
     res.end();
-    // Log the error's own message only (not privateKey or rpcUrl).
-    const errMsg = caughtErr instanceof Error ? caughtErr.message : String(caughtErr);
-    process.stderr.write(`[deploy-server] unexpected deploy error: ${errMsg}\n`);
+    process.stderr.write("[deploy-server] unexpected deploy error\n");
     return;
   }
 
@@ -393,8 +414,11 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
   if (method === "POST" && url === "/api/deploy") {
     // handleDeploy is async; fire-and-forget — errors are handled internally.
-    handleDeploy(req, res).catch((err: unknown) => {
-      // Unexpected error: attempt a 500 response if headers not yet sent.
+    handleDeploy(req, res).catch(() => {
+      // Unexpected error escaping handleDeploy (should not happen in normal
+      // operation — all paths inside handleDeploy have their own catch).
+      // SECURITY: do NOT log or forward the error — it may embed RPC_URL or
+      // other sensitive values from the environment.
       if (!res.headersSent) {
         const body = JSON.stringify({ error: "Internal Server Error" });
         res.writeHead(500, {
@@ -405,8 +429,8 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       } else {
         res.end();
       }
-      // Log only the error's own message — never privateKey or rpcUrl.
-      process.stderr.write(`[deploy-server] unhandled deploy error: ${String(err)}\n`);
+      // Generic log line only — never the error value which may embed the URL/key.
+      process.stderr.write("[deploy-server] unhandled deploy error\n");
     });
     return;
   }
