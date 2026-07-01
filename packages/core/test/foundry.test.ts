@@ -281,3 +281,200 @@ describe("foundryArtifactResolver — getBuildInfo", () => {
     await expect(resolver.getBuildInfo("NoFile")).resolves.toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadArtifact — path traversal security
+// ---------------------------------------------------------------------------
+
+describe("foundryArtifactResolver — path traversal protection", () => {
+  it("throws for a name with path separators (../)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("../../etc/hosts")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a dot-only segment", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("..")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a forward slash", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("foo/bar")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a backslash", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("foo\\bar")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a null byte", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("foo\0bar")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for an empty name", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name that starts with a digit (invalid Solidity identifier)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    await expect(resolver.loadArtifact("1Contract")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("does NOT throw for a valid contract name like 'MyContract_v2'", async () => {
+    // Write a valid artifact so the read succeeds
+    writeArtifact(tmpDir, "MyContract_v2", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+
+    const resolver = foundryArtifactResolver(tmpDir);
+    // Should resolve without throwing
+    await expect(resolver.loadArtifact("MyContract_v2")).resolves.toBeDefined();
+  });
+
+  it("does NOT throw for a valid name starting with underscore", async () => {
+    writeArtifact(tmpDir, "_HelperContract", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("_HelperContract")).resolves.toBeDefined();
+  });
+
+  it("does NOT throw for a valid name starting with $", async () => {
+    writeArtifact(tmpDir, "$Token", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("$Token")).resolves.toBeDefined();
+  });
+
+  it("traversal attack does NOT read outside outDir", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+
+    // The traversal should be blocked at name validation stage
+    let threw = false;
+    try {
+      await resolver.loadArtifact("../../etc/hosts");
+    } catch (err) {
+      threw = true;
+      // It must be the validation error, not a file-system read error
+      expect((err as Error).message).toMatch(/Invalid contract name/);
+    }
+    expect(threw).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// loadArtifact -- path traversal security
+// ---------------------------------------------------------------------------
+
+describe("foundryArtifactResolver -- path traversal protection", () => {
+  it("throws for a name with path separators (../)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("../../etc/hosts")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a dot-only segment (..)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("..")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a forward slash", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("foo/bar")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name with a backslash", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("foo\\bar")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for an empty name", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("throws for a name that starts with a digit (invalid Solidity identifier)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("1Contract")).rejects.toThrow(
+      /Invalid contract name/,
+    );
+  });
+
+  it("does NOT throw for a valid contract name like 'MyContract_v2'", async () => {
+    writeArtifact(tmpDir, "MyContract_v2", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("MyContract_v2")).resolves.toBeDefined();
+  });
+
+  it("does NOT throw for a valid name starting with underscore", async () => {
+    writeArtifact(tmpDir, "_HelperContract", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("_HelperContract")).resolves.toBeDefined();
+  });
+
+  it("does NOT throw for a valid name starting with $", async () => {
+    writeArtifact(tmpDir, "$Token", {
+      abi: SAMPLE_ABI,
+      bytecode: { object: SAMPLE_BYTECODE },
+    });
+    const resolver = foundryArtifactResolver(tmpDir);
+    await expect(resolver.loadArtifact("$Token")).resolves.toBeDefined();
+  });
+
+  it("traversal attack throws Invalid contract name (not a fs read error)", async () => {
+    const resolver = foundryArtifactResolver(tmpDir);
+    let threw = false;
+    try {
+      await resolver.loadArtifact("../../etc/hosts");
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toMatch(/Invalid contract name/);
+    }
+    expect(threw).toBe(true);
+  });
+});

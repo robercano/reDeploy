@@ -1,12 +1,28 @@
 /**
  * EIP-1193 provider factory for @redeploy/core.
  *
- * Creates a provider backed by viem that can:
- *   - Read from the chain via HTTP JSON-RPC (eth_chainId, eth_call, etc.)
- *   - Sign and send transactions using a local private key account
+ * Creates a provider backed by viem that:
+ *   - Signs transactions LOCALLY with the supplied private key account
+ *   - Broadcasts signed transactions via eth_sendRawTransaction over HTTP JSON-RPC
+ *   - Forwards all read-only methods verbatim to the JSON-RPC transport
  *
  * The returned provider is node-safe and does NOT use any browser globals.
  * It is intended for server-side use (e.g., deploy-server, scripts).
+ *
+ * DESIGN
+ * ======
+ * Ignition drives deploys via provider.request({method:"eth_sendTransaction",params:[{from,to,data,gas,...}]}).
+ * viem's walletClient.request() is a raw passthrough to the RPC node and does NOT
+ * sign locally -- local signing only happens through viem's high-level action API
+ * (walletClient.sendTransaction). Therefore we implement the signing layer ourselves:
+ *
+ *   - eth_accounts / eth_requestAccounts  -> return [account.address] immediately (no RPC)
+ *   - eth_sendTransaction                 -> sign locally, broadcast via eth_sendRawTransaction
+ *   - eth_signTransaction                 -> sign locally, return signed raw tx (no broadcast)
+ *   - personal_sign                       -> route to account.signMessage (params: [data, address])
+ *   - eth_sign                            -> route to account.signMessage (params: [address, data])
+ *   - eth_signTypedData_v4 / _v3          -> route to account.signTypedData (parse JSON param)
+ *   - ALL OTHER methods                   -> forward verbatim to the transport
  *
  * SECURITY
  * ========
@@ -16,7 +32,12 @@
  * inside this factory call.
  */
 
-import { createWalletClient, createPublicClient, http } from "viem";
+import {
+  createPublicClient,
+  http,
+  type TransactionSerializableLegacy,
+  type TransactionSerializableEIP1559,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { EIP1193Provider } from "@nomicfoundation/ignition-core";
 
@@ -35,25 +56,9 @@ export interface JsonRpcProviderOptions {
 /**
  * Creates an EIP-1193 compatible provider that uses viem under the hood.
  *
- * IMPLEMENTATION NOTES
- * ====================
- * Ignition requires both read methods (eth_chainId, eth_call, eth_getCode, …)
- * and write/signing methods (eth_accounts, eth_sendTransaction, …). Viem's
- * `WalletClient` with a local account handles BOTH:
- *   - Read methods are forwarded to the HTTP transport as-is.
- *   - eth_accounts returns the derived account's address (no RPC call).
- *   - eth_sendTransaction / eth_signTransaction are handled locally by the
- *     account, then broadcast via the transport.
- *   - personal_sign / eth_sign / eth_signTypedData are handled by the account.
- *
- * For read-only methods that WalletClient might not forward (e.g. eth_call,
- * eth_getCode, eth_blockNumber), we create a separate PublicClient backed by
- * the same transport and try it as a fallback. In practice, viem's WalletClient
- * delegates unknown JSON-RPC methods directly to the transport, so the fallback
- * path is rarely exercised but guards against any viem version differences.
- *
- * The `request` function on a viem client returns `unknown` for raw JSON-RPC
- * calls, which matches EIP-1193's `Promise<unknown>` return type.
+ * Local signing is performed via the viem account derived from the private key.
+ * The transport is used only for read methods and for broadcasting signed transactions
+ * via eth_sendRawTransaction. The node never receives an unsigned eth_sendTransaction.
  *
  * @throws Error (without exposing the private key) if the private key is
  *   invalid (not a valid secp256k1 scalar).
@@ -67,44 +72,170 @@ export function jsonRpcProvider({ rpcUrl, privateKey }: JsonRpcProviderOptions):
 
   const transport = http(rpcUrl);
 
-  // WalletClient: handles signing (eth_sendTransaction, eth_sign, eth_accounts)
-  // and forwards unknown methods to the transport.
-  const walletClient = createWalletClient({
-    account,
-    transport,
-  });
-
-  // PublicClient: explicit fallback for read methods. In viem, PublicClient
-  // is the canonical way to invoke eth_call, eth_getCode, eth_getLogs, etc.
-  // We use it only if the walletClient request throws (e.g., method not
-  // supported by the wallet-client path in a future viem version).
+  // PublicClient: used for all read-only RPC forwarding and for filling in
+  // missing transaction fields (nonce, chainId) before signing.
   const publicClient = createPublicClient({
     transport,
   });
 
+  /**
+   * Forward a raw JSON-RPC call verbatim to the transport.
+   * Used for all read-only methods and for eth_sendRawTransaction after signing.
+   */
+  async function forwardToTransport(args: { method: string; params?: readonly unknown[] | object }): Promise<unknown> {
+    return publicClient.request(args as Parameters<typeof publicClient.request>[0]);
+  }
+
+  /**
+   * Parse a hex string or undefined into a bigint.
+   */
+  function hexToBigInt(v: unknown): bigint | undefined {
+    return v !== undefined ? BigInt(v as string) : undefined;
+  }
+
+  /**
+   * Parse a hex number string or undefined into a JS number.
+   */
+  function hexToNum(v: unknown): number | undefined {
+    if (v === undefined) return undefined;
+    return Number(BigInt(v as string));
+  }
+
+  /**
+   * Sign and optionally broadcast an eth_sendTransaction / eth_signTransaction request.
+   *
+   * Ignition supplies: from, to, data, gas (hex), and either gasPrice (legacy)
+   * or maxFeePerGas + maxPriorityFeePerGas (EIP-1559). We fill in nonce and
+   * chainId from the network if not already provided. Ignition's own fields are
+   * preserved as-is (gas, nonce when set, etc.).
+   *
+   * @param txParams - The JSON-RPC transaction object from params[0]
+   * @param broadcast - If true, broadcast via eth_sendRawTransaction and return tx hash.
+   *   If false, return the signed raw transaction hex.
+   */
+  async function signLocallyAndMaybeSend(
+    txParams: Record<string, unknown>,
+    broadcast: boolean,
+  ): Promise<string> {
+    // Fill in nonce from the network if not provided by Ignition
+    const nonce: number =
+      txParams.nonce !== undefined
+        ? (hexToNum(txParams.nonce) as number)
+        : await publicClient.getTransactionCount({ address: account.address });
+
+    // Fill in chainId from the network if not provided
+    const chainId: number =
+      txParams.chainId !== undefined
+        ? (hexToNum(txParams.chainId) as number)
+        : await publicClient.getChainId();
+
+    let signedTx: `0x${string}`;
+
+    if (txParams.maxFeePerGas !== undefined) {
+      // EIP-1559 transaction
+      const request: TransactionSerializableEIP1559 = {
+        type: "eip1559",
+        chainId,
+        nonce,
+        to: (txParams.to as `0x${string}` | null | undefined) ?? null,
+        value: hexToBigInt(txParams.value),
+        data: txParams.data as `0x${string}` | undefined,
+        gas: hexToBigInt(txParams.gas),
+        maxFeePerGas: hexToBigInt(txParams.maxFeePerGas)!,
+        maxPriorityFeePerGas: hexToBigInt(txParams.maxPriorityFeePerGas) ?? 0n,
+        accessList: (txParams.accessList as TransactionSerializableEIP1559["accessList"]) ?? [],
+      };
+      signedTx = await account.signTransaction(request);
+    } else {
+      // Legacy transaction
+      const request: TransactionSerializableLegacy = {
+        type: "legacy",
+        chainId,
+        nonce,
+        to: (txParams.to as `0x${string}` | null | undefined) ?? null,
+        value: hexToBigInt(txParams.value),
+        data: txParams.data as `0x${string}` | undefined,
+        gas: hexToBigInt(txParams.gas),
+        gasPrice: hexToBigInt(txParams.gasPrice),
+      };
+      signedTx = await account.signTransaction(request);
+    }
+
+    if (!broadcast) {
+      return signedTx;
+    }
+
+    // Broadcast via eth_sendRawTransaction -- the node never receives a raw eth_sendTransaction
+    return forwardToTransport({
+      method: "eth_sendRawTransaction",
+      params: [signedTx],
+    }) as Promise<string>;
+  }
+
   return {
     async request(args: { method: string; params?: readonly unknown[] | object }): Promise<unknown> {
-      // Type assertion: viem's EIP-1193 request method uses the same shape but
-      // with its own internal branded types. We pass through as-is since the
-      // underlying JSON-RPC wire format is identical.
-      try {
-        return await walletClient.request(
-          args as Parameters<typeof walletClient.request>[0],
-        );
-      } catch (walletErr) {
-        // If the wallet client cannot handle this method (e.g. a read-only
-        // method that viem explicitly disallows on WalletClient), try the
-        // public client. If both fail, rethrow the public client error.
-        try {
-          return await publicClient.request(
-            args as Parameters<typeof publicClient.request>[0],
-          );
-        } catch {
-          // Rethrow the original wallet error so the caller sees the most
-          // relevant failure. Do NOT include privateKey or account.address
-          // in error messages constructed here.
-          throw walletErr;
+      const { method, params } = args;
+      const paramList = Array.isArray(params) ? params : [];
+
+      switch (method) {
+        // Account methods -- return the local account address without any RPC call
+        case "eth_accounts":
+        case "eth_requestAccounts":
+          return [account.address];
+
+        // eth_sendTransaction -- sign locally, broadcast via eth_sendRawTransaction
+        case "eth_sendTransaction": {
+          const txParams = paramList[0] as Record<string, unknown>;
+          return signLocallyAndMaybeSend(txParams, true);
         }
+
+        // eth_signTransaction -- sign locally, return signed raw tx (no broadcast)
+        case "eth_signTransaction": {
+          const txParams = paramList[0] as Record<string, unknown>;
+          return signLocallyAndMaybeSend(txParams, false);
+        }
+
+        // personal_sign -- params: [data, address]
+        case "personal_sign": {
+          const data = paramList[0] as `0x${string}`;
+          return account.signMessage({ message: { raw: data } });
+        }
+
+        // eth_sign -- params: [address, data]
+        case "eth_sign": {
+          const data = paramList[1] as `0x${string}`;
+          return account.signMessage({ message: { raw: data } });
+        }
+
+        // eth_signTypedData_v4 / eth_signTypedData_v3 -- params: [address, typedDataJson]
+        case "eth_signTypedData_v4":
+        case "eth_signTypedData_v3": {
+          const typedDataRaw = paramList[1] as string | Record<string, unknown>;
+          const typedData =
+            typeof typedDataRaw === "string"
+              ? (JSON.parse(typedDataRaw) as {
+                  domain: Parameters<typeof account.signTypedData>[0]["domain"];
+                  types: Parameters<typeof account.signTypedData>[0]["types"];
+                  primaryType: string;
+                  message: Record<string, unknown>;
+                })
+              : (typedDataRaw as {
+                  domain: Parameters<typeof account.signTypedData>[0]["domain"];
+                  types: Parameters<typeof account.signTypedData>[0]["types"];
+                  primaryType: string;
+                  message: Record<string, unknown>;
+                });
+          return account.signTypedData({
+            domain: typedData.domain,
+            types: typedData.types,
+            primaryType: typedData.primaryType,
+            message: typedData.message,
+          });
+        }
+
+        // All other methods -- forward verbatim to the transport
+        default:
+          return forwardToTransport(args);
       }
     },
   };

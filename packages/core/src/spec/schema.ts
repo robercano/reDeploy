@@ -114,9 +114,20 @@ export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("k
 // Contract entry
 // ---------------------------------------------------------------------------
 
+/**
+ * Solidity contract identifier regex (used in both schema validation and the
+ * foundryArtifactResolver path-traversal guard).
+ */
+export const VALID_CONTRACT_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 export const contractEntrySchema: z.ZodType<ContractEntry> = z.object({
   id: z.string().min(1, { message: "contract entry id must be a non-empty string" }),
-  contract: z.string().min(1, { message: "contract entry contract must be a non-empty string" }),
+  contract: z
+    .string()
+    .min(1, { message: "contract entry contract must be a non-empty string" })
+    .regex(VALID_CONTRACT_NAME_RE, {
+      message: "contract entry contract must be a valid Solidity identifier",
+    }),
   args: z.array(contractArgSchema).optional(),
   after: z.array(z.string().min(1, { message: "after entry must be a non-empty string" })).optional(),
 });

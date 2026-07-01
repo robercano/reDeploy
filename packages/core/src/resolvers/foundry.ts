@@ -5,7 +5,7 @@
  *   <outDir>/<ContractName>.sol/<ContractName>.json
  *
  * This covers the common case where a Foundry project's contracts are named
- * after their file (e.g., Registry.sol → out/Registry.sol/Registry.json).
+ * after their file (e.g., Registry.sol -> out/Registry.sol/Registry.json).
  *
  * LIMITATIONS
  * ===========
@@ -18,8 +18,11 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { ArtifactResolver, Artifact } from "@nomicfoundation/ignition-core";
+
+/** Regex that matches valid Solidity contract identifiers. */
+const VALID_CONTRACT_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * Creates an ArtifactResolver that reads Foundry out/ artifacts.
@@ -32,25 +35,45 @@ import type { ArtifactResolver, Artifact } from "@nomicfoundation/ignition-core"
  *   option.
  */
 export function foundryArtifactResolver(outDir: string): ArtifactResolver {
+  // Resolve outDir once so all path containment checks use an absolute base.
+  const resolvedOutDir = resolve(outDir);
+
   return {
     /**
      * Load a compiled Foundry artifact by contract name.
      *
      * Reads `<outDir>/<name>.sol/<name>.json`, parses it, and maps Foundry's
-     * output format to Ignition's Artifact type:
-     *   - `.abi`                   → `abi`
-     *   - `.bytecode.object`       → `bytecode` (0x-prefixed)
-     *   - `contractName`           = `name` (the requested contract name)
-     *   - `sourceName`             = `<name>.sol`
-     *   - `linkReferences`         = `{}` (Foundry links before writing the artifact
-     *                                for simple fixtures; library-link cases need a
-     *                                custom resolver)
+     * output format to Ignition's Artifact type.
      *
-     * @throws Error if the file is missing, contains invalid JSON, or is
-     *   missing required fields (abi or bytecode.object).
+     * @throws Error if `name` is not a valid Solidity identifier (path traversal
+     *   guard), if the resolved path escapes `outDir` (defense-in-depth), if the
+     *   file is missing, contains invalid JSON, or is missing required fields
+     *   (abi or bytecode.object).
      */
     async loadArtifact(name: string): Promise<Artifact> {
-      const artifactPath = join(outDir, `${name}.sol`, `${name}.json`);
+      // SECURITY: validate name is a valid Solidity contract identifier.
+      // This prevents path-traversal attacks such as name = "../../etc/hosts".
+      if (!VALID_CONTRACT_NAME_RE.test(name)) {
+        throw new Error(
+          `Invalid contract name: "${name}". ` +
+            `Contract names must match /^[A-Za-z_$][A-Za-z0-9_$]*$/.`,
+        );
+      }
+
+      const artifactPath = join(resolvedOutDir, `${name}.sol`, `${name}.json`);
+
+      // SECURITY: defense-in-depth -- assert the resolved artifact path stays
+      // within outDir even after the name validation above.
+      const resolvedArtifactPath = resolve(artifactPath);
+      if (
+        resolvedArtifactPath !== resolvedOutDir &&
+        !resolvedArtifactPath.startsWith(resolvedOutDir + sep)
+      ) {
+        throw new Error(
+          `Security violation: resolved artifact path "${resolvedArtifactPath}" ` +
+            `is outside the output directory "${resolvedOutDir}".`,
+        );
+      }
 
       let raw: string;
       try {
@@ -128,10 +151,8 @@ export function foundryArtifactResolver(outDir: string): ArtifactResolver {
      * Returns undefined for all contracts.
      *
      * Foundry's out/ layout does not include Hardhat-style per-contract
-     * build-info JSON blobs (those live in Hardhat's artifacts/build-info/
-     * directory). Ignition uses build-info only for optional Etherscan
-     * source verification, not for deployment. Pass a custom resolver that
-     * reads Foundry's build-info equivalent if you need source verification.
+     * build-info JSON blobs. Ignition uses build-info only for optional Etherscan
+     * source verification, not for deployment.
      */
     async getBuildInfo(): Promise<undefined> {
       return undefined;
