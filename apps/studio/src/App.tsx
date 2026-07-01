@@ -35,7 +35,7 @@
  * and cast `node.data` to `ContractNodeData` when accessing it internally.
  */
 
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useState, useRef } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -67,6 +67,8 @@ import { overviewEdges } from "./spec/overview-edges.js";
 import type { ContractNodeData, ViewMode } from "./spec/types.js";
 import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
+import { runSimulate } from "./deploy/simulate-client.js";
+import type { DeploymentView } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
 
@@ -306,6 +308,13 @@ export function App() {
   const [mode, setMode] = useState<AppMode>("authoring");
   const [showBrowser, setShowBrowser] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("detailed");
+  const [simulating, setSimulating] = useState(false);
+  const [liveView, setLiveView] = useState<DeploymentView | null>(null);
+  const [simulateError, setSimulateError] = useState<string | null>(null);
+
+  // Keep a ref to the current deployment so the callback always has the latest value
+  // without being stale-closed.
+  const deploymentRef = useRef<ReturnType<typeof graphToSpec>["deployment"] | null>(null);
 
   const {
     nodes,
@@ -372,6 +381,9 @@ export function App() {
     return graphToSpec(graphNodes, graphEdges, orderedSteps);
   }, [nodes, edges, orderedSteps]);
 
+  // Keep ref in sync so the simulate callback is never stale-closed.
+  deploymentRef.current = deployment;
+
   // Enrich nodes in three steps:
   // 1. enrichNodesWithRefSources — inject refSourceDeployIds from edges (#54).
   // 2. Inject viewMode — presentation-only, never reaches graphToSpec (#55).
@@ -413,9 +425,50 @@ export function App() {
     [nodes, edges, saveTemplate],
   );
 
+  const handleSimulate = useCallback(async () => {
+    if (simulating) return;
+    setSimulating(true);
+    setSimulateError(null);
+
+    const spec = deploymentRef.current;
+    const result = await runSimulate(spec);
+
+    if (result.ok) {
+      setLiveView(result.view);
+      setMode("inspector");
+    } else {
+      setSimulateError(result.error);
+    }
+
+    setSimulating(false);
+  }, [simulating]);
+
+  const deployBtnStyle: React.CSSProperties = {
+    ...btnStyle,
+    background: simulating ? "#e8f0fe" : "#34a853",
+    color: simulating ? "#1a73e8" : "#fff",
+    border: simulating ? "1px solid #1a73e8" : "1px solid #2d8f47",
+    cursor: simulating ? "not-allowed" : "pointer",
+  };
+
+  const errorBannerStyle: React.CSSProperties = {
+    position: "fixed",
+    top: 56,
+    left: 12,
+    zIndex: 20,
+    background: "#fce8e6",
+    color: "#c5221f",
+    border: "1px solid #f28b82",
+    borderRadius: 4,
+    padding: "6px 14px",
+    fontSize: 13,
+    maxWidth: 600,
+    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+  };
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
-      {/* Mode toggle toolbar */}
+      {/* Mode toggle + Deploy toolbar */}
       <div style={toolbarStyle}>
         <button
           style={mode === "authoring" ? activeBtnStyle : btnStyle}
@@ -431,7 +484,22 @@ export function App() {
         >
           Inspector
         </button>
+        <button
+          style={deployBtnStyle}
+          onClick={() => { void handleSimulate(); }}
+          disabled={simulating}
+          data-testid="deploy-simulate-button"
+        >
+          {simulating ? "Simulating…" : "Deploy (simulate)"}
+        </button>
       </div>
+
+      {/* Simulation error banner */}
+      {simulateError !== null && (
+        <div style={errorBannerStyle} data-testid="deploy-simulate-error">
+          {simulateError}
+        </div>
+      )}
 
       {mode === "authoring" && (
         <ReactFlowProvider>
@@ -466,7 +534,7 @@ export function App() {
       )}
 
       {mode === "inspector" && (
-        <Inspector view={SAMPLE_DEPLOYMENT_VIEW} />
+        <Inspector view={liveView ?? SAMPLE_DEPLOYMENT_VIEW} />
       )}
     </div>
   );
