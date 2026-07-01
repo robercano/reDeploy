@@ -29,6 +29,9 @@ importers:
       '@redeploy/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@redeploy/reader':
+        specifier: workspace:*
+        version: link:../../packages/reader
     devDependencies:
       '@types/node':
         specifier: ^22.7.5
