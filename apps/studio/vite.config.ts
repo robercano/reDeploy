@@ -1,8 +1,24 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+// Allow the deploy-server address to be overridden via the environment,
+// e.g. VITE_DEPLOY_SERVER_URL=http://10.0.0.5:8787 pnpm dev
+// Defaults to the deploy-server's standard address.
+const deployServerUrl =
+  process.env["VITE_DEPLOY_SERVER_URL"] ?? "http://127.0.0.1:8787";
+
 export default defineConfig({
   plugins: [react()],
+
+  server: {
+    proxy: {
+      "/api": {
+        target: deployServerUrl,
+        changeOrigin: true,
+      },
+    },
+  },
+
 
   // Production build: mark Node-only transitive deps as external so Rollup
   // doesn't try to bundle native binaries (.node files) or fs/path builtins
