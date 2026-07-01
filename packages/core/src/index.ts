@@ -34,3 +34,10 @@ export type {
   SimulateResult,
 } from "./simulate/simulate.js";
 export { simulate } from "./simulate/simulate.js";
+
+// Artifact resolver helpers — wire deploy() without a Hardhat project
+export { foundryArtifactResolver } from "./resolvers/foundry.js";
+
+// EIP-1193 provider factory — wire deploy() with a local key + JSON-RPC URL
+export type { JsonRpcProviderOptions } from "./provider/jsonRpc.js";
+export { jsonRpcProvider } from "./provider/jsonRpc.js";
