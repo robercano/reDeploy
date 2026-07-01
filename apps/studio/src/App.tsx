@@ -85,6 +85,23 @@ const toolbarStyle: React.CSSProperties = {
   gap: 8,
 };
 
+// The authoring toolbar sits on a second row (top: 52) so it never overlaps the
+// mode-toggle + Deploy toolbar on the first row (top: 12). The left offset shifts
+// right when the Contracts Browser panel is open so it doesn't slide under the panel.
+const AUTHORING_TOOLBAR_TOP = 52;
+const authoringToolbarBaseStyle: React.CSSProperties = {
+  position: "fixed",
+  top: AUTHORING_TOOLBAR_TOP,
+  zIndex: 10,
+  display: "flex",
+  gap: 8,
+};
+
+// Banners stack below the authoring toolbar row. Each banner is ~36px tall with
+// 4px gap → row 1 starts at AUTHORING_TOOLBAR_TOP + 40, row 2 at + 80.
+const ERROR_BANNER_TOP = AUTHORING_TOOLBAR_TOP + 40;
+const SUCCESS_BANNER_TOP = AUTHORING_TOOLBAR_TOP + 80;
+
 const btnStyle: React.CSSProperties = {
   padding: "6px 14px",
   cursor: "pointer",
@@ -212,8 +229,8 @@ function AuthoringCanvas({
 
   return (
     <>
-      {/* Authoring toolbar */}
-      <div style={{ ...toolbarStyle, left: showBrowser ? 300 : 200 }}>
+      {/* Authoring toolbar — second row (top: 52) so it never overlaps the mode-toggle row */}
+      <div style={{ ...authoringToolbarBaseStyle, left: showBrowser ? 300 : 12 }}>
         <button
           style={showBrowser ? activeBtnStyle : btnStyle}
           onClick={onToggleBrowser}
@@ -478,7 +495,7 @@ export function App() {
 
   const errorBannerStyle: React.CSSProperties = {
     position: "fixed",
-    top: 56,
+    top: ERROR_BANNER_TOP,
     left: 12,
     zIndex: 20,
     background: "#fce8e6",
@@ -493,7 +510,7 @@ export function App() {
 
   const successBannerStyle: React.CSSProperties = {
     position: "fixed",
-    top: 92,
+    top: SUCCESS_BANNER_TOP,
     left: 12,
     zIndex: 20,
     background: "#e6f4ea",
