@@ -38,6 +38,13 @@ export interface ContractsBrowserProps {
    * default position. The caller (App.tsx) is responsible for positioning.
    */
   onAddContract?: (contract: ContractManifest) => void;
+  /**
+   * Top offset (px) for the fixed panel. The caller (App.tsx) MUST pass a
+   * value that clears every fixed toolbar row above the canvas so that
+   * opening/closing this panel never needs to shift a toolbar row sideways
+   * (issue #80). Defaults to 56 for standalone usage (e.g. tests/storybook).
+   */
+  top?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,7 +369,11 @@ function hasVisibleContent(node: FolderNode): boolean {
 // Main ContractsBrowser component
 // ---------------------------------------------------------------------------
 
-export function ContractsBrowser({ contracts = contractManifest, onAddContract }: ContractsBrowserProps) {
+export function ContractsBrowser({
+  contracts = contractManifest,
+  onAddContract,
+  top = 56,
+}: ContractsBrowserProps) {
   const [mode, setMode] = useState<ViewMode>("flat");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -380,7 +391,7 @@ export function ContractsBrowser({ contracts = contractManifest, onAddContract }
   const selectedContract = selectedId != null ? contracts.find((c) => contractUniqueId(c) === selectedId) : null;
 
   return (
-    <div style={panelStyle} data-testid="contracts-browser">
+    <div style={{ ...panelStyle, top }} data-testid="contracts-browser">
       {/* Header: title, search, mode toggle */}
       <div style={headerStyle}>
         <div style={titleStyle}>Contracts</div>

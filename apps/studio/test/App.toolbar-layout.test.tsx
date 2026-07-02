@@ -140,11 +140,18 @@ describe("App toolbar layout — deploy button style", () => {
 });
 
 // ---------------------------------------------------------------------------
-// showBrowser toggle: authoring toolbar shifts left to clear the browser panel
+// showBrowser toggle: neither toolbar row moves when the panel opens (#80)
 // ---------------------------------------------------------------------------
+//
+// Issue #80: previously the authoring toolbar row shifted right (left: 12 →
+// 300) when the Contracts Browser opened, while the mode-toggle row above it
+// never moved — the two rows visibly fell out of alignment. The fix keeps
+// BOTH rows pinned at left:12 at all times; the browser panel itself is
+// positioned low enough (see BROWSER_PANEL_TOP in App.tsx) to clear both rows
+// without requiring either to move.
 
-describe("App toolbar layout — browser panel toggle", () => {
-  it("authoring toolbar shifts left when browser panel opens", () => {
+describe("App toolbar layout — browser panel toggle causes no displacement (#80)", () => {
+  it("authoring toolbar left does NOT change when the browser panel opens", () => {
     const { container } = render(<App />);
     const q = within(container);
 
@@ -152,16 +159,16 @@ describe("App toolbar layout — browser panel toggle", () => {
     const authoringToolbar = contractsBtn.parentElement as HTMLElement;
 
     const leftBefore = authoringToolbar.style.left;
+    expect(leftBefore).toBe("12px");
 
     // Open the browser panel
     fireEvent.click(contractsBtn);
 
     const leftAfter = authoringToolbar.style.left;
 
-    // left should increase (shift right) so the toolbar clears the panel
-    const leftBeforePx = parseInt(leftBefore, 10);
-    const leftAfterPx = parseInt(leftAfter, 10);
-    expect(leftAfterPx).toBeGreaterThan(leftBeforePx);
+    // No displacement: left is identical before and after toggling the panel.
+    expect(leftAfter).toBe(leftBefore);
+    expect(leftAfter).toBe("12px");
   });
 
   it("mode-toggle toolbar left remains unchanged when browser panel opens", () => {
@@ -177,6 +184,40 @@ describe("App toolbar layout — browser panel toggle", () => {
     // Mode-toggle toolbar is always at left:12 regardless of browser panel
     expect(modeToolbar.style.left).toBe(leftBefore);
     expect(modeToolbar.style.left).toBe("12px");
+  });
+
+  it("both toolbar rows share the same left offset before AND after opening the browser (no relative displacement)", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    const deployBtn = q.getByTestId("deploy-simulate-button");
+    const modeToolbar = deployBtn.parentElement as HTMLElement;
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
+    const authoringToolbar = contractsBtn.parentElement as HTMLElement;
+
+    expect(authoringToolbar.style.left).toBe(modeToolbar.style.left);
+
+    fireEvent.click(contractsBtn);
+
+    expect(authoringToolbar.style.left).toBe(modeToolbar.style.left);
+  });
+
+  it("the Contracts Browser panel top clears both fixed toolbar rows", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    fireEvent.click(q.getByTestId("toggle-contracts-browser"));
+
+    const authoringToolbarTop = parseInt(
+      (q.getByTestId("toggle-contracts-browser").parentElement as HTMLElement).style.top,
+      10,
+    );
+    const panelTop = parseInt(
+      (q.getByTestId("contracts-browser") as HTMLElement).style.top,
+      10,
+    );
+
+    expect(panelTop).toBeGreaterThan(authoringToolbarTop);
   });
 });
 

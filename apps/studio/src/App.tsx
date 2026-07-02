@@ -87,12 +87,25 @@ const toolbarStyle: React.CSSProperties = {
 };
 
 // The authoring toolbar sits on a second row (top: 52) so it never overlaps the
-// mode-toggle + Deploy toolbar on the first row (top: 12). The left offset shifts
-// right when the Contracts Browser panel is open so it doesn't slide under the panel.
+// mode-toggle + Deploy toolbar on the first row (top: 12).
+//
+// ## Issue #80 — no conditional left-offset
+// Previously this row shifted right (left: 12 → 300) whenever the Contracts
+// Browser panel opened, so it no longer aligned with the first (mode-toggle)
+// row, which never moves. That produced a visible "second row jumps right"
+// glitch every time the panel was toggled.
+//
+// Fix: BOTH toolbar rows now stay at a fixed left:12 at all times — opening
+// the browser causes no relative displacement between them. Instead, the
+// Contracts Browser panel itself is positioned low enough (see
+// ContractsBrowser's `top` prop, wired below) to clear both fixed rows, so a
+// conditional offset is never needed in the first place.
 const AUTHORING_TOOLBAR_TOP = 52;
+const AUTHORING_TOOLBAR_LEFT = 12;
 const authoringToolbarBaseStyle: React.CSSProperties = {
   position: "fixed",
   top: AUTHORING_TOOLBAR_TOP,
+  left: AUTHORING_TOOLBAR_LEFT,
   zIndex: 10,
   display: "flex",
   gap: 8,
@@ -102,6 +115,12 @@ const authoringToolbarBaseStyle: React.CSSProperties = {
 // 4px gap → row 1 starts at AUTHORING_TOOLBAR_TOP + 40, row 2 at + 80.
 const ERROR_BANNER_TOP = AUTHORING_TOOLBAR_TOP + 40;
 const SUCCESS_BANNER_TOP = AUTHORING_TOOLBAR_TOP + 80;
+
+// The Contracts Browser panel must start below BOTH fixed toolbar rows so it
+// never needs to push either row aside (see note above). Row 2 bottom edge is
+// roughly at ERROR_BANNER_TOP (52 + 40 = 92); give the panel a hair more
+// clearance still.
+const BROWSER_PANEL_TOP = AUTHORING_TOOLBAR_TOP + 44;
 
 const btnStyle: React.CSSProperties = {
   padding: "6px 14px",
@@ -140,6 +159,8 @@ interface AuthoringCanvasProps {
   config: ReturnType<typeof graphToSpec>["config"];
   showBrowser: boolean;
   onToggleBrowser: () => void;
+  /** Opens the "New / Clear canvas" confirmation modal (issue #80). */
+  onNewCanvas: () => void;
   /** Current view mode ("detailed" | "overview"). */
   viewMode: ViewMode;
   /** Callback to toggle viewMode. */
@@ -174,6 +195,7 @@ function AuthoringCanvas({
   config,
   showBrowser,
   onToggleBrowser,
+  onNewCanvas,
   viewMode,
   onToggleViewMode,
   userTemplates,
@@ -230,14 +252,24 @@ function AuthoringCanvas({
 
   return (
     <>
-      {/* Authoring toolbar — second row (top: 52) so it never overlaps the mode-toggle row */}
-      <div style={{ ...authoringToolbarBaseStyle, left: showBrowser ? 300 : 12 }}>
+      {/* Authoring toolbar — second row (top: 52) so it never overlaps the mode-toggle row.
+          Fixed left:12 at all times (issue #80) — opening/closing the Contracts Browser
+          panel never displaces this row relative to the mode-toggle row above it. */}
+      <div style={authoringToolbarBaseStyle}>
         <button
           style={showBrowser ? activeBtnStyle : btnStyle}
           onClick={onToggleBrowser}
           data-testid="toggle-contracts-browser"
         >
           Contracts
+        </button>
+        <button
+          style={btnStyle}
+          onClick={onNewCanvas}
+          title="Clear the canvas and start a new authoring session"
+          data-testid="new-canvas-btn"
+        >
+          New
         </button>
         <button
           style={viewMode === "overview" ? activeBtnStyle : btnStyle}
@@ -284,10 +316,13 @@ function AuthoringCanvas({
         />
       )}
 
-      {/* Contracts browser panel (left sidebar) */}
+      {/* Contracts browser panel (left sidebar). `top` is pinned below BOTH
+          fixed toolbar rows (see BROWSER_PANEL_TOP) so opening/closing this
+          panel never requires shifting either toolbar row (issue #80). */}
       {showBrowser && (
         <ContractsBrowser
           onAddContract={(c) => addContractFromManifest(c)}
+          top={BROWSER_PANEL_TOP}
         />
       )}
 
@@ -307,6 +342,7 @@ function AuthoringCanvas({
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
+          deleteKeyCode={["Delete", "Backspace"]}
           fitView
         >
           <Background />
@@ -342,6 +378,10 @@ export function App() {
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
 
+  // "New / Clear canvas" (issue #80) — gated behind a confirm modal since it
+  // discards the entire authoring graph (and its localStorage autosave).
+  const [showNewCanvasModal, setShowNewCanvasModal] = useState(false);
+
   // Keep a ref to the current deployment so the callback always has the latest value
   // without being stale-closed.
   const deploymentRef = useRef<ReturnType<typeof graphToSpec>["deployment"] | null>(null);
@@ -366,6 +406,7 @@ export function App() {
     updateOrderedStep,
     moveOrderedStepUp,
     moveOrderedStepDown,
+    resetGraph,
   } = useGraph();
 
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
@@ -454,6 +495,17 @@ export function App() {
     () => setViewMode((v) => (v === "detailed" ? "overview" : "detailed")),
     [],
   );
+
+  // "New / Clear canvas" — open the confirm modal; the actual reset only
+  // happens once the user confirms (handleConfirmNewCanvas).
+  const onNewCanvas = useCallback(() => setShowNewCanvasModal(true), []);
+  const onCancelNewCanvas = useCallback(() => setShowNewCanvasModal(false), []);
+  const handleConfirmNewCanvas = useCallback(() => {
+    setShowNewCanvasModal(false);
+    resetGraph();
+    setSelectedNodeId(null);
+    setViewMode("detailed");
+  }, [resetGraph, setSelectedNodeId]);
 
   const handleSaveTemplate = useCallback(
     (name: string, description: string, params: ParamSelection[]) => {
@@ -702,6 +754,40 @@ export function App() {
         </div>
       )}
 
+      {/* New / Clear canvas confirmation modal (issue #80) */}
+      {showNewCanvasModal && (
+        <div style={deployModalOverlayStyle} data-testid="new-canvas-modal">
+          <div style={deployModalStyle}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16 }}>Start a new canvas?</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
+              This clears every node, edge, and config step from the authoring
+              canvas (including the autosaved copy). This cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                style={btnStyle}
+                onClick={onCancelNewCanvas}
+                data-testid="new-canvas-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...btnStyle,
+                  background: "#d93025",
+                  color: "#fff",
+                  border: "1px solid #a50e0e",
+                }}
+                onClick={handleConfirmNewCanvas}
+                data-testid="new-canvas-confirm"
+              >
+                Clear canvas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Simulation error banner */}
       {simulateError !== null && (
         <div style={errorBannerStyle} data-testid="deploy-simulate-error">
@@ -746,6 +832,7 @@ export function App() {
             config={config}
             showBrowser={showBrowser}
             onToggleBrowser={onToggleBrowser}
+            onNewCanvas={onNewCanvas}
             viewMode={viewMode}
             onToggleViewMode={onToggleViewMode}
             deployTargets={deployTargets}

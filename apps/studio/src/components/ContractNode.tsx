@@ -30,8 +30,8 @@
  *   When the edge is removed, the slot reverts to an editable literal input.
  */
 
-import { memo, useState } from "react";
-import { Handle, Position } from "@xyflow/react";
+import { memo, useCallback, useState } from "react";
+import { Handle, Position, useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import type { ContractNodeData, ArgSlot, StudioConfigStep, StudioAddressRef, StudioSetXStep, StudioGrantRoleStep } from "../spec/types.js";
 import { getContract } from "../manifest/index.js";
@@ -70,6 +70,28 @@ const labelStyle: React.CSSProperties = {
   fontSize: 10,
   color: "#666",
   marginBottom: 2,
+};
+
+// Delete-node affordance (issue #80): a small circular "✕" pinned to the
+// node's top-right corner. Always visible (not hover-only) so it's
+// discoverable without relying on the user knowing about the Delete/Backspace
+// keyboard shortcut (also wired via React Flow's deleteKeyCode).
+const deleteButtonStyle: React.CSSProperties = {
+  position: "absolute",
+  top: -10,
+  right: -10,
+  width: 20,
+  height: 20,
+  borderRadius: "50%",
+  border: "1px solid #a50e0e",
+  background: "#d93025",
+  color: "#fff",
+  fontSize: 11,
+  lineHeight: "18px",
+  textAlign: "center",
+  cursor: "pointer",
+  padding: 0,
+  boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
 };
 
 const argRowStyle: React.CSSProperties = {
@@ -580,7 +602,23 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
   const data = rawData as unknown as ContractNodeData;
   const isOverview = data.viewMode === "overview";
 
+  // deleteElements removes this node AND any edges connected to it in one
+  // call (React Flow computes connectedEdges internally), and routes both
+  // through the controlled onNodesChange/onEdgesChange props — the same path
+  // Delete/Backspace uses via deleteKeyCode. useGraph's onNodesChange then
+  // prunes any dangling config-step / ordered-step / "after" references to
+  // the deleted contract (issue #80).
+  const { deleteElements } = useReactFlow();
+  const handleDelete = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      void deleteElements({ nodes: [{ id }] });
+    },
+    [deleteElements, id],
+  );
+
   const containerStyle: React.CSSProperties = {
+    position: "relative",
     background: "#fff",
     border: `2px solid ${selected ? "#1a73e8" : "#999"}`,
     borderRadius: 6,
@@ -596,6 +634,16 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
 
   return (
     <div style={containerStyle} data-testid={`contract-node-${id}`}>
+      <button
+        type="button"
+        style={deleteButtonStyle}
+        onClick={handleDelete}
+        title="Delete node"
+        aria-label={`delete-node-${id}`}
+        data-testid={`delete-node-${id}`}
+      >
+        ✕
+      </button>
       {/*
         Overview-anchor input handle: used ONLY as an anchor point for
         overview-mode edge display. Wire edges no longer exist; this handle
