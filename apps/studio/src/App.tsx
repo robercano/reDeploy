@@ -68,6 +68,7 @@ import type { ContractNodeData, ViewMode } from "./spec/types.js";
 import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { runSimulate } from "./deploy/simulate-client.js";
+import { runDeploy } from "./deploy/deploy-client.js";
 import type { DeploymentView } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
@@ -331,6 +332,16 @@ export function App() {
   const [simulateSuccess, setSimulateSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Real-deploy state. `viewKind` discriminates whether the current liveView came
+  // from a dry-run simulate or a real deploy, so the Inspector badge reflects the
+  // truth. The confirm modal gates the (irreversible) POST behind an explicit
+  // confirmation click.
+  const [viewKind, setViewKind] = useState<"simulate" | "deploy" | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [showDeployModal, setShowDeployModal] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
+
   // Keep a ref to the current deployment so the callback always has the latest value
   // without being stale-closed.
   const deploymentRef = useRef<ReturnType<typeof graphToSpec>["deployment"] | null>(null);
@@ -469,6 +480,7 @@ export function App() {
 
     if (result.ok) {
       setLiveView(result.view);
+      setViewKind("simulate");
       setMode("inspector");
       const n = result.view.contracts.length;
       const msg = `Simulation complete — ${n} planned step(s). No contracts deployed (dry run).`;
@@ -485,6 +497,48 @@ export function App() {
     setSimulating(false);
   }, [simulating]);
 
+  // "Deploy (real)" opens a confirmation modal — it never POSTs directly.
+  const onOpenDeployModal = useCallback(() => {
+    if (deploying) return;
+    setShowDeployModal(true);
+  }, [deploying]);
+
+  const onCancelDeploy = useCallback(() => {
+    setShowDeployModal(false);
+  }, []);
+
+  const handleDeploy = useCallback(async () => {
+    if (deploying) return;
+    // Close the confirm modal immediately so a second confirm can't double-fire.
+    setShowDeployModal(false);
+    setDeploying(true);
+    setDeployError(null);
+    setDeploySuccess(null);
+
+    const spec = deploymentRef.current;
+    try {
+      const result = await runDeploy(spec);
+
+      if (result.ok) {
+        setLiveView(result.view);
+        setViewKind("deploy");
+        setMode("inspector");
+        const n = result.view.contracts.length;
+        setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
+      } else {
+        setDeployError(result.error);
+      }
+    } catch (err) {
+      // Defence in depth: runDeploy is expected to resolve with an ok:false
+      // result rather than throw, but if anything unexpected escapes we still
+      // surface it and (via finally) clear the in-flight flag so the button
+      // can never get stuck on "Deploying…".
+      setDeployError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeploying(false);
+    }
+  }, [deploying]);
+
   const deployBtnStyle: React.CSSProperties = {
     ...btnStyle,
     background: simulating ? "#e8f0fe" : "#34a853",
@@ -492,6 +546,31 @@ export function App() {
     border: simulating ? "1px solid #1a73e8" : "1px solid #2d8f47",
     cursor: simulating ? "not-allowed" : "pointer",
   };
+
+  // "Deploy (real)" button — red/warning tone to signal danger (irreversible).
+  const deployRealBtnStyle: React.CSSProperties = {
+    ...btnStyle,
+    background: deploying ? "#fce8e6" : "#d93025",
+    color: deploying ? "#c5221f" : "#fff",
+    border: deploying ? "1px solid #c5221f" : "1px solid #a50e0e",
+    cursor: deploying ? "not-allowed" : "pointer",
+  };
+
+  // Best-effort truthful target descriptor for the confirm modal. We do NOT
+  // fabricate an RPC/network: we show the deployment name if the spec exposes
+  // one, otherwise a contract count so the user knows WHAT will be broadcast.
+  const deployTargetLabel = useMemo(() => {
+    const spec = deployment as unknown as Record<string, unknown> | null;
+    const name =
+      spec && typeof spec["name"] === "string" && spec["name"].trim() !== ""
+        ? (spec["name"] as string)
+        : null;
+    const contracts = Array.isArray(spec?.["contracts"])
+      ? (spec!["contracts"] as unknown[]).length
+      : 0;
+    if (name !== null) return `deployment "${name}" (${contracts} contract(s))`;
+    return `${contracts} contract(s) in the current graph`;
+  }, [deployment]);
 
   const errorBannerStyle: React.CSSProperties = {
     position: "fixed",
@@ -523,6 +602,26 @@ export function App() {
     boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
   };
 
+  // Confirm-modal styles (mirror SaveTemplateModal's overlay + card approach).
+  const deployModalOverlayStyle: React.CSSProperties = {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.5)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 100,
+  };
+
+  const deployModalStyle: React.CSSProperties = {
+    background: "#fff",
+    borderRadius: 8,
+    padding: 24,
+    width: 480,
+    maxWidth: "90vw",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  };
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
       {/* Mode toggle + Deploy toolbar */}
@@ -549,7 +648,59 @@ export function App() {
         >
           {simulating ? "Simulating…" : "Deploy (simulate)"}
         </button>
+        <button
+          style={deployRealBtnStyle}
+          onClick={onOpenDeployModal}
+          disabled={deploying}
+          data-testid="deploy-real-button"
+        >
+          {deploying ? "Deploying…" : "Deploy (real)"}
+        </button>
       </div>
+
+      {/* Deploy (real) confirmation modal — gates the irreversible POST */}
+      {showDeployModal && (
+        <div style={deployModalOverlayStyle} data-testid="deploy-real-modal">
+          <div style={deployModalStyle}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16, color: "#c5221f" }}>
+              Confirm real deployment
+            </h3>
+            <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+              This will <strong>broadcast real transactions</strong> to the
+              configured network. It is <strong>irreversible</strong> — contracts
+              will be deployed on-chain and gas will be spent.
+            </p>
+            <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
+              Target: <strong data-testid="deploy-real-target">{deployTargetLabel}</strong>
+              <br />
+              <span style={{ fontSize: 11, color: "#666" }}>
+                Network / RPC is resolved server-side from its environment.
+              </span>
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                style={btnStyle}
+                onClick={onCancelDeploy}
+                data-testid="deploy-real-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...btnStyle,
+                  background: "#d93025",
+                  color: "#fff",
+                  border: "1px solid #a50e0e",
+                }}
+                onClick={() => { void handleDeploy(); }}
+                data-testid="deploy-real-confirm"
+              >
+                Deploy for real
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Simulation error banner */}
       {simulateError !== null && (
@@ -562,6 +713,20 @@ export function App() {
       {simulateSuccess !== null && (
         <div style={successBannerStyle} data-testid="deploy-simulate-success">
           {simulateSuccess}
+        </div>
+      )}
+
+      {/* Real-deploy error banner */}
+      {deployError !== null && (
+        <div style={errorBannerStyle} data-testid="deploy-real-error">
+          {deployError}
+        </div>
+      )}
+
+      {/* Real-deploy success banner */}
+      {deploySuccess !== null && (
+        <div style={successBannerStyle} data-testid="deploy-real-success">
+          {deploySuccess}
         </div>
       )}
 
@@ -600,7 +765,13 @@ export function App() {
       {mode === "inspector" && (
         <Inspector
           view={liveView ?? SAMPLE_DEPLOYMENT_VIEW}
-          contextLabel={liveView !== null ? "Simulated plan (dry run)" : undefined}
+          contextLabel={
+            liveView !== null && viewKind !== null
+              ? viewKind === "deploy"
+                ? "Real deployment (broadcast on-chain)"
+                : "Simulated plan (dry run)"
+              : undefined
+          }
         />
       )}
     </div>
