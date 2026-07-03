@@ -13,6 +13,7 @@
 import { getContract } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
 import type { ContractNodeData, StudioConfigStep, StudioSetXStep, StudioGrantRoleStep, StudioConfigArg, StudioAddressRef } from "../spec/types.js";
+import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 
 /** A deploy-id / contractName pair used to populate the target picker. */
 export interface DeployTarget {
@@ -415,20 +416,11 @@ export function ConfigPanel({
         );
       })}
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          style={{ flex: 1, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
-          onClick={() => onAddStep(nodeId, "setX")}
-        >
-          + setX
-        </button>
-        <button
-          style={{ flex: 1, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
-          onClick={() => onAddStep(nodeId, "grantRole")}
-        >
-          + grantRole
-        </button>
-      </div>
+      <AddConfigCallMenu
+        idPrefix={`config-panel-add-config-call-${nodeId}`}
+        onSelect={(kind) => onAddStep(nodeId, kind)}
+        buttonStyle={{ width: "100%", padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
+      />
     </div>
   );
 }

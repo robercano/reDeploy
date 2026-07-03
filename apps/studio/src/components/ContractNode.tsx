@@ -36,6 +36,7 @@ import type { NodeProps } from "@xyflow/react";
 import type { ContractNodeData, ArgSlot, StudioConfigStep, StudioAddressRef, StudioSetXStep, StudioGrantRoleStep } from "../spec/types.js";
 import { getContract } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
+import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 
 const inputStyle: React.CSSProperties = {
   fontSize: 11,
@@ -606,21 +607,12 @@ function NodeConfigSection({
               />
             );
           })}
-          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-            <button
-              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
-              onClick={() => configCallbacks.onAddConfigStep(nodeId, "setX")}
-              data-testid={`node-add-setx-${nodeId}`}
-            >
-              + setX
-            </button>
-            <button
-              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
-              onClick={() => configCallbacks.onAddConfigStep(nodeId, "grantRole")}
-              data-testid={`node-add-grantrole-${nodeId}`}
-            >
-              + grantRole
-            </button>
+          <div style={{ marginTop: 4 }}>
+            <AddConfigCallMenu
+              idPrefix={`node-add-config-call-${nodeId}`}
+              onSelect={(kind) => configCallbacks.onAddConfigStep(nodeId, kind)}
+              buttonStyle={{ width: "100%", padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
+            />
           </div>
         </div>
       )}

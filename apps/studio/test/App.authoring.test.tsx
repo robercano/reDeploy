@@ -161,6 +161,41 @@ describe("App — config panel", () => {
     expect(configSection).not.toBeNull();
   });
 
+  it("shows exactly ONE 'Add config call' button and no old +setX/+grantRole buttons", () => {
+    render(<App />);
+    addNodeByName("Registry");
+
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
+
+    expect(within(configSection).getAllByText("Add config call")).toHaveLength(1);
+    expect(within(configSection).queryByText("+ setX")).toBeNull();
+    expect(within(configSection).queryByText("+ grantRole")).toBeNull();
+  });
+
+  it("'Add config call' picker lists exactly the two options {setX, grantRole}", () => {
+    // NOTE: this test renders the full App, whose nodes go through React
+    // Flow's real (unmeasured, in jsdom) node wrapper — that wrapper is kept
+    // `visibility: hidden` until a ResizeObserver reports its size, which
+    // never fires in jsdom. RTL's `getByRole` filters out elements under an
+    // inaccessible (hidden) ancestor, so we query by the menu/menuitem
+    // `role` attribute directly via querySelector instead of `getByRole`
+    // (functional behavior — click handling — is unaffected by the CSS
+    // visibility quirk; only the accessibility-tree-based query is).
+    render(<App />);
+    addNodeByName("Registry");
+
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
+
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    const menu = configSection.querySelector("[role='menu']") as HTMLElement;
+    expect(menu).not.toBeNull();
+    const items = Array.from(menu.querySelectorAll("[role='menuitem']"));
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.textContent)).toEqual(["setX", "grantRole"]);
+  });
+
   it("can add a setX step via config panel", () => {
     render(<App />);
     addNodeByName("Registry");
@@ -169,8 +204,8 @@ describe("App — config panel", () => {
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    const addSetXBtn = within(configSection).getByText("+ setX");
-    fireEvent.click(addSetXBtn);
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("setX"));
 
     // Should show a step card (each step has a card div; the remove button is a
     // child element with a more specific testid so we match only card divs here)
@@ -185,8 +220,8 @@ describe("App — config panel", () => {
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    const addGrantBtn = within(configSection).getByText("+ grantRole");
-    fireEvent.click(addGrantBtn);
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("grantRole"));
 
     const steps = document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])");
     expect(steps).toHaveLength(1);
@@ -199,7 +234,8 @@ describe("App — config panel", () => {
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    fireEvent.click(within(configSection).getByText("+ setX"));
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("setX"));
     expect(document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])")).toHaveLength(1);
 
     const removeBtn = within(configSection).getByTitle("Remove config call");

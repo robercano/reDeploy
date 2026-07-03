@@ -5,7 +5,7 @@
  * adding and removing steps.
  */
 
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ConfigPanel } from "../src/components/ConfigPanel";
 import type { ContractNodeData } from "../src/spec/types";
@@ -78,7 +78,43 @@ describe("ConfigPanel — rendering", () => {
 // ---------------------------------------------------------------------------
 
 describe("ConfigPanel — adding steps", () => {
-  it("calls onAddStep with 'setX' when + setX clicked", () => {
+  it("renders exactly ONE 'Add config call' button and no old +setX/+grantRole buttons", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={makeData()}
+        deployTargets={NO_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    expect(screen.getAllByText("Add config call")).toHaveLength(1);
+    expect(screen.queryByText("+ setX")).toBeNull();
+    expect(screen.queryByText("+ grantRole")).toBeNull();
+  });
+
+  it("picker lists exactly the two options {setX, grantRole} and nothing else", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={makeData()}
+        deployTargets={NO_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add config call"));
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.textContent)).toEqual(["setX", "grantRole"]);
+  });
+
+  it("calls onAddStep with 'setX' when the setX option is selected", () => {
     const onAddStep = vi.fn();
     render(
       <ConfigPanel
@@ -91,11 +127,12 @@ describe("ConfigPanel — adding steps", () => {
         onUpdateGrantRoleStep={() => {}}
       />,
     );
-    fireEvent.click(screen.getByText("+ setX"));
+    fireEvent.click(screen.getByText("Add config call"));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "setX" }));
     expect(onAddStep).toHaveBeenCalledWith("n1", "setX");
   });
 
-  it("calls onAddStep with 'grantRole' when + grantRole clicked", () => {
+  it("calls onAddStep with 'grantRole' when the grantRole option is selected", () => {
     const onAddStep = vi.fn();
     render(
       <ConfigPanel
@@ -108,7 +145,8 @@ describe("ConfigPanel — adding steps", () => {
         onUpdateGrantRoleStep={() => {}}
       />,
     );
-    fireEvent.click(screen.getByText("+ grantRole"));
+    fireEvent.click(screen.getByText("Add config call"));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "grantRole" }));
     expect(onAddStep).toHaveBeenCalledWith("n1", "grantRole");
   });
 });

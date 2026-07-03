@@ -216,7 +216,41 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     expect(container.querySelector("[data-testid='node-config-step-step-1']")).not.toBeNull();
   });
 
-  it("+ setX button calls onAddConfigStep with 'setX'", () => {
+  it("renders exactly ONE 'Add config call' button and no old +setX/+grantRole buttons", () => {
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    expect(within(section).getAllByText("Add config call")).toHaveLength(1);
+    expect(within(section).queryByText("+ setX")).toBeNull();
+    expect(within(section).queryByText("+ grantRole")).toBeNull();
+  });
+
+  it("picker lists exactly the two options {setX, grantRole} and nothing else", () => {
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    fireEvent.click(within(section).getByText("Add config call"));
+    const menu = within(section).getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.textContent)).toEqual(["setX", "grantRole"]);
+  });
+
+  it("'Add config call' → setX option calls onAddConfigStep with 'setX'", () => {
     const calls: Array<[string, string]> = [];
     const configCallbacks = {
       onAddConfigStep: (nodeId: string, kind: string) => calls.push([nodeId, kind]),
@@ -228,12 +262,13 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
     const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
     const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
-    fireEvent.click(within(section).getByText("+ setX"));
+    fireEvent.click(within(section).getByText("Add config call"));
+    fireEvent.click(within(section).getByRole("menuitem", { name: "setX" }));
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual(["n1", "setX"]);
   });
 
-  it("+ grantRole button calls onAddConfigStep with 'grantRole'", () => {
+  it("'Add config call' → grantRole option calls onAddConfigStep with 'grantRole'", () => {
     const calls: Array<[string, string]> = [];
     const configCallbacks = {
       onAddConfigStep: (nodeId: string, kind: string) => calls.push([nodeId, kind]),
@@ -245,7 +280,8 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
     const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
     const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
-    fireEvent.click(within(section).getByText("+ grantRole"));
+    fireEvent.click(within(section).getByText("Add config call"));
+    fireEvent.click(within(section).getByRole("menuitem", { name: "grantRole" }));
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual(["n1", "grantRole"]);
   });
