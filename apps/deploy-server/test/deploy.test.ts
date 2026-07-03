@@ -331,6 +331,33 @@ describe("POST /api/deploy — success", () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/deploy — DEPLOYER_PRIVATE_KEY without a "0x" prefix
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — DEPLOYER_PRIVATE_KEY normalization", () => {
+  it("normalizes a non-0x-prefixed key before passing it to jsonRpcProvider", async () => {
+    const unprefixedKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    process.env["DEPLOYER_PRIVATE_KEY"] = unprefixedKey;
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    expect(res.statusCode).toBe(200);
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect((doneEvent?.data as Record<string, unknown>)["success"]).toBe(true);
+
+    expect(coreMod.jsonRpcProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ privateKey: `0x${unprefixedKey}` }),
+    );
+
+    // SECURITY: the raw (unprefixed) key must not leak into the response either.
+    expect(res.body).not.toContain(unprefixedKey);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/deploy — deploy failure (success:false from deploy())
 // ---------------------------------------------------------------------------
 

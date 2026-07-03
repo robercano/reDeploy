@@ -1,4 +1,9 @@
+import { loadRepoEnv } from "./env.js";
 import { createServer } from "./server.js";
+
+// Load the repo-root .env file (if present) before reading any env-derived
+// config below. Real process.env vars always take precedence over the file.
+loadRepoEnv();
 
 const rawPort = process.env["PORT"] ? parseInt(process.env["PORT"], 10) : NaN;
 const PORT = Number.isInteger(rawPort) && rawPort > 0 ? rawPort : 8787;

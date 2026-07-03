@@ -9,6 +9,7 @@ import type { PlannedStep, SimulateError, DeploymentSpec } from "@redeploy/core"
 import { DeployError } from "@redeploy/core";
 import { readDeployment, ReadError } from "@redeploy/reader";
 import type { DeploymentView } from "@redeploy/reader";
+import { normalizePrivateKey } from "./env.js";
 
 /** Maximum body size for POST requests (1 MiB). */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -193,7 +194,8 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  *
  * Environment variables consumed (values are NEVER echoed in any response):
  *   - RPC_URL:              JSON-RPC endpoint (default: http://127.0.0.1:8545)
- *   - DEPLOYER_PRIVATE_KEY: 0x-prefixed private key (required; missing → SSE error)
+ *   - DEPLOYER_PRIVATE_KEY: private key, with or without a "0x" prefix (required;
+ *                           missing → SSE error; normalized via normalizePrivateKey)
  *   - FOUNDRY_OUT:          Foundry artifacts dir (default: <repo>/contracts/out)
  *   - DEPLOYMENT_DIR:       Where to persist the Ignition journal (default: OS temp)
  *
@@ -225,8 +227,8 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
 
   // --- Validate private key presence BEFORE building the provider ----------
   // SECURITY: never include the key value in any message or log.
-  const privateKey = process.env["DEPLOYER_PRIVATE_KEY"];
-  if (!privateKey || privateKey.trim() === "") {
+  const rawPrivateKey = process.env["DEPLOYER_PRIVATE_KEY"];
+  if (!rawPrivateKey || rawPrivateKey.trim() === "") {
     writeSseEvent(res, "done", {
       success: false,
       errors: [{ message: "DEPLOYER_PRIVATE_KEY is not configured" }],
@@ -234,6 +236,10 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
     res.end();
     return;
   }
+
+  // Accept the key with or without a "0x" prefix — viem's
+  // privateKeyToAccount (inside jsonRpcProvider) requires the prefix.
+  const privateKey = normalizePrivateKey(rawPrivateKey);
 
   // --- Build environment-driven inputs ------------------------------------
   // SECURITY: rpcUrl and privateKey are NEVER interpolated into any log or
