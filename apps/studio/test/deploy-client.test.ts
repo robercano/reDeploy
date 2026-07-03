@@ -282,3 +282,70 @@ describe("runDeploy — error paths", () => {
     expect(result.error).toContain("empty");
   });
 });
+
+// ---------------------------------------------------------------------------
+// runDeploy — structured errors (issue #83)
+// ---------------------------------------------------------------------------
+
+describe("runDeploy — structured errors (issue #83)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("preserves code/path/message on done{success:false} errors", async () => {
+    const raw =
+      progressFrame() +
+      `event: done\ndata: ${JSON.stringify({
+        success: false,
+        errors: [
+          { code: "INVALID_ARG", path: "contracts[1].args[0]", message: "arg 0 is invalid" },
+        ],
+      })}\n\n`;
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    const result = await runDeploy({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+
+    expect(result.errors).toEqual([
+      { code: "INVALID_ARG", path: "contracts[1].args[0]", message: "arg 0 is invalid" },
+    ]);
+    expect(result.error).toContain("arg 0 is invalid");
+  });
+
+  it("falls back to JSON.stringify for a structured error with no message", async () => {
+    const raw =
+      progressFrame() +
+      `event: done\ndata: ${JSON.stringify({
+        success: false,
+        errors: [{ path: "contracts[0]" }],
+      })}\n\n`;
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    const result = await runDeploy({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors![0].path).toBe("contracts[0]");
+    expect(result.errors![0].message).toContain("contracts[0]");
+  });
+
+  it("does not include an errors field for non-200 responses (message-only fallback)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("bad request", { status: 400 }));
+
+    const result = await runDeploy({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("does not include an errors field for network errors (message-only fallback)", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("Failed to fetch"));
+
+    const result = await runDeploy({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.errors).toBeUndefined();
+  });
+});

@@ -37,6 +37,8 @@
  * config call step whose arg is a { kind: "addressRef", deployId } reference.
  */
 
+import type { NodeFieldErrors } from "../deploy/field-errors.js";
+
 /** A single constructor argument slot on a contract node. */
 export interface ArgSlot {
   /** Position index in the constructor args array. */
@@ -122,6 +124,14 @@ export interface ContractNodeData extends NodeCallbacks {
    * Absent nodes default to "detailed".
    */
   viewMode?: ViewMode;
+  /**
+   * DISPLAY-ONLY: field-level / node-level validation errors from the most
+   * recent Deploy (simulate) or Deploy (real) run (issue #83). Injected by
+   * App.tsx via field-errors.ts's buildNodeFieldErrors, derived from the
+   * structured errors returned by runSimulate/runDeploy. NOT serialized by
+   * graph-to-spec.ts. Cleared when a new run starts or the run succeeds.
+   */
+  errors?: NodeFieldErrors;
 }
 
 // ---- Studio config arg types ------------------------------------------------

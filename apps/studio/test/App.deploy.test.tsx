@@ -11,7 +11,7 @@
  * - ERROR: non-200 / network reject after Confirm → error banner, no crash.
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import App from "../src/App.js";
 
@@ -61,8 +61,31 @@ function doneDeployedFrame(contracts: DeployedContract[]): string {
   return `event: done\ndata: ${JSON.stringify({ success: true, deployment })}\n\n`;
 }
 
-function doneErrorFrame(errors: { message: string }[]): string {
+function doneErrorFrame(errors: { message: string; path?: string; code?: string }[]): string {
   return `event: done\ndata: ${JSON.stringify({ success: false, errors })}\n\n`;
+}
+
+/**
+ * Add a contract node by name through the Contracts Browser (mirrors the
+ * helper in App.authoring.test.tsx / App.simulate.test.tsx). Opens the
+ * browser if not already open.
+ */
+function addNodeByName(name: string) {
+  if (!screen.queryByTestId("contracts-browser")) {
+    fireEvent.click(screen.getByTestId("toggle-contracts-browser"));
+  }
+  const browser = screen.getByTestId("contracts-browser");
+  fireEvent.click(within(browser).getByTestId(`contract-row-${name}`));
+}
+
+/**
+ * Fill a constructor arg input (aria-label "arg-<index>") with a value.
+ * Used to satisfy the studio-side empty-constructor-arg pre-validation
+ * (issue #83) in tests that exercise SERVER-reported errors unrelated to
+ * arg emptiness — those must not be short-circuited by local validation.
+ */
+function fillArg(index: number, value: string) {
+  fireEvent.change(screen.getByLabelText(`arg-${index}`), { target: { value } });
 }
 
 function mockFetchOk(raw: string): ReturnType<typeof vi.fn> {
@@ -300,5 +323,269 @@ describe("App — Deploy (real) error paths", () => {
       expect(banner).not.toBeNull();
       expect(banner!.textContent).toContain("Deployment failed on-chain");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Field/node-level error highlighting (issue #83) — real-deploy flow
+//
+// Same fallback chain as the simulate flow (see App.simulate.test.tsx):
+// (1) field-level (deploy-id / arg input), (2) node-level (red node border),
+// (3) message-only banner. Verified here specifically for Deploy (real) since
+// it goes through a separate confirm-modal-gated handler (handleDeploy).
+// ---------------------------------------------------------------------------
+
+describe("App — Deploy (real) error field/node highlighting (issue #83)", () => {
+  it("a contracts[0].id error marks the deploy-id input invalid (field-level)", async () => {
+    render(<App />);
+    addNodeByName("Token");
+    fillArg(0, "MyToken");
+    fillArg(1, "MTK");
+
+    const raw =
+      progressFrame() +
+      doneErrorFrame([
+        { path: "contracts[0].id", message: "contract entry id must be a non-empty string" },
+      ]);
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+      expect(deployIdInput.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    expect(screen.queryByTestId("deploy-real-error")).not.toBeNull();
+  });
+
+  it("an arg error marks the correct arg input (field-level), not the other arg", async () => {
+    render(<App />);
+    addNodeByName("Token"); // Token has 2 constructor args: name_ (0), symbol_ (1)
+    // Both args filled — the error asserted below is a SERVER-reported one,
+    // independent of the local empty-arg pre-validation (issue #83 follow-up).
+    fillArg(0, "MyToken");
+    fillArg(1, "MTK");
+
+    const raw =
+      progressFrame() +
+      doneErrorFrame([{ path: "contracts[0].args[0]", message: "name_ must not be empty" }]);
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const arg0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(arg0.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(arg1.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("a node-only-mappable error (bare contracts[i]) red-borders the node (node-level fallback)", async () => {
+    render(<App />);
+    addNodeByName("Registry");
+    fillArg(0, "0x0000000000000000000000000000000000000001");
+
+    const raw =
+      progressFrame() +
+      doneErrorFrame([{ path: "contracts[0]", message: "duplicate deploy id across contracts" }]);
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const nodeEl = document.querySelector('[data-testid^="contract-node-"]') as HTMLElement;
+      expect(nodeEl.getAttribute("data-node-invalid")).toBe("true");
+    });
+
+    const nodeEl = document.querySelector('[data-testid^="contract-node-"]') as HTMLElement;
+    // jsdom normalizes the inline hex color (#d93025) to rgb(217, 48, 37).
+    expect(nodeEl.style.border).toContain("rgb(217, 48, 37)");
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("an unmappable error (no path) shows only the banner — no field/node highlight", async () => {
+    render(<App />);
+    addNodeByName("Token");
+    fillArg(0, "MyToken");
+    fillArg(1, "MTK");
+
+    const raw = progressFrame() + doneErrorFrame([{ message: "Deployment failed on-chain" }]);
+    vi.stubGlobal("fetch", mockFetchOk(raw));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("deploy-real-error")).not.toBeNull();
+    });
+
+    const nodeEl = document.querySelector('[data-testid^="contract-node-"]') as HTMLElement;
+    expect(nodeEl.getAttribute("data-node-invalid")).toBeNull();
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("starting a new real-deploy run clears a prior field highlight immediately", async () => {
+    render(<App />);
+    addNodeByName("Token");
+    fillArg(0, "MyToken");
+    fillArg(1, "MTK");
+
+    const rawErr =
+      progressFrame() + doneErrorFrame([{ path: "contracts[0].id", message: "id required" }]);
+    vi.stubGlobal("fetch", mockFetchOk(rawErr));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("deploy-id") as HTMLInputElement).getAttribute("aria-invalid"),
+      ).toBe("true");
+    });
+
+    // Second run: use a never-resolving fetch so we can inspect the state
+    // synchronously right after Confirm, before any response arrives.
+    let resolveSecond!: (v: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveSecond = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(pending));
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();
+
+    // Clean up the pending promise so the test doesn't leak an unresolved request.
+    act(() => {
+      resolveSecond(new Response("err", { status: 500 }));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Studio-side empty-constructor-arg pre-validation (issue #83 follow-up) —
+// real-deploy flow. Same requirement as the simulate flow (see
+// App.simulate.test.tsx): an empty/blank literal constructor arg must block
+// Deploy (real) locally, with no /api/deploy round-trip, and highlight the
+// offending input(s).
+// ---------------------------------------------------------------------------
+
+describe("App — Deploy (real) local pre-validation: empty constructor args (issue #83)", () => {
+  it("an empty constructor arg blocks Deploy (real) locally (no fetch call) and highlights that arg", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+    addNodeByName("Token"); // args default to "" — neither filled here.
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const arg0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(arg0.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    // Short-circuited locally: the server was never contacted.
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const banner = screen.getByTestId("deploy-real-error");
+    expect(banner.textContent).toContain("constructor argument must have a value");
+  });
+
+  it("a whitespace-only constructor arg is also treated as empty and blocks Deploy (real)", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+    addNodeByName("Token");
+    fillArg(0, "   ");
+    fillArg(1, "MTK");
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const arg0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(arg0.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(arg1.getAttribute("aria-invalid")).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("filled constructor args do not block Deploy (real) — request proceeds to the server", async () => {
+    const raw = progressFrame() + doneDeployedFrame([{ id: "token", contractName: "ERC20Token", address: "0xTOKEN" }]);
+    const fetchSpy = mockFetchOk(raw);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+    addNodeByName("Token");
+    fillArg(0, "MyToken");
+    fillArg(1, "MTK");
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // Success switches to inspector mode — go back to authoring to
+    // re-inspect the (unhighlighted) arg inputs.
+    await waitFor(() => {
+      expect(screen.queryByTestId("inspector-node-token-address")).not.toBeNull();
+    });
+    fireEvent.click(screen.getByTestId("mode-authoring"));
+
+    const arg0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+    const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(arg0.getAttribute("aria-invalid")).toBeNull();
+    expect(arg1.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("multiple empty args across multiple nodes are each highlighted red", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+    addNodeByName("Token"); // 2 args, both left blank
+    addNodeByName("Registry"); // 1 arg, left blank
+
+    fireEvent.click(screen.getByTestId("deploy-real-button"));
+    fireEvent.click(screen.getByTestId("deploy-real-confirm"));
+
+    await waitFor(() => {
+      const nodeEls = document.querySelectorAll('[data-testid^="contract-node-"]');
+      const tokenArg0 = within(nodeEls[0] as HTMLElement).getByLabelText(
+        "arg-0",
+      ) as HTMLInputElement;
+      expect(tokenArg0.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    const nodeEls = document.querySelectorAll('[data-testid^="contract-node-"]');
+    const tokenArg1 = within(nodeEls[0] as HTMLElement).getByLabelText(
+      "arg-1",
+    ) as HTMLInputElement;
+    const registryArg0 = within(nodeEls[1] as HTMLElement).getByLabelText(
+      "arg-0",
+    ) as HTMLInputElement;
+    expect(tokenArg1.getAttribute("aria-invalid")).toBe("true");
+    expect(registryArg0.getAttribute("aria-invalid")).toBe("true");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

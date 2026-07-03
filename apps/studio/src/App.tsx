@@ -69,6 +69,8 @@ import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { runSimulate } from "./deploy/simulate-client.js";
 import { runDeploy } from "./deploy/deploy-client.js";
+import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
+import type { NodeFieldErrors } from "./deploy/field-errors.js";
 import type { DeploymentView } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
@@ -382,6 +384,13 @@ export function App() {
   // discards the entire authoring graph (and its localStorage autosave).
   const [showNewCanvasModal, setShowNewCanvasModal] = useState(false);
 
+  // Per-node field/node-level validation error highlighting (issue #83).
+  // Shared by BOTH the simulate and the real-deploy flow: whichever run fails
+  // last populates this map (keyed by canvas node id); a fresh run of either
+  // kind clears it immediately, and a successful run of either kind clears it
+  // too. See deploy/field-errors.ts for the path → field/node mapping.
+  const [fieldErrors, setFieldErrors] = useState<Map<string, NodeFieldErrors>>(new Map());
+
   // Keep a ref to the current deployment so the callback always has the latest value
   // without being stale-closed.
   const deploymentRef = useRef<ReturnType<typeof graphToSpec>["deployment"] | null>(null);
@@ -410,6 +419,13 @@ export function App() {
   } = useGraph();
 
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
+
+  // Keep a ref to the current nodes so the simulate/deploy callbacks can map
+  // structured errors (contracts[i] ⇔ nodes[i], positional — see
+  // graph-to-spec.ts) back to canvas node ids without being stale-closed
+  // (mirrors deploymentRef above).
+  const nodesRef = useRef<typeof nodes>(nodes);
+  nodesRef.current = nodes;
 
   // Derive deploy targets from all graph nodes.
   const deployTargets = useMemo<CanvasDeployTarget[]>(() => {
@@ -464,10 +480,11 @@ export function App() {
     };
   }, []);
 
-  // Enrich nodes in three steps:
+  // Enrich nodes in four steps:
   // 1. enrichNodesWithRefSources — inject refSourceDeployIds from edges (#54).
   // 2. Inject viewMode — presentation-only, never reaches graphToSpec (#55).
   // 3. Inject configCallbacks — per-node config section callbacks (#56).
+  // 4. Inject errors — per-node field/node-level validation highlight (#83).
   const enrichedNodes = useMemo(() => {
     const withRefSources = enrichNodesWithRefSources(nodes, edges);
     return withRefSources.map((n) => ({
@@ -476,9 +493,10 @@ export function App() {
         ...n.data,
         viewMode,
         configCallbacks,
+        errors: fieldErrors.get(n.id),
       },
     }));
-  }, [nodes, edges, viewMode, configCallbacks]);
+  }, [nodes, edges, viewMode, configCallbacks, fieldErrors]);
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => setSelectedNodeId(node.id),
@@ -520,6 +538,8 @@ export function App() {
     if (simulating) return;
     setSimulating(true);
     setSimulateError(null);
+    // Clear any prior field/node highlight before a new run (issue #83).
+    setFieldErrors(new Map());
     // Clear any prior success banner and cancel its timer before a new run.
     setSimulateSuccess(null);
     if (successTimerRef.current !== null) {
@@ -528,6 +548,23 @@ export function App() {
     }
 
     const spec = deploymentRef.current;
+
+    // Studio-side pre-validation (issue #83): the deploy-server does not (yet)
+    // reject empty/blank constructor arg literals — an empty arg slot
+    // serializes to a structurally valid `null`/blank literal and would
+    // silently deploy. Per product requirement every constructor param must
+    // have a value, so short-circuit here (no server round-trip) using the
+    // SAME structured error shape + highlighting the server would produce.
+    const localErrors = spec ? validateConstructorArgs(spec) : [];
+    if (localErrors.length > 0) {
+      const msgs = localErrors.map((e) => e.message).join("; ");
+      setSimulateError(`Simulation failed: ${msgs}`);
+      const nodeIds = nodesRef.current.map((n) => n.id);
+      setFieldErrors(buildNodeFieldErrors(localErrors, nodeIds));
+      setSimulating(false);
+      return;
+    }
+
     const result = await runSimulate(spec);
 
     if (result.ok) {
@@ -544,6 +581,14 @@ export function App() {
       }, 5000);
     } else {
       setSimulateError(result.error);
+      // Map structured errors (when present) to field/node highlights on the
+      // canvas (issue #83). contracts[i] ⇔ nodes[i] positionally (see
+      // graph-to-spec.ts), so nodeIds must reflect the SAME nodes array that
+      // was serialized into the DeploymentSpec for this run.
+      if (result.errors && result.errors.length > 0) {
+        const nodeIds = nodesRef.current.map((n) => n.id);
+        setFieldErrors(buildNodeFieldErrors(result.errors, nodeIds));
+      }
     }
 
     setSimulating(false);
@@ -565,9 +610,25 @@ export function App() {
     setShowDeployModal(false);
     setDeploying(true);
     setDeployError(null);
+    // Clear any prior field/node highlight before a new run (issue #83).
+    setFieldErrors(new Map());
     setDeploySuccess(null);
 
     const spec = deploymentRef.current;
+
+    // Studio-side pre-validation (issue #83) — see the matching comment in
+    // handleSimulate. Short-circuit before the real-deploy POST so an empty
+    // constructor arg can never reach the server, let alone broadcast.
+    const localErrors = spec ? validateConstructorArgs(spec) : [];
+    if (localErrors.length > 0) {
+      const msgs = localErrors.map((e) => e.message).join("; ");
+      setDeployError(`Deployment failed: ${msgs}`);
+      const nodeIds = nodesRef.current.map((n) => n.id);
+      setFieldErrors(buildNodeFieldErrors(localErrors, nodeIds));
+      setDeploying(false);
+      return;
+    }
+
     try {
       const result = await runDeploy(spec);
 
@@ -579,6 +640,12 @@ export function App() {
         setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
       } else {
         setDeployError(result.error);
+        // Map structured errors (when present) to field/node highlights on
+        // the canvas (issue #83) — see the matching comment in handleSimulate.
+        if (result.errors && result.errors.length > 0) {
+          const nodeIds = nodesRef.current.map((n) => n.id);
+          setFieldErrors(buildNodeFieldErrors(result.errors, nodeIds));
+        }
       }
     } catch (err) {
       // Defence in depth: runDeploy is expected to resolve with an ok:false

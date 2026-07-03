@@ -72,6 +72,23 @@ const labelStyle: React.CSSProperties = {
   marginBottom: 2,
 };
 
+// Error highlighting (issue #83): reuses the studio's existing red palette
+// (see App.tsx's errorBannerStyle / deployRealBtnStyle: #d93025 / #c5221f).
+const ERROR_BORDER_COLOR = "#d93025";
+
+const fieldErrorMessageStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: "#c5221f",
+  marginTop: 2,
+};
+
+const nodeErrorMessageStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: "#c5221f",
+  marginBottom: 6,
+  fontWeight: 500,
+};
+
 // Delete-node affordance (issue #80): a small circular "✕" pinned to the
 // node's top-right corner. Always visible (not hover-only) so it's
 // discoverable without relying on the user knowing about the Delete/Backspace
@@ -114,6 +131,7 @@ function ArgRow({
   onUpdate,
   refSourceDeployId,
   isOverview,
+  errorMessage,
 }: {
   slot: ArgSlot;
   nodeId: string;
@@ -122,10 +140,17 @@ function ArgRow({
   refSourceDeployId?: string;
   /** When true, the visible arg content is hidden (overview mode). */
   isOverview?: boolean;
+  /**
+   * Field-level validation error message for this arg slot, from the most
+   * recent Deploy (simulate) / Deploy (real) run (issue #83). When present,
+   * the input is highlighted in red.
+   */
+  errorMessage?: string;
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
   const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
   const isBoundByEdge = refSourceDeployId !== undefined;
+  const hasError = errorMessage !== undefined;
 
   return (
     <div style={argRowStyle}>
@@ -169,14 +194,29 @@ function ArgRow({
               {refSourceDeployId}.address
             </div>
           ) : (
-            <input
-              style={inputStyle}
-              value={slot.value}
-              placeholder="value"
-              title={`Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`}
-              onChange={(e) => onUpdate(slot.index, e.target.value)}
-              aria-label={`arg-${slot.index}`}
-            />
+            <>
+              <input
+                style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
+                value={slot.value}
+                placeholder="value"
+                title={
+                  hasError
+                    ? errorMessage
+                    : `Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`
+                }
+                onChange={(e) => onUpdate(slot.index, e.target.value)}
+                aria-label={`arg-${slot.index}`}
+                aria-invalid={hasError ? "true" : undefined}
+              />
+              {hasError && (
+                <div
+                  style={fieldErrorMessageStyle}
+                  data-testid={`node-field-error-arg-${slot.index}-${nodeId}`}
+                >
+                  {errorMessage}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -617,10 +657,24 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
     [deleteElements, id],
   );
 
+  // Field-level / node-level validation errors from the most recent Deploy
+  // (simulate) / Deploy (real) run (issue #83). Fallback chain:
+  //   1. deployId / args[index] present → field-level highlight (preferred).
+  //   2. errors.node present (no more specific field mapped) → node-level
+  //      red border (fallback).
+  //   3. Neither present → no highlight here; App.tsx still shows the banner
+  //      for unmappable errors (message-only, last resort).
+  const deployIdError = data.errors?.deployId;
+  const nodeLevelError = data.errors?.node;
+  const hasFieldError =
+    deployIdError !== undefined ||
+    (data.errors?.args !== undefined && Object.keys(data.errors.args).length > 0);
+  const hasAnyError = nodeLevelError !== undefined || hasFieldError;
+
   const containerStyle: React.CSSProperties = {
     position: "relative",
     background: "#fff",
-    border: `2px solid ${selected ? "#1a73e8" : "#999"}`,
+    border: `2px solid ${selected ? "#1a73e8" : hasAnyError ? ERROR_BORDER_COLOR : "#999"}`,
     borderRadius: 6,
     padding: "8px 12px",
     minWidth: 200,
@@ -633,7 +687,11 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
   const deployTargets = configCallbacks?.deployTargets ?? [];
 
   return (
-    <div style={containerStyle} data-testid={`contract-node-${id}`}>
+    <div
+      style={containerStyle}
+      data-testid={`contract-node-${id}`}
+      data-node-invalid={hasAnyError ? "true" : undefined}
+    >
       <button
         type="button"
         style={deleteButtonStyle}
@@ -658,15 +716,33 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
         style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? { opacity: 0 } : { opacity: 0 }) }}
       />
 
+      {/* Node-level fallback error (issue #83): shown when a validation error
+          maps to this contract entry as a whole but not to a specific field
+          (e.g. an invalid "after" reference). Field-level errors below take
+          precedence for their own input; this banner still surfaces alongside
+          them if both are present. */}
+      {nodeLevelError !== undefined && (
+        <div style={nodeErrorMessageStyle} data-testid={`node-error-${id}`}>
+          {nodeLevelError}
+        </div>
+      )}
+
       <div style={{ marginBottom: 6 }}>
         <div style={labelStyle}>Deploy ID</div>
         <input
-          style={inputStyle}
+          style={deployIdError !== undefined ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
           value={data.deployId}
           placeholder="e.g. token"
+          title={deployIdError}
           onChange={(e) => data.onUpdateDeployId(id, e.target.value)}
           aria-label="deploy-id"
+          aria-invalid={deployIdError !== undefined ? "true" : undefined}
         />
+        {deployIdError !== undefined && (
+          <div style={fieldErrorMessageStyle} data-testid={`node-field-error-deploy-id-${id}`}>
+            {deployIdError}
+          </div>
+        )}
       </div>
 
       <div style={{ marginBottom: 6 }}>
@@ -693,6 +769,7 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
               onUpdate={(idx, val) => data.onUpdateArgSlot(id, idx, val)}
               refSourceDeployId={data.refSourceDeployIds?.get(slot.index)}
               isOverview={isOverview}
+              errorMessage={data.errors?.args?.[slot.index]}
             />
           ))}
         </div>
