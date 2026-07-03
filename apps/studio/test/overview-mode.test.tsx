@@ -441,6 +441,76 @@ describe("overview mode — Handles remain mounted", () => {
     const allHandles = document.querySelectorAll(".react-flow__handle");
     expect(allHandles.length).toBeGreaterThanOrEqual(4);
   });
+
+  // -------------------------------------------------------------------------
+  // Issue #84 — single endpoint dot per edge in Overview mode.
+  //
+  // Overview edges anchor to the node-level `${id}-input` / `${id}-output`
+  // handles (see spec/overview-edges.ts), not the per-arg handles. For the
+  // edge to visually read as a connection, both endpoints must show exactly
+  // one visible dot in overview mode, while detailed mode keeps its existing
+  // per-field-dot behavior unchanged.
+  // -------------------------------------------------------------------------
+
+  it("node-level input handle (-input) is VISIBLE in overview mode", () => {
+    const data = makeData({ viewMode: "overview" });
+    const { container } = renderContractNode(data, "n1");
+
+    const inputHandle = container.querySelector("[data-handleid='n1-input']") as HTMLElement | null;
+    expect(inputHandle).not.toBeNull();
+    expect(inputHandle!.style.opacity).not.toBe("0");
+  });
+
+  it("node-level output handle (-output) is VISIBLE in overview mode", () => {
+    const data = makeData({ viewMode: "overview" });
+    const { container } = renderContractNode(data, "n1");
+
+    const outputHandle = container.querySelector("[data-handleid='n1-output']") as HTMLElement | null;
+    expect(outputHandle).not.toBeNull();
+    expect(outputHandle!.style.opacity).not.toBe("0");
+  });
+
+  it("per-arg handles remain hidden in overview mode (unchanged)", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "test" }],
+      viewMode: "overview",
+    });
+    const { container } = renderContractNode(data, "n1");
+
+    const argHandle = container.querySelector("[data-handleid='n1-arg-0']") as HTMLElement | null;
+    expect(argHandle).not.toBeNull();
+    expect(argHandle!.style.opacity).toBe("0");
+  });
+
+  it("node-level input handle (-input) stays HIDDEN in detailed mode (unchanged)", () => {
+    const data = makeData({ viewMode: "detailed" });
+    const { container } = renderContractNode(data, "n1");
+
+    const inputHandle = container.querySelector("[data-handleid='n1-input']") as HTMLElement | null;
+    expect(inputHandle).not.toBeNull();
+    expect(inputHandle!.style.opacity).toBe("0");
+  });
+
+  it("node-level output handle (-output) stays VISIBLE in detailed mode (unchanged)", () => {
+    const data = makeData({ viewMode: "detailed" });
+    const { container } = renderContractNode(data, "n1");
+
+    const outputHandle = container.querySelector("[data-handleid='n1-output']") as HTMLElement | null;
+    expect(outputHandle).not.toBeNull();
+    expect(outputHandle!.style.opacity).not.toBe("0");
+  });
+
+  it("per-arg handles remain visible in detailed mode (unchanged)", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "test" }],
+      viewMode: "detailed",
+    });
+    const { container } = renderContractNode(data, "n1");
+
+    const argHandle = container.querySelector("[data-handleid='n1-arg-0']") as HTMLElement | null;
+    expect(argHandle).not.toBeNull();
+    expect(argHandle!.style.opacity).not.toBe("0");
+  });
 });
 
 // ---------------------------------------------------------------------------
