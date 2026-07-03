@@ -707,13 +707,16 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
         overview-mode edge display. Wire edges no longer exist; this handle
         does not accept meaningful connections (any connection to it is
         silently dropped by onConnect which only processes arg-handle
-        connections). In overview mode it is hidden via opacity:0.
+        connections). Visible in overview mode (issue #84: the overview edge
+        needs a visible dot at its target end); hidden via opacity:0 in
+        detailed mode, where the per-field arg handles are the meaningful
+        (and visible) connection targets instead.
       */}
       <Handle
         type="target"
         position={Position.Left}
         id={`${id}-input`}
-        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? { opacity: 0 } : { opacity: 0 }) }}
+        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? {} : { opacity: 0 }) }}
       />
 
       {/* Node-level fallback error (issue #83): shown when a validation error
@@ -787,14 +790,16 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
       )}
 
       {/*
-        Source output handle: hidden in overview via opacity:0 (layout box
-        preserved so constructor-ref edges remain anchored).
+        Source output handle: visible in both overview and detailed mode.
+        In detailed mode it anchors per-field constructor-ref edges; in
+        overview mode (issue #84) it is the single visible source-end dot
+        for the collapsed overview edge.
       */}
       <Handle
         type="source"
         position={Position.Right}
         id={`${id}-output`}
-        style={{ top: "50%", right: -8, background: "#e8711a", ...(isOverview ? { opacity: 0 } : {}) }}
+        style={{ top: "50%", right: -8, background: "#e8711a" }}
       />
     </div>
   );
