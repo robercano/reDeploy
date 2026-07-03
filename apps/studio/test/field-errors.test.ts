@@ -300,4 +300,102 @@ describe("validateConstructorArgs", () => {
     };
     expect(validateConstructorArgs(spec)).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // Manifest-anchored arity (issue #83, 2nd follow-up): catch slots MISSING
+  // from a node entirely (not just blank literals in slots that exist). Uses
+  // the real "Token" manifest entry (constructor: name_, symbol_ — arity 2).
+  // -------------------------------------------------------------------------
+
+  it("flags a node-level error when a real manifest contract has FEWER arg slots than its constructor arity", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "literal", value: "MyToken" }], // only 1 of 2 (symbol_ missing)
+        },
+      ],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toEqual([
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[0]",
+        message: "constructor parameter(s) missing a value",
+      },
+    ]);
+  });
+
+  it("flags a node-level error when a real manifest contract has NO arg slots at all", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "token", contract: "Token" }], // args omitted entirely (arity 2)
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toEqual([
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[0]",
+        message: "constructor parameter(s) missing a value",
+      },
+    ]);
+  });
+
+  it("emits only ONE node-level error even when multiple manifest params are missing", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      // VaultERC4626's constructor has 4 params; supply none.
+      contracts: [{ id: "vault4626", contract: "VaultERC4626" }],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toEqual({
+      code: EMPTY_ARG_CODE,
+      path: "contracts[0]",
+      message: "constructor parameter(s) missing a value",
+    });
+  });
+
+  it("does not flag a real manifest contract whose slot count matches its constructor arity with real values", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            { kind: "literal", value: "MyToken" },
+            { kind: "literal", value: "MTK" },
+          ],
+        },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+
+  it("still flags a blank literal within an existing slot for a real manifest contract (field-level, not node-level)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            { kind: "literal", value: "MyToken" },
+            { kind: "literal", value: null }, // symbol_ present but blank
+          ],
+        },
+      ],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toEqual([
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[0].args[1]",
+        message: "constructor argument must have a value",
+      },
+    ]);
+  });
 });

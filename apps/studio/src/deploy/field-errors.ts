@@ -44,9 +44,28 @@
  * through the same `buildNodeFieldErrors` highlighting path uniformly. A
  * matching server-side check is a follow-up for apps/deploy-server (tracked
  * separately — out of scope for the studio module boundary).
+ *
+ * ## Manifest-anchored arity (issue #83, 2nd follow-up)
+ * The check above only ever inspects arg slots that ALREADY EXIST on a
+ * `ContractEntry` — but `graph-to-spec.ts`'s `buildContractArgs` maps a node's
+ * arg slots 1:1 into `entry.args`, so a node with FEWER slots than the
+ * contract's true constructor arity (e.g. a graph persisted to localStorage
+ * before `contracts.generated.json` was regenerated with an extra Foundry
+ * constructor param) simply omits the missing parameter(s) from `entry.args`
+ * entirely. Blank-literal detection alone never sees an omitted slot, so
+ * Deploy (simulate)/(real) would proceed with a missing constructor argument.
+ * {@link validateConstructorArgs} therefore anchors its slot count to the
+ * contract manifest's `constructorArgs.length` (looked up via `getContract`)
+ * rather than trusting `entry.args.length`: any manifest parameter beyond the
+ * node's actual slot count is reported as a NODE-level error (no specific
+ * input to highlight), while blank literals within existing slots remain
+ * FIELD-level errors as before. Contracts absent from the manifest (free-text
+ * fallback) fall back to `entry.args.length` since their true arity is
+ * unknowable — behavior for those is unchanged.
  */
 
 import type { DeploymentSpec, LiteralValue } from "@redeploy/core/spec";
+import { getContract } from "../manifest/index.js";
 
 /** A structured error as received from the deploy-server (simulate or deploy). */
 export interface StructuredDeployError {
@@ -169,15 +188,31 @@ function isBlankLiteral(value: LiteralValue): boolean {
 }
 
 /**
- * Studio-side pre-validation (issue #83): find constructor arg slots whose
- * LITERAL value is empty/blank and report them using the same structured
- * error shape as the deploy-server, so the existing field-highlight machinery
- * (buildNodeFieldErrors) lights up the offending input identically whether
- * the error originated locally or from the server.
+ * Studio-side pre-validation (issue #83, manifest-anchored): find constructor
+ * parameters whose value is missing or blank and report them using the same
+ * structured error shape as the deploy-server, so the existing field-highlight
+ * machinery (buildNodeFieldErrors) lights up the offending input/node
+ * identically whether the error originated locally or from the server.
  *
- * Ref-bound args (kind === "ref" — supplied by an incoming constructorRef
- * edge, see graph-to-spec.ts) are supplied by the link and are NEVER flagged,
- * regardless of what value the (ignored) literal input might otherwise hold.
+ * For each contract entry the number of parameters checked is the contract's
+ * manifest `constructorArgs.length` (its true, current arity), NOT
+ * `entry.args.length` — a node persisted before the manifest gained a param
+ * has fewer arg slots than the manifest expects, and that gap must still be
+ * caught. Contracts absent from the manifest fall back to `entry.args.length`
+ * since their true arity can't be determined.
+ *
+ * Two error shapes come out of this, matching what can actually be
+ * highlighted:
+ *   - FIELD-level (`contracts[i].args[j]`): the slot exists but its literal
+ *     value is blank. Ref-bound args (kind === "ref" — supplied by an
+ *     incoming constructorRef edge, see graph-to-spec.ts) are supplied by the
+ *     link and are NEVER flagged, regardless of what value the (ignored)
+ *     literal input might otherwise hold.
+ *   - NODE-level (`contracts[i]`): the manifest expects a parameter at index
+ *     j but the node has no slot for it at all — there is no input to
+ *     highlight, so the whole node is flagged instead. At most one such
+ *     error is emitted per contract (buildNodeFieldErrors only keeps the
+ *     first node-level message anyway, so extra ones would just be noise).
  *
  * @param deployment - The serialized DeploymentSpec (graphToSpec's output).
  *                     Its `contracts[i].args[j]` positions are the same ones
@@ -187,17 +222,39 @@ export function validateConstructorArgs(deployment: DeploymentSpec): StructuredD
   const errors: StructuredDeployError[] = [];
 
   deployment.contracts.forEach((entry, i) => {
-    if (!entry.args) return;
-    entry.args.forEach((arg, j) => {
-      if (arg.kind !== "literal") return; // ref-bound — supplied by the edge link.
-      if (isBlankLiteral(arg.value)) {
+    const argsLen = entry.args?.length ?? 0;
+    const manifest = getContract(entry.contract);
+    // Unknown contracts (not in the manifest): can't know the true arity, so
+    // fall back to the slots the node actually has (unchanged behavior).
+    const arity = manifest ? manifest.constructorArgs.length : argsLen;
+    // Check every slot the node has (even beyond `arity`, to preserve the
+    // pre-existing blank-literal check) PLUS any manifest parameters beyond
+    // the node's slot count (the missing-slot case this fix adds).
+    const slotCount = Math.max(arity, argsLen);
+
+    let nodeLevelReported = false;
+    for (let j = 0; j < slotCount; j++) {
+      if (j < argsLen) {
+        const arg = entry.args![j];
+        if (arg.kind !== "literal") continue; // ref-bound — supplied by the edge link.
+        if (isBlankLiteral(arg.value)) {
+          errors.push({
+            code: EMPTY_ARG_CODE,
+            path: `contracts[${i}].args[${j}]`,
+            message: "constructor argument must have a value",
+          });
+        }
+      } else if (!nodeLevelReported) {
+        // Manifest expects a parameter here but the node has no slot for it —
+        // nothing to highlight at field level, so flag the node itself.
         errors.push({
           code: EMPTY_ARG_CODE,
-          path: `contracts[${i}].args[${j}]`,
-          message: "constructor argument must have a value",
+          path: `contracts[${i}]`,
+          message: "constructor parameter(s) missing a value",
         });
+        nodeLevelReported = true;
       }
-    });
+    }
   });
 
   return errors;
