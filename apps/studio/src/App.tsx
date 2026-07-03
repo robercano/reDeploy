@@ -69,7 +69,7 @@ import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { runSimulate } from "./deploy/simulate-client.js";
 import { runDeploy } from "./deploy/deploy-client.js";
-import { buildNodeFieldErrors } from "./deploy/field-errors.js";
+import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
 import type { NodeFieldErrors } from "./deploy/field-errors.js";
 import type { DeploymentView } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
@@ -548,6 +548,23 @@ export function App() {
     }
 
     const spec = deploymentRef.current;
+
+    // Studio-side pre-validation (issue #83): the deploy-server does not (yet)
+    // reject empty/blank constructor arg literals — an empty arg slot
+    // serializes to a structurally valid `null`/blank literal and would
+    // silently deploy. Per product requirement every constructor param must
+    // have a value, so short-circuit here (no server round-trip) using the
+    // SAME structured error shape + highlighting the server would produce.
+    const localErrors = spec ? validateConstructorArgs(spec) : [];
+    if (localErrors.length > 0) {
+      const msgs = localErrors.map((e) => e.message).join("; ");
+      setSimulateError(`Simulation failed: ${msgs}`);
+      const nodeIds = nodesRef.current.map((n) => n.id);
+      setFieldErrors(buildNodeFieldErrors(localErrors, nodeIds));
+      setSimulating(false);
+      return;
+    }
+
     const result = await runSimulate(spec);
 
     if (result.ok) {
@@ -598,6 +615,20 @@ export function App() {
     setDeploySuccess(null);
 
     const spec = deploymentRef.current;
+
+    // Studio-side pre-validation (issue #83) — see the matching comment in
+    // handleSimulate. Short-circuit before the real-deploy POST so an empty
+    // constructor arg can never reach the server, let alone broadcast.
+    const localErrors = spec ? validateConstructorArgs(spec) : [];
+    if (localErrors.length > 0) {
+      const msgs = localErrors.map((e) => e.message).join("; ");
+      setDeployError(`Deployment failed: ${msgs}`);
+      const nodeIds = nodesRef.current.map((n) => n.id);
+      setFieldErrors(buildNodeFieldErrors(localErrors, nodeIds));
+      setDeploying(false);
+      return;
+    }
+
     try {
       const result = await runDeploy(spec);
 

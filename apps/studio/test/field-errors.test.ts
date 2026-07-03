@@ -14,8 +14,11 @@ import { describe, it, expect } from "vitest";
 import {
   parseErrorPath,
   buildNodeFieldErrors,
+  validateConstructorArgs,
+  EMPTY_ARG_CODE,
 } from "../src/deploy/field-errors.js";
 import type { StructuredDeployError } from "../src/deploy/field-errors.js";
+import type { DeploymentSpec } from "@redeploy/core/spec";
 
 // ---------------------------------------------------------------------------
 // parseErrorPath
@@ -187,5 +190,114 @@ describe("buildNodeFieldErrors", () => {
   it("returns an empty map when given no errors", () => {
     const result = buildNodeFieldErrors([], ["node-a"]);
     expect(result.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateConstructorArgs (issue #83 follow-up: empty-arg pre-validation)
+// ---------------------------------------------------------------------------
+
+describe("validateConstructorArgs", () => {
+  it("flags a literal null arg (what an empty raw input parses to)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "token", contract: "ERC20Token", args: [{ kind: "literal", value: null }] },
+      ],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toEqual([
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[0].args[0]",
+        message: "constructor argument must have a value",
+      },
+    ]);
+  });
+
+  it("flags a literal whitespace-only string arg", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "token", contract: "ERC20Token", args: [{ kind: "literal", value: "   " }] },
+      ],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].path).toBe("contracts[0].args[0]");
+  });
+
+  it("does not flag a filled literal arg (including falsy-but-real values)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "ERC20Token",
+          args: [
+            { kind: "literal", value: "USD Coin" },
+            { kind: "literal", value: 0 },
+            { kind: "literal", value: false },
+          ],
+        },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+
+  it("does not flag a ref (edge-bound) arg regardless of its resolved value", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "token", contract: "ERC20Token" },
+        { id: "vault", contract: "Vault", args: [{ kind: "ref", contract: "token" }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+
+  it("flags multiple empty args across multiple contracts, each with its own path", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "ERC20Token",
+          args: [
+            { kind: "literal", value: null },
+            { kind: "literal", value: "Gold" },
+          ],
+        },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "token" },
+            { kind: "literal", value: null },
+          ],
+        },
+      ],
+    };
+    const errors = validateConstructorArgs(spec);
+    expect(errors).toEqual([
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[0].args[0]",
+        message: "constructor argument must have a value",
+      },
+      {
+        code: EMPTY_ARG_CODE,
+        path: "contracts[1].args[1]",
+        message: "constructor argument must have a value",
+      },
+    ]);
+  });
+
+  it("returns no errors for contracts with no args", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "token", contract: "ERC20Token" }],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
   });
 });

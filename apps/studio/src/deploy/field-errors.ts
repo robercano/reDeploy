@@ -29,7 +29,24 @@
  *   3. Message-only (last resort): the error's path is absent or doesn't
  *      parse into the contracts[] array at all → the caller keeps the plain
  *      red banner (this module skips such errors — it has nothing to map).
+ *
+ * ## Studio-side empty-constructor-arg pre-validation (issue #83 follow-up)
+ * Neither `@redeploy/core`'s `validateSpec` nor the deploy-server reject an
+ * empty/blank constructor arg literal value today — an empty arg slot
+ * serializes to a literal `null` (or a whitespace string), which is a
+ * structurally VALID `LiteralValue`, so it sails through schema + cross-field
+ * validation and would silently be deployed. Per product requirement, every
+ * constructor parameter must have a real value before Deploy (simulate) / (real)
+ * is allowed to proceed. {@link validateConstructorArgs} implements that check
+ * on the studio side (see App.tsx's handleSimulate/handleDeploy, which call it
+ * BEFORE talking to the deploy-server) and reports errors using the exact same
+ * `StructuredDeployError` shape/path convention as the server, so they flow
+ * through the same `buildNodeFieldErrors` highlighting path uniformly. A
+ * matching server-side check is a follow-up for apps/deploy-server (tracked
+ * separately — out of scope for the studio module boundary).
  */
+
+import type { DeploymentSpec, LiteralValue } from "@redeploy/core/spec";
 
 /** A structured error as received from the deploy-server (simulate or deploy). */
 export interface StructuredDeployError {
@@ -131,4 +148,57 @@ export function buildNodeFieldErrors(
   }
 
   return result;
+}
+
+/** Stable code for the studio-local empty-constructor-arg pre-validation error. */
+export const EMPTY_ARG_CODE = "EMPTY_CONSTRUCTOR_ARG";
+
+/**
+ * A literal constructor arg value counts as "empty" (per owner feedback: blank
+ * string is invalid for every constructor param) when it is:
+ *   - `null` (what an empty arg slot's raw "" input parses to — see
+ *     graph-to-spec.ts's parseLiteralValue), or
+ *   - a string that is empty or whitespace-only.
+ *
+ * Any other literal (a real string, a number including 0, a boolean including
+ * false, or an array) is a value the user explicitly provided and is NOT empty.
+ */
+function isBlankLiteral(value: LiteralValue): boolean {
+  if (value === null) return true;
+  return typeof value === "string" && value.trim() === "";
+}
+
+/**
+ * Studio-side pre-validation (issue #83): find constructor arg slots whose
+ * LITERAL value is empty/blank and report them using the same structured
+ * error shape as the deploy-server, so the existing field-highlight machinery
+ * (buildNodeFieldErrors) lights up the offending input identically whether
+ * the error originated locally or from the server.
+ *
+ * Ref-bound args (kind === "ref" — supplied by an incoming constructorRef
+ * edge, see graph-to-spec.ts) are supplied by the link and are NEVER flagged,
+ * regardless of what value the (ignored) literal input might otherwise hold.
+ *
+ * @param deployment - The serialized DeploymentSpec (graphToSpec's output).
+ *                     Its `contracts[i].args[j]` positions are the same ones
+ *                     `parseErrorPath`/`buildNodeFieldErrors` expect.
+ */
+export function validateConstructorArgs(deployment: DeploymentSpec): StructuredDeployError[] {
+  const errors: StructuredDeployError[] = [];
+
+  deployment.contracts.forEach((entry, i) => {
+    if (!entry.args) return;
+    entry.args.forEach((arg, j) => {
+      if (arg.kind !== "literal") return; // ref-bound — supplied by the edge link.
+      if (isBlankLiteral(arg.value)) {
+        errors.push({
+          code: EMPTY_ARG_CODE,
+          path: `contracts[${i}].args[${j}]`,
+          message: "constructor argument must have a value",
+        });
+      }
+    });
+  });
+
+  return errors;
 }
