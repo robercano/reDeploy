@@ -19,13 +19,40 @@
  * The wire-edge path has been removed from onConnect. Cross-contract wiring is
  * now expressed as a config call step with an address-ref arg. Only
  * constructorRef edges are created by onConnect now.
+ *
+ * ## Persistence (issue #80)
+ * On mount, any valid saved authoring state (nodes/edges/orderedSteps) is
+ * restored from localStorage via authoring-persistence.ts's
+ * loadPersistedState(). Every subsequent change is autosaved back, debounced
+ * by AUTOSAVE_DEBOUNCE_MS. resetGraph() clears both the in-memory state and
+ * the persisted copy for the "New / Clear canvas" affordance in App.tsx.
+ *
+ * ## Node deletion (issue #80)
+ * Deleting a node (via ContractNode's delete button → useReactFlow().deleteElements,
+ * or via Delete/Backspace → React Flow's deleteKeyCode) always removes the
+ * node and any edges connected to it (React Flow computes connectedEdges
+ * internally and routes the removal through both onNodesChange and
+ * onEdgesChange). onNodesChange additionally prunes any *dangling references*
+ * to the deleted contract left behind on OTHER nodes: "after" ordering
+ * constraints, per-node config steps targeting/referencing its deployId, and
+ * global ordered steps referencing it — see stepReferencesDeployId().
  */
 
-import { useState, useCallback, useRef } from "react";
-import type { Node, Edge, Connection, OnNodesChange, OnEdgesChange } from "@xyflow/react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import type { Dispatch, SetStateAction } from "react";
+import type {
+  Node,
+  Edge,
+  Connection,
+  OnNodesChange,
+  OnEdgesChange,
+  NodeChange,
+} from "@xyflow/react";
 import { applyNodeChanges, applyEdgeChanges, addEdge } from "@xyflow/react";
 import type {
   ContractNodeData,
+  StudioAddressRef,
+  StudioConfigStep,
   StudioEdgeData,
   StudioSetXStep,
   StudioGrantRoleStep,
@@ -33,6 +60,12 @@ import type {
 } from "../spec/types.js";
 import type { ContractManifest } from "../manifest/index.js";
 import type { Template } from "../templates/types.js";
+import {
+  loadPersistedState,
+  savePersistedState,
+  clearPersistedState,
+} from "./authoring-persistence.js";
+import type { PersistedNode, PersistedEdge, PersistedState } from "./authoring-persistence.js";
 
 // ---------------------------------------------------------------------------
 // Typed React Flow node / edge aliases
@@ -58,6 +91,119 @@ function makeNodeId(): string {
 function makeStepId(prefix: string): string {
   return `${prefix}-${++stepCounter}`;
 }
+
+/**
+ * Bump nodeCounter/stepCounter past any ids found in restored persisted
+ * state so freshly-created nodes/steps after a reload can never collide with
+ * restored ones. Node ids look like "contract-N"; step ids look like
+ * "<prefix>-N" for any prefix (setX/grantRole/ordered all share ONE counter
+ * — see makeStepId above) — so we scan for the trailing "-N" on every step id
+ * regardless of its prefix.
+ */
+function bumpCountersForPersistedState(state: PersistedState): void {
+  let maxNode = 0;
+  for (const n of state.nodes) {
+    const m = /^contract-(\d+)$/.exec(n.id);
+    if (m) maxNode = Math.max(maxNode, parseInt(m[1], 10));
+  }
+  if (maxNode > nodeCounter) nodeCounter = maxNode;
+
+  let maxStep = 0;
+  const scanStepId = (id: string) => {
+    const m = /-(\d+)$/.exec(id);
+    if (m) maxStep = Math.max(maxStep, parseInt(m[1], 10));
+  };
+  for (const n of state.nodes) {
+    for (const s of n.data.configSteps) scanStepId(s.id);
+  }
+  for (const s of state.orderedSteps) scanStepId(s.id);
+  if (maxStep > stepCounter) stepCounter = maxStep;
+}
+
+// ---------------------------------------------------------------------------
+// Reference-cleanup helpers (issue #80 — delete-node dangling references)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a config step (per-node or ordered) references the given
+ * deployId — either as its explicit `target`, as an address-ref in one of
+ * its setX args, or as a `ref`-kind grantRole account.
+ *
+ * An empty deployId never counts as a match: freshly-added, not-yet-named
+ * nodes all start with deployId === "", and an incomplete step referencing
+ * "" (e.g. an unset grantRole account) must not be pruned just because some
+ * OTHER not-yet-named node was deleted.
+ */
+export function stepReferencesDeployId(
+  step: StudioConfigStep | StudioOrderedConfigStep,
+  deployId: string,
+): boolean {
+  if (deployId === "") return false;
+  if (step.kind === "setX") {
+    if (step.target === deployId) return true;
+    return step.args.some(
+      (a) =>
+        typeof a === "object" &&
+        a !== null &&
+        (a as StudioAddressRef).kind === "addressRef" &&
+        (a as StudioAddressRef).deployId === deployId,
+    );
+  }
+  return step.accountKind === "ref" && step.accountValue === deployId;
+}
+
+/** True when `step` references ANY deployId in `deployIds`. */
+function stepReferencesAny(
+  step: StudioConfigStep | StudioOrderedConfigStep,
+  deployIds: ReadonlySet<string>,
+): boolean {
+  for (const dep of deployIds) {
+    if (stepReferencesDeployId(step, dep)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Persisted-state ↔ flow-node/edge conversion (issue #80)
+// ---------------------------------------------------------------------------
+
+function persistedNodeToFlowNode(
+  n: PersistedNode,
+  onUpdateDeployId: ContractNodeData["onUpdateDeployId"],
+  onUpdateContractName: ContractNodeData["onUpdateContractName"],
+  onUpdateArgSlot: ContractNodeData["onUpdateArgSlot"],
+): ContractFlowNode {
+  const data: ContractNodeData = {
+    deployId: n.data.deployId,
+    contractName: n.data.contractName,
+    args: n.data.args,
+    after: n.data.after,
+    configSteps: n.data.configSteps,
+    onUpdateDeployId,
+    onUpdateContractName,
+    onUpdateArgSlot,
+  };
+  return {
+    id: n.id,
+    type: "contractNode",
+    position: n.position,
+    data: data as unknown as Record<string, unknown>,
+  };
+}
+
+function persistedEdgeToFlowEdge(e: PersistedEdge): StudioFlowEdge {
+  return {
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    sourceHandle: e.sourceHandle ?? undefined,
+    targetHandle: e.targetHandle ?? undefined,
+    ...(e.data ? { data: e.data as unknown as Record<string, unknown> } : {}),
+  };
+}
+
+/** Debounce window (ms) for the autosave effect. */
+const AUTOSAVE_DEBOUNCE_MS = 400;
 
 // ---------------------------------------------------------------------------
 // Hook return type
@@ -132,6 +278,12 @@ interface UseGraphReturn {
    * - Adds constructorRef edges with the correct handle ids and edge data.
    */
   instantiateTemplate: (template: Template) => void;
+  /**
+   * "New / Clear canvas" (issue #80): resets nodes, edges, orderedSteps, and
+   * selectedNodeId to empty/null, and removes the persisted localStorage
+   * copy so a reload doesn't resurrect the cleared graph.
+   */
+  resetGraph: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,14 +291,22 @@ interface UseGraphReturn {
 // ---------------------------------------------------------------------------
 
 export function useGraph(): UseGraphReturn {
-  const [nodes, setNodes] = useState<ContractFlowNode[]>([]);
-  const [edges, setEdges] = useState<StudioFlowEdge[]>([]);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [orderedSteps, setOrderedSteps] = useState<StudioOrderedConfigStep[]>([]);
+  // ---- One-time load of any persisted authoring state (issue #80) -----------
+  // Computed once per mount via useMemo so localStorage is parsed exactly
+  // once, not on every render. The nodes/edges/orderedSteps useState calls
+  // below consume this synchronously in their lazy initializers.
+  const persisted = useMemo(() => {
+    const state = loadPersistedState();
+    if (state) bumpCountersForPersistedState(state);
+    return state;
+  }, []);
 
-  // Stable ref to setNodes so embedded node-data callbacks can call it
-  const setNodesRef = useRef(setNodes);
-  setNodesRef.current = setNodes;
+  // Stable ref to setNodes so embedded node-data callbacks can call it. It
+  // must exist BEFORE updateNodeData is defined below (which is in turn
+  // needed by the nodes useState lazy initializer to embed callbacks into
+  // restored node data) — so it starts as a no-op and is assigned its real
+  // value immediately after the nodes useState call.
+  const setNodesRef = useRef<Dispatch<SetStateAction<ContractFlowNode[]>>>(() => {});
 
   // ---- Core node data updater -----------------------------------------------
   // Casts node.data to ContractNodeData internally; stores result as Record<string, unknown>
@@ -194,11 +354,85 @@ export function useGraph(): UseGraphReturn {
     [updateNodeData],
   );
 
+  const [nodes, setNodes] = useState<ContractFlowNode[]>(() =>
+    persisted
+      ? persisted.nodes.map((n) =>
+          persistedNodeToFlowNode(n, updateDeployId, updateContractName, updateArgSlot),
+        )
+      : [],
+  );
+  setNodesRef.current = setNodes;
+
+  const [edges, setEdges] = useState<StudioFlowEdge[]>(() =>
+    persisted ? persisted.edges.map(persistedEdgeToFlowEdge) : [],
+  );
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [orderedSteps, setOrderedSteps] = useState<StudioOrderedConfigStep[]>(
+    () => (persisted ? persisted.orderedSteps : []),
+  );
+
   // ---- React Flow change handlers -------------------------------------------
 
-  const onNodesChange: OnNodesChange<ContractFlowNode> = useCallback((changes) => {
-    setNodes((nds) => applyNodeChanges(changes, nds));
-  }, []);
+  /**
+   * onNodesChange: applies changes as usual, but ALSO detects "remove"
+   * changes (from Delete/Backspace via deleteKeyCode, or from
+   * useReactFlow().deleteElements triggered by ContractNode's delete button)
+   * and prunes any dangling references to the removed contract(s) left on
+   * the SURVIVING nodes/ordered-steps — "after" ordering constraints,
+   * per-node config steps, and global ordered steps (issue #80). Connected
+   * edges are NOT handled here: deleteElements/deleteKeyCode already remove
+   * them via onEdgesChange.
+   */
+  const onNodesChange: OnNodesChange<ContractFlowNode> = useCallback(
+    (changes) => {
+      const removedIds = changes
+        .filter(
+          (c): c is Extract<NodeChange<ContractFlowNode>, { type: "remove" }> =>
+            c.type === "remove",
+        )
+        .map((c) => c.id);
+
+      if (removedIds.length === 0) {
+        setNodes((nds) => applyNodeChanges(changes, nds));
+        return;
+      }
+
+      // Capture the deployIds of the nodes being removed BEFORE they're gone.
+      const removedDeployIds = new Set<string>();
+      for (const n of nodes) {
+        if (removedIds.includes(n.id)) {
+          const deployId = (n.data as unknown as ContractNodeData).deployId;
+          if (deployId !== "") removedDeployIds.add(deployId);
+        }
+      }
+
+      setNodes((nds) => {
+        const next = applyNodeChanges(changes, nds);
+        return next.map((n) => {
+          const d = n.data as unknown as ContractNodeData;
+          // "after" holds raw node ids (see instantiateTemplate) — prune by id
+          // regardless of whether the removed node ever got a deployId.
+          const after = d.after.filter((id) => !removedIds.includes(id));
+          // Config steps target/reference contracts by deployId — only prune
+          // when the removed node actually had one (empty deployId can never
+          // be a meaningful reference, see stepReferencesDeployId).
+          const configSteps =
+            removedDeployIds.size > 0
+              ? d.configSteps.filter((s) => !stepReferencesAny(s, removedDeployIds))
+              : d.configSteps;
+          if (after.length === d.after.length && configSteps.length === d.configSteps.length) {
+            return n;
+          }
+          return { ...n, data: { ...d, after, configSteps } as unknown as Record<string, unknown> };
+        });
+      });
+
+      if (removedDeployIds.size > 0) {
+        setOrderedSteps((prev) => prev.filter((s) => !stepReferencesAny(s, removedDeployIds)));
+      }
+    },
+    [nodes],
+  );
 
   const onEdgesChange: OnEdgesChange<StudioFlowEdge> = useCallback((changes) => {
     setEdges((eds) => applyEdgeChanges(changes, eds));
@@ -450,6 +684,43 @@ export function useGraph(): UseGraphReturn {
     });
   }, []);
 
+  // ---- Autosave (debounced) — issue #80 --------------------------------------
+  // Every change to nodes/edges/orderedSteps resets a short debounce timer;
+  // the actual localStorage write only happens once changes settle for
+  // AUTOSAVE_DEBOUNCE_MS, so rapid typing doesn't hammer localStorage.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(() => {
+      savePersistedState(nodes, edges, orderedSteps);
+      saveTimerRef.current = null;
+    }, AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [nodes, edges, orderedSteps]);
+
+  // ---- Reset ("New / Clear canvas") — issue #80 ------------------------------
+
+  const resetGraph = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    setNodes([]);
+    setEdges([]);
+    setOrderedSteps([]);
+    setSelectedNodeId(null);
+    clearPersistedState();
+  }, []);
+
   return {
     nodes,
     edges,
@@ -470,5 +741,6 @@ export function useGraph(): UseGraphReturn {
     updateOrderedStep,
     moveOrderedStepUp,
     moveOrderedStepDown,
+    resetGraph,
   };
 }

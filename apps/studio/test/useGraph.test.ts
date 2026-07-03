@@ -10,11 +10,20 @@
  * the constructor arg slots (one ArgSlot per constructorArgs entry).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useGraph } from "../src/hooks/useGraph";
+import { useGraph, stepReferencesDeployId } from "../src/hooks/useGraph";
 import type { ContractNodeData, StudioEdgeData } from "../src/spec/types";
 import type { ContractManifest } from "../src/manifest/types";
+import {
+  AUTHORING_STORAGE_KEY,
+  AUTHORING_STATE_VERSION,
+  loadPersistedState,
+} from "../src/hooks/authoring-persistence";
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 // Helper to access typed node data from the widened Record<string, unknown>
 function nd(node: { data: Record<string, unknown> }): ContractNodeData {
@@ -530,5 +539,484 @@ describe("useGraph — addContractFromManifest", () => {
 
     expect(result.current.nodes).toHaveLength(2);
     expect(result.current.nodes[0].id).not.toBe(result.current.nodes[1].id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stepReferencesDeployId (pure helper, issue #80)
+// ---------------------------------------------------------------------------
+
+describe("stepReferencesDeployId", () => {
+  it("matches a setX step whose explicit target equals the deployId", () => {
+    const step = { kind: "setX" as const, id: "s1", target: "token", functionName: "setFee", args: [] };
+    expect(stepReferencesDeployId(step, "token")).toBe(true);
+    expect(stepReferencesDeployId(step, "other")).toBe(false);
+  });
+
+  it("matches a setX step with an addressRef arg pointing at the deployId", () => {
+    const step = {
+      kind: "setX" as const,
+      id: "s1",
+      functionName: "setOracle",
+      args: [{ kind: "addressRef" as const, deployId: "oracle" }],
+    };
+    expect(stepReferencesDeployId(step, "oracle")).toBe(true);
+    expect(stepReferencesDeployId(step, "token")).toBe(false);
+  });
+
+  it("does not match a setX step with only literal args", () => {
+    const step = { kind: "setX" as const, id: "s1", functionName: "setFee", args: ["100"] };
+    expect(stepReferencesDeployId(step, "token")).toBe(false);
+  });
+
+  it("matches a grantRole step with accountKind ref pointing at the deployId", () => {
+    const step = {
+      kind: "grantRole" as const,
+      id: "g1",
+      role: "ADMIN",
+      accountKind: "ref" as const,
+      accountValue: "token",
+    };
+    expect(stepReferencesDeployId(step, "token")).toBe(true);
+  });
+
+  it("does not match a grantRole step with accountKind literal even if the value equals the deployId", () => {
+    const step = {
+      kind: "grantRole" as const,
+      id: "g1",
+      role: "ADMIN",
+      accountKind: "literal" as const,
+      accountValue: "token",
+    };
+    expect(stepReferencesDeployId(step, "token")).toBe(false);
+  });
+
+  it("never matches an empty deployId (guards against unset nodes matching each other)", () => {
+    const setXStep = { kind: "setX" as const, id: "s1", target: "", functionName: "setFee", args: [] };
+    const grantRoleStep = {
+      kind: "grantRole" as const,
+      id: "g1",
+      role: "ADMIN",
+      accountKind: "ref" as const,
+      accountValue: "",
+    };
+    expect(stepReferencesDeployId(setXStep, "")).toBe(false);
+    expect(stepReferencesDeployId(grantRoleStep, "")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Node deletion — reference cleanup (issue #80)
+// ---------------------------------------------------------------------------
+//
+// The delete UI affordance (ContractNode's "✕" button) and Delete/Backspace
+// (deleteKeyCode) both go through React Flow's deleteElements(), which
+// removes the node AND connected edges via onNodesChange/onEdgesChange. Here
+// we exercise onNodesChange directly with a synthetic "remove" NodeChange —
+// the same shape deleteElements/deleteKeyCode produce — to test the
+// reference-cleanup logic in isolation (After/config-step/ordered-step
+// pruning). End-to-end button-click coverage lives in
+// App.delete-node.test.tsx.
+
+describe("useGraph — node deletion (onNodesChange remove) cleans up dangling references", () => {
+  it("removes the node from state", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => result.current.onNodesChange([{ id: nodeId, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(0);
+  });
+
+  it("prunes an 'after' reference to the removed node id on a surviving node", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2] = result.current.nodes;
+
+    // Inject an "after" constraint on n2 referencing n1 (normally set via templates).
+    act(() =>
+      result.current.onNodesChange([
+        {
+          id: n2.id,
+          type: "replace",
+          item: { ...n2, data: { ...nd(n2), after: [n1.id] } as unknown as Record<string, unknown> },
+        },
+      ]),
+    );
+    expect(nd(result.current.nodes[1]).after).toEqual([n1.id]);
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).after).toEqual([]);
+  });
+
+  it("removes a per-node setX config step on a surviving node whose target is the deleted contract's deployId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2] = result.current.nodes;
+
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
+    act(() => result.current.addConfigStep(n2.id, "setX"));
+    const stepId = nd(result.current.nodes[1]).configSteps[0].id;
+    act(() => result.current.updateSetXStep(n2.id, stepId, { target: "registryA", functionName: "setOwner" }));
+
+    expect(nd(result.current.nodes[1]).configSteps).toHaveLength(1);
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).configSteps).toHaveLength(0);
+  });
+
+  it("removes a per-node grantRole step on a surviving node whose ref account points at the deleted contract's deployId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2] = result.current.nodes;
+
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
+    act(() => result.current.addConfigStep(n2.id, "grantRole"));
+    const stepId = nd(result.current.nodes[1]).configSteps[0].id;
+    act(() =>
+      result.current.updateGrantRoleStep(n2.id, stepId, { accountKind: "ref", accountValue: "registryA" }),
+    );
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).configSteps).toHaveLength(0);
+  });
+
+  it("removes an addressRef arg step (setX) on a surviving node referencing the deleted contract's deployId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2] = result.current.nodes;
+
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
+    act(() => result.current.addConfigStep(n2.id, "setX"));
+    const stepId = nd(result.current.nodes[1]).configSteps[0].id;
+    act(() =>
+      result.current.updateSetXStep(n2.id, stepId, {
+        functionName: "setRegistry",
+        args: [{ kind: "addressRef", deployId: "registryA" }],
+      }),
+    );
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).configSteps).toHaveLength(0);
+  });
+
+  it("removes a global ordered step referencing the deleted contract's deployId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const n1 = result.current.nodes[0];
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
+
+    act(() => result.current.addOrderedStep());
+    const stepId = result.current.orderedSteps[0].id;
+    act(() => result.current.updateOrderedStep(stepId, { target: "registryA", functionName: "setOwner" }));
+
+    expect(result.current.orderedSteps).toHaveLength(1);
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.orderedSteps).toHaveLength(0);
+  });
+
+  it("does NOT prune config steps that reference a still-alive contract's deployId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2, n3] = result.current.nodes;
+
+    act(() => nd(result.current.nodes[1]).onUpdateDeployId(n2.id, "registryB"));
+    act(() => result.current.addConfigStep(n3.id, "setX"));
+    const stepId = nd(result.current.nodes[2]).configSteps[0].id;
+    act(() => result.current.updateSetXStep(n3.id, stepId, { target: "registryB", functionName: "setOwner" }));
+
+    // Delete an UNRELATED node (n1, still has empty deployId) — n3's step
+    // targeting n2 (registryB) must survive.
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(2);
+    const survivingN3 = result.current.nodes.find((n) => n.id === n3.id)!;
+    expect(nd(survivingN3).configSteps).toHaveLength(1);
+  });
+
+  it("does not crash and leaves state consistent when deleting a node with no dangling references anywhere", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1] = result.current.nodes;
+
+    expect(() =>
+      act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }])),
+    ).not.toThrow();
+    expect(result.current.nodes).toHaveLength(1);
+  });
+
+  it("clears selectedNodeId when the selected node is removed via App-level cleanup (setSelectedNodeId still callable after removal)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const n1 = result.current.nodes[0];
+    act(() => result.current.setSelectedNodeId(n1.id));
+    expect(result.current.selectedNodeId).toBe(n1.id);
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    // useGraph itself doesn't own "deselect on delete" (App.tsx's onPaneClick/
+    // onNodeClick manage selectedNodeId) — assert the hook stays crash-free
+    // and callable, and the deleted node truly no longer exists.
+    expect(result.current.nodes).toHaveLength(0);
+    expect(() => act(() => result.current.setSelectedNodeId(null))).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence — restore on mount (issue #80)
+// ---------------------------------------------------------------------------
+
+describe("useGraph — persistence: restore on mount", () => {
+  it("starts blank when nothing is persisted", () => {
+    const { result } = renderHook(() => useGraph());
+    expect(result.current.nodes).toHaveLength(0);
+    expect(result.current.edges).toHaveLength(0);
+    expect(result.current.orderedSteps).toHaveLength(0);
+  });
+
+  it("restores nodes, edges, and orderedSteps from a valid saved state", () => {
+    const saved = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [
+        {
+          id: "contract-901",
+          position: { x: 5, y: 7 },
+          data: {
+            deployId: "token",
+            contractName: "Token",
+            args: [],
+            after: [],
+            configSteps: [],
+          },
+        },
+        {
+          id: "contract-902",
+          position: { x: 50, y: 70 },
+          data: {
+            deployId: "vault",
+            contractName: "Vault",
+            args: [{ index: 0, kind: "literal", value: "" }],
+            after: [],
+            configSteps: [],
+          },
+        },
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: "contract-901",
+          target: "contract-902",
+          sourceHandle: "contract-901-output",
+          targetHandle: "contract-902-arg-0",
+          data: { edgeKind: "constructorRef", argIndex: 0 },
+        },
+      ],
+      orderedSteps: [
+        { kind: "setX", id: "ordered-777", target: "token", functionName: "setFee", args: [] },
+      ],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(saved));
+
+    const { result } = renderHook(() => useGraph());
+
+    expect(result.current.nodes).toHaveLength(2);
+    expect(result.current.nodes[0].id).toBe("contract-901");
+    expect(result.current.nodes[0].position).toEqual({ x: 5, y: 7 });
+    expect(nd(result.current.nodes[0]).deployId).toBe("token");
+    expect(result.current.edges).toHaveLength(1);
+    expect(result.current.edges[0].source).toBe("contract-901");
+    expect(result.current.orderedSteps).toHaveLength(1);
+    expect(result.current.orderedSteps[0].id).toBe("ordered-777");
+  });
+
+  it("restored nodes carry callable node callbacks (interactive after restore)", () => {
+    const saved = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [
+        {
+          id: "contract-901",
+          position: { x: 0, y: 0 },
+          data: { deployId: "token", contractName: "Token", args: [], after: [], configSteps: [] },
+        },
+      ],
+      edges: [],
+      orderedSteps: [],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(saved));
+
+    const { result } = renderHook(() => useGraph());
+    expect(typeof nd(result.current.nodes[0]).onUpdateDeployId).toBe("function");
+
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId("contract-901", "renamed"));
+    expect(nd(result.current.nodes[0]).deployId).toBe("renamed");
+  });
+
+  it("ignores corrupt saved JSON and starts blank instead of crashing", () => {
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, "NOT VALID JSON {{{");
+
+    const { result } = renderHook(() => useGraph());
+
+    expect(result.current.nodes).toHaveLength(0);
+  });
+
+  it("ignores a version mismatch and starts blank instead of crashing", () => {
+    const stale = {
+      version: AUTHORING_STATE_VERSION + 1,
+      nodes: [{ id: "contract-1", position: { x: 0, y: 0 }, data: { deployId: "x", contractName: "X", args: [], after: [], configSteps: [] } }],
+      edges: [],
+      orderedSteps: [],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(stale));
+
+    const { result } = renderHook(() => useGraph());
+
+    expect(result.current.nodes).toHaveLength(0);
+  });
+
+  it("newly-added nodes after a restore never collide with restored node ids", () => {
+    const saved = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [
+        { id: "contract-999", position: { x: 0, y: 0 }, data: { deployId: "x", contractName: "X", args: [], after: [], configSteps: [] } },
+      ],
+      edges: [],
+      orderedSteps: [],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(saved));
+
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+
+    const ids = result.current.nodes.map((n) => n.id);
+    expect(new Set(ids).size).toBe(ids.length); // all unique
+    expect(ids).toContain("contract-999");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence — debounced autosave (issue #80)
+// ---------------------------------------------------------------------------
+
+describe("useGraph — persistence: debounced autosave", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it("does not save immediately on a change (debounced)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+
+    // Nothing written yet — the debounce window hasn't elapsed.
+    expect(window.localStorage.getItem(AUTHORING_STORAGE_KEY)).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("saves to localStorage once the debounce window elapses", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    const loaded = loadPersistedState();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.nodes).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("resets the debounce timer on rapid successive changes (only the final state is saved)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "renamed"));
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    // Still within the debounce window of the SECOND change — nothing saved yet.
+    expect(window.localStorage.getItem(AUTHORING_STORAGE_KEY)).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    const loaded = loadPersistedState();
+    expect(loaded!.nodes[0].data.deployId).toBe("renamed");
+
+    vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resetGraph — "New / Clear canvas" (issue #80)
+// ---------------------------------------------------------------------------
+
+describe("useGraph — resetGraph", () => {
+  it("clears nodes, edges, orderedSteps, and selectedNodeId", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    act(() => result.current.setSelectedNodeId(result.current.nodes[0].id));
+    act(() => result.current.addOrderedStep());
+
+    act(() => result.current.resetGraph());
+
+    expect(result.current.nodes).toHaveLength(0);
+    expect(result.current.edges).toHaveLength(0);
+    expect(result.current.orderedSteps).toHaveLength(0);
+    expect(result.current.selectedNodeId).toBeNull();
+  });
+
+  it("clears the persisted localStorage copy so a remount doesn't resurrect the cleared graph", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+
+    act(() => result.current.resetGraph());
+
+    expect(loadPersistedState()).toBeNull();
+  });
+
+  it("is safe to call on an already-empty graph", () => {
+    const { result } = renderHook(() => useGraph());
+    expect(() => act(() => result.current.resetGraph())).not.toThrow();
+    expect(result.current.nodes).toHaveLength(0);
   });
 });
