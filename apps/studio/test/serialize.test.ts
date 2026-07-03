@@ -18,7 +18,7 @@ import { describe, it, expect } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useGraph } from "../src/hooks/useGraph";
 import type { ContractNodeData } from "../src/spec/types";
-import type { ContractManifest } from "../src/manifest/types";
+import type { ContractManifest, ManifestFunction } from "../src/manifest/types";
 import { graphToTemplate } from "../src/templates/serialize";
 import type { ParamSelection } from "../src/templates/serialize";
 import { graphToSpec } from "../src/spec/graph-to-spec";
@@ -53,6 +53,20 @@ function manifest(name: string, argCount: number): ContractManifest {
 const NO_ARG = manifest("Registry", 0);
 /** A 1-arg manifest. */
 const ONE_ARG = manifest("Token", 1);
+
+/**
+ * addConfigStep now takes a ManifestFunction (issue #85/#89: the picker
+ * lists the target contract's REAL state-changing functions instead of a
+ * synthetic "setX" kind). This fixture stands in for "some real function"
+ * wherever these tests only need a setX step to exist.
+ */
+const A_WRITE_FN: ManifestFunction = {
+  name: "setFoo",
+  signature: "setFoo(uint256)",
+  declaredIn: "Test",
+  inputs: [{ name: "value", type: "uint256" }],
+  stateMutability: "nonpayable",
+};
 
 // ---------------------------------------------------------------------------
 // 1. Basic serialization
@@ -563,7 +577,7 @@ describe("graphToTemplate — edge cases", () => {
     act(() => result.current.addContractFromManifest(NO_ARG));
     const nodeId = result.current.nodes[0].id;
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "Token"));
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
 
     const tmpl = graphToTemplate(result.current.nodes, result.current.edges, "user-1", "Test", "", []);
     expect(tmpl.nodes[0].data.configSteps).toHaveLength(1);

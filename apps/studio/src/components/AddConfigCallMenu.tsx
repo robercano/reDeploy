@@ -5,12 +5,24 @@
  * section (ContractNode.tsx) and the side-panel config editor
  * (ConfigPanel.tsx).
  *
- * Replaces the old pair of always-visible "+ setX" / "+ grantRole" buttons
- * with a single "Add config call" trigger button that reveals an accessible
- * menu listing exactly the two supported config-call kinds. Selecting an
- * option invokes the caller-supplied `onSelect` with the same kind argument
- * the old per-kind buttons used to pass — all downstream behavior (add-step
- * handler, resulting step card, etc.) is unchanged.
+ * Owner feedback (issue #85/#89): the picker used to list two SYNTHETIC
+ * options ("setX" / "grantRole") that had nothing to do with the target
+ * contract's actual ABI. It now lists the target contract's REAL
+ * state-changing (nonpayable/payable) functions — see
+ * `getStateChangingFunctions` in manifest/index.ts — labeled by their
+ * canonical signature (e.g. `mint(address,uint256)`), so overloads are
+ * unambiguous. `grantRole` is no longer special-cased: it simply appears
+ * here like any other function when the target contract's ABI declares it
+ * (e.g. AccessControl-based contracts).
+ *
+ * Selecting an option invokes the caller-supplied `onSelect` with the full
+ * `ManifestFunction` entry (name + signature + inputs) so the caller can
+ * build a setX config-call step with one arg slot pre-populated per real
+ * parameter.
+ *
+ * Contracts absent from the manifest (free-text fallback) have no known
+ * functions — callers pass an empty `functions` array and the menu renders
+ * a "No functions available" empty state instead of crashing.
  *
  * Accessibility: the trigger is a real `<button>` with
  * `aria-haspopup="menu"` / `aria-expanded`, and the revealed options are
@@ -20,23 +32,18 @@
  */
 
 import { useState } from "react";
-
-export type ConfigCallKind = "setX" | "grantRole";
-
-interface ConfigCallOption {
-  kind: ConfigCallKind;
-  label: string;
-}
-
-/** The exactly-two supported config-call kinds. Keep in sync with StudioConfigStep. */
-const CONFIG_CALL_OPTIONS: ConfigCallOption[] = [
-  { kind: "setX", label: "setX" },
-  { kind: "grantRole", label: "grantRole" },
-];
+import type { ManifestFunction } from "../manifest/types.js";
 
 export interface AddConfigCallMenuProps {
-  /** Invoked with the selected kind — same signature as the old per-kind onClick handlers. */
-  onSelect: (kind: ConfigCallKind) => void;
+  /**
+   * The target contract's real state-changing functions to list, already
+   * filtered to nonpayable/payable and deduped by signature (see
+   * `getStateChangingFunctions`). An empty array renders a "No functions
+   * available" empty state instead of a menu item list.
+   */
+  functions: ManifestFunction[];
+  /** Invoked with the selected function's full manifest entry. */
+  onSelect: (fn: ManifestFunction) => void;
   /**
    * Prefix used to build stable, unique `data-testid`s for the trigger button,
    * the menu container, and each option (e.g. `node-add-config-call-${nodeId}`).
@@ -69,7 +76,14 @@ const defaultItemStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-export function AddConfigCallMenu({ onSelect, idPrefix, buttonStyle, menuStyle, itemStyle }: AddConfigCallMenuProps) {
+const emptyStateStyle: React.CSSProperties = {
+  ...defaultItemStyle,
+  cursor: "default",
+  color: "#999",
+  fontStyle: "italic",
+};
+
+export function AddConfigCallMenu({ functions, onSelect, idPrefix, buttonStyle, menuStyle, itemStyle }: AddConfigCallMenuProps) {
   const [open, setOpen] = useState(false);
   const menuId = `${idPrefix}-menu`;
 
@@ -88,21 +102,27 @@ export function AddConfigCallMenu({ onSelect, idPrefix, buttonStyle, menuStyle, 
       </button>
       {open && (
         <div role="menu" id={menuId} style={{ ...defaultMenuStyle, ...menuStyle }} data-testid={`${idPrefix}-menu`}>
-          {CONFIG_CALL_OPTIONS.map((opt) => (
-            <button
-              key={opt.kind}
-              type="button"
-              role="menuitem"
-              style={{ ...defaultItemStyle, ...itemStyle }}
-              onClick={() => {
-                onSelect(opt.kind);
-                setOpen(false);
-              }}
-              data-testid={`${idPrefix}-option-${opt.kind}`}
-            >
-              {opt.label}
-            </button>
-          ))}
+          {functions.length === 0 ? (
+            <div style={{ ...emptyStateStyle, ...itemStyle }} data-testid={`${idPrefix}-empty`}>
+              No functions available
+            </div>
+          ) : (
+            functions.map((fn) => (
+              <button
+                key={fn.signature}
+                type="button"
+                role="menuitem"
+                style={{ ...defaultItemStyle, ...itemStyle }}
+                onClick={() => {
+                  onSelect(fn);
+                  setOpen(false);
+                }}
+                data-testid={`${idPrefix}-option-${fn.signature}`}
+              >
+                {fn.signature}
+              </button>
+            ))
+          )}
         </div>
       )}
     </div>

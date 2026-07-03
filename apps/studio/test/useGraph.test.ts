@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useGraph, stepReferencesDeployId } from "../src/hooks/useGraph";
 import type { ContractNodeData, StudioEdgeData } from "../src/spec/types";
-import type { ContractManifest } from "../src/manifest/types";
+import type { ContractManifest, ManifestFunction } from "../src/manifest/types";
 import {
   AUTHORING_STORAGE_KEY,
   AUTHORING_STATE_VERSION,
@@ -33,6 +33,22 @@ function nd(node: { data: Record<string, unknown> }): ContractNodeData {
 function ed(edge: { data?: Record<string, unknown> }): StudioEdgeData | undefined {
   return edge.data as unknown as StudioEdgeData | undefined;
 }
+
+/**
+ * addConfigStep now takes a ManifestFunction (issue #85/#89: the picker
+ * lists the target contract's REAL state-changing functions instead of a
+ * synthetic "setX" kind — see AddConfigCallMenu / getStateChangingFunctions).
+ * This fixture stands in for "some real function" wherever these hook-level
+ * tests only care that a setX step gets created (functionName/args are
+ * overwritten by updateSetXStep in most of these tests anyway).
+ */
+const A_WRITE_FN: ManifestFunction = {
+  name: "setFoo",
+  signature: "setFoo(uint256)",
+  declaredIn: "Test",
+  inputs: [{ name: "value", type: "uint256" }],
+  stateMutability: "nonpayable",
+};
 
 // ---------------------------------------------------------------------------
 // Synthetic manifest fixtures
@@ -248,9 +264,60 @@ describe("useGraph — config steps", () => {
     act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
     expect(nd(result.current.nodes[0]).configSteps).toHaveLength(1);
     expect(nd(result.current.nodes[0]).configSteps[0].kind).toBe("setX");
+  });
+
+  it("addConfigStep(nodeId, ManifestFunction) sets functionName/functionSignature from the chosen function (issue #85/#89)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
+    const step = nd(result.current.nodes[0]).configSteps[0];
+    if (step.kind !== "setX") throw new Error("Expected setX step");
+    expect(step.functionName).toBe(A_WRITE_FN.name);
+    expect(step.functionSignature).toBe(A_WRITE_FN.signature);
+  });
+
+  it("addConfigStep pre-populates ONE empty arg slot per real ABI parameter (issue #85/#89)", () => {
+    const twoArgFn: ManifestFunction = {
+      name: "mint",
+      signature: "mint(address,uint256)",
+      declaredIn: "Token",
+      inputs: [
+        { name: "to", type: "address" },
+        { name: "amount", type: "uint256" },
+      ],
+      stateMutability: "nonpayable",
+    };
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => result.current.addConfigStep(nodeId, twoArgFn));
+    const step = nd(result.current.nodes[0]).configSteps[0];
+    if (step.kind !== "setX") throw new Error("Expected setX step");
+    expect(step.args).toEqual(["", ""]);
+  });
+
+  it("addConfigStep produces an empty args array for a zero-input function", () => {
+    const noArgFn: ManifestFunction = {
+      name: "pause",
+      signature: "pause()",
+      declaredIn: "Vault",
+      inputs: [],
+      stateMutability: "nonpayable",
+    };
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => result.current.addConfigStep(nodeId, noArgFn));
+    const step = nd(result.current.nodes[0]).configSteps[0];
+    if (step.kind !== "setX") throw new Error("Expected setX step");
+    expect(step.args).toEqual([]);
   });
 
   it("addConfigStep adds a grantRole step", () => {
@@ -268,7 +335,7 @@ describe("useGraph — config steps", () => {
     act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
     const stepId = nd(result.current.nodes[0]).configSteps[0].id;
 
     act(() => result.current.removeConfigStep(nodeId, stepId));
@@ -280,7 +347,7 @@ describe("useGraph — config steps", () => {
     act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
     const stepId = nd(result.current.nodes[0]).configSteps[0].id;
 
     act(() => result.current.updateSetXStep(nodeId, stepId, { functionName: "setFee" }));
@@ -297,7 +364,7 @@ describe("useGraph — config steps", () => {
     act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
     const stepId = nd(result.current.nodes[0]).configSteps[0].id;
 
     act(() => result.current.updateSetXStep(nodeId, stepId, { args: ["100", "200"] }));
@@ -349,7 +416,7 @@ describe("useGraph — config steps", () => {
     act(() => result.current.addContractFromManifest(REGISTRY_MANIFEST));
     const nodeId = result.current.nodes[0].id;
 
-    act(() => result.current.addConfigStep(nodeId, "setX"));
+    act(() => result.current.addConfigStep(nodeId, A_WRITE_FN));
     const setXStepId = nd(result.current.nodes[0]).configSteps[0].id;
 
     // Call updateGrantRoleStep on a setX step id — should be no-op
@@ -664,7 +731,7 @@ describe("useGraph — node deletion (onNodesChange remove) cleans up dangling r
     const [n1, n2] = result.current.nodes;
 
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
-    act(() => result.current.addConfigStep(n2.id, "setX"));
+    act(() => result.current.addConfigStep(n2.id, A_WRITE_FN));
     const stepId = nd(result.current.nodes[1]).configSteps[0].id;
     act(() => result.current.updateSetXStep(n2.id, stepId, { target: "registryA", functionName: "setOwner" }));
 
@@ -706,7 +773,7 @@ describe("useGraph — node deletion (onNodesChange remove) cleans up dangling r
     const [n1, n2] = result.current.nodes;
 
     act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
-    act(() => result.current.addConfigStep(n2.id, "setX"));
+    act(() => result.current.addConfigStep(n2.id, A_WRITE_FN));
     const stepId = nd(result.current.nodes[1]).configSteps[0].id;
     act(() =>
       result.current.updateSetXStep(n2.id, stepId, {
@@ -748,7 +815,7 @@ describe("useGraph — node deletion (onNodesChange remove) cleans up dangling r
     const [n1, n2, n3] = result.current.nodes;
 
     act(() => nd(result.current.nodes[1]).onUpdateDeployId(n2.id, "registryB"));
-    act(() => result.current.addConfigStep(n3.id, "setX"));
+    act(() => result.current.addConfigStep(n3.id, A_WRITE_FN));
     const stepId = nd(result.current.nodes[2]).configSteps[0].id;
     act(() => result.current.updateSetXStep(n3.id, stepId, { target: "registryB", functionName: "setOwner" }));
 

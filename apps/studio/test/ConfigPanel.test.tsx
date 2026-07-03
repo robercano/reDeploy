@@ -95,7 +95,13 @@ describe("ConfigPanel — adding steps", () => {
     expect(screen.queryByText("+ grantRole")).toBeNull();
   });
 
-  it("picker lists exactly the two options {setX, grantRole} and nothing else", () => {
+  it("picker lists the attached contract's REAL state-changing functions (Vault), not synthetic setX/grantRole", () => {
+    // data.contractName defaults to "Vault" (makeData()), whose real
+    // nonpayable/payable functions are: deposit, withdraw, setFeeBps, pause,
+    // unpause, setRegistry, grantRole, revokeRole, renounceRole (in manifest
+    // order). view/pure functions (balanceOf, paused, hasRole, ...) and the
+    // constructor are never listed. grantRole is NOT special-cased — it just
+    // appears because Vault's ABI (via AccessControl) declares it.
     render(
       <ConfigPanel
         nodeId="n1"
@@ -110,11 +116,22 @@ describe("ConfigPanel — adding steps", () => {
     fireEvent.click(screen.getByText("Add config call"));
     const menu = screen.getByRole("menu");
     const items = within(menu).getAllByRole("menuitem");
-    expect(items).toHaveLength(2);
-    expect(items.map((i) => i.textContent)).toEqual(["setX", "grantRole"]);
+    expect(items.map((i) => i.textContent)).toEqual([
+      "deposit(uint256)",
+      "withdraw(uint256)",
+      "setFeeBps(uint16)",
+      "pause()",
+      "unpause()",
+      "setRegistry(address)",
+      "grantRole(bytes32,address)",
+      "revokeRole(bytes32,address)",
+      "renounceRole(bytes32,address)",
+    ]);
+    // No literal synthetic "setX" menu entry.
+    expect(within(menu).queryByText("setX")).toBeNull();
   });
 
-  it("calls onAddStep with 'setX' when the setX option is selected", () => {
+  it("calls onAddStep with the chosen function's manifest entry when a real function is selected", () => {
     const onAddStep = vi.fn();
     render(
       <ConfigPanel
@@ -128,11 +145,16 @@ describe("ConfigPanel — adding steps", () => {
       />,
     );
     fireEvent.click(screen.getByText("Add config call"));
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "setX" }));
-    expect(onAddStep).toHaveBeenCalledWith("n1", "setX");
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "setFeeBps(uint16)" }));
+    expect(onAddStep).toHaveBeenCalledTimes(1);
+    const [nodeId, fn] = onAddStep.mock.calls[0];
+    expect(nodeId).toBe("n1");
+    expect(fn.name).toBe("setFeeBps");
+    expect(fn.signature).toBe("setFeeBps(uint16)");
+    expect(fn.inputs).toEqual([{ name: "bps", type: "uint16" }]);
   });
 
-  it("calls onAddStep with 'grantRole' when the grantRole option is selected", () => {
+  it("calls onAddStep with grantRole's manifest entry (real function, not a synthetic kind) when grantRole is selected", () => {
     const onAddStep = vi.fn();
     render(
       <ConfigPanel
@@ -146,8 +168,53 @@ describe("ConfigPanel — adding steps", () => {
       />,
     );
     fireEvent.click(screen.getByText("Add config call"));
-    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "grantRole" }));
-    expect(onAddStep).toHaveBeenCalledWith("n1", "grantRole");
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "grantRole(bytes32,address)" }));
+    expect(onAddStep).toHaveBeenCalledTimes(1);
+    const [nodeId, fn] = onAddStep.mock.calls[0];
+    expect(nodeId).toBe("n1");
+    expect(fn.name).toBe("grantRole");
+    expect(fn.signature).toBe("grantRole(bytes32,address)");
+    expect(fn.inputs).toEqual([
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ]);
+  });
+
+  it("excludes view/pure functions from the picker", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={makeData()}
+        deployTargets={NO_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add config call"));
+    const menu = screen.getByRole("menu");
+    for (const viewFn of ["balanceOf", "paused", "hasRole", "getRoleAdmin", "supportsInterface"]) {
+      expect(within(menu).queryAllByRole("menuitem", { name: new RegExp(`^${viewFn}\\(`) })).toHaveLength(0);
+    }
+  });
+
+  it("shows a 'No functions available' empty state and never crashes when the contract isn't in the manifest", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={makeData({ contractName: "UnknownContract" })}
+        deployTargets={NO_TARGETS}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add config call"));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryAllByRole("menuitem")).toHaveLength(0);
+    expect(within(menu).getByText("No functions available")).not.toBeNull();
   });
 });
 
