@@ -361,6 +361,72 @@ describe("runSimulate — error: done{success:false}", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// runSimulate — structured errors (issue #83)
+// ---------------------------------------------------------------------------
+
+describe("runSimulate — structured errors (issue #83)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("preserves code/path/message on done{success:false} errors", async () => {
+    const raw = `event: done\ndata: ${JSON.stringify({
+      success: false,
+      errors: [
+        { code: "INVALID_ID", path: "contracts[0].id", message: "id must be a non-empty string" },
+      ],
+    })}\n\n`;
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    const result = await runSimulate({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+
+    expect(result.errors).toEqual([
+      { code: "INVALID_ID", path: "contracts[0].id", message: "id must be a non-empty string" },
+    ]);
+    // Banner fallback string is still populated.
+    expect(result.error).toContain("id must be a non-empty string");
+  });
+
+  it("falls back to JSON.stringify for a structured error with no message", async () => {
+    const raw = `event: done\ndata: ${JSON.stringify({
+      success: false,
+      errors: [{ path: "contracts[1]" }],
+    })}\n\n`;
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    const result = await runSimulate({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors![0].path).toBe("contracts[1]");
+    expect(result.errors![0].message).toContain("contracts[1]");
+  });
+
+  it("does not include an errors field for non-200 responses (message-only fallback)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("bad request", { status: 400 }));
+
+    const result = await runSimulate({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.errors).toBeUndefined();
+  });
+
+  it("does not include an errors field for network errors (message-only fallback)", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("Failed to fetch"));
+
+    const result = await runSimulate({}, mockFetch);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.errors).toBeUndefined();
+  });
+});
+
 describe("runSimulate — error: non-200 response", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

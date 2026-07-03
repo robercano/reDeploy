@@ -20,7 +20,9 @@
  * if (result.ok) {
  *   // result.view is a DeploymentView
  * } else {
- *   // result.error is an error message string
+ *   // result.error is an error message string (always present — banner fallback)
+ *   // result.errors, when present, carries the structured { code, path, message }[]
+ *   // errors so callers can highlight the offending field/node (issue #83)
  * }
  * ```
  *
@@ -29,6 +31,7 @@
  */
 
 import type { DeploymentView } from "@redeploy/reader";
+import type { StructuredDeployError } from "./field-errors.js";
 
 // ---------------------------------------------------------------------------
 // SSE step shape coming from the server
@@ -44,8 +47,16 @@ export interface SimulateStep {
   address: null;
 }
 
-/** A simulate error received in the done frame. */
+/**
+ * A simulate error received in the done frame.
+ *
+ * `path` is a JSON-pointer-ish string relative to the DeploymentSpec's
+ * `contracts` array (e.g. "contracts[2].id"), used by field-errors.ts to
+ * highlight the offending input/node in the studio canvas (issue #83).
+ */
 export interface SimulateError {
+  code?: string;
+  path?: string;
   message?: string;
   [key: string]: unknown;
 }
@@ -69,7 +80,7 @@ export type SimulateEvent =
 
 export type SimulateResult =
   | { ok: true; view: DeploymentView }
-  | { ok: false; error: string };
+  | { ok: false; error: string; errors?: StructuredDeployError[] };
 
 // ---------------------------------------------------------------------------
 // SSE frame parser
@@ -267,9 +278,17 @@ export async function runSimulate(
   }
 
   if (!doneEvent.success) {
-    const errors = (doneEvent as { success: false; errors: SimulateError[] }).errors;
-    const msgs = errors.map((e) => e.message ?? JSON.stringify(e)).join("; ");
-    return { ok: false, error: `Simulation failed: ${msgs}` };
+    const rawErrors = (doneEvent as { success: false; errors: SimulateError[] }).errors;
+    // Normalize into the structured shape shared with the deploy client so
+    // App.tsx can highlight the offending field/node (issue #83), while still
+    // keeping a joined plain-text message for the banner fallback.
+    const structuredErrors: StructuredDeployError[] = rawErrors.map((e) => ({
+      code: typeof e.code === "string" ? e.code : undefined,
+      path: typeof e.path === "string" ? e.path : undefined,
+      message: e.message ?? JSON.stringify(e),
+    }));
+    const msgs = structuredErrors.map((e) => e.message).join("; ");
+    return { ok: false, error: `Simulation failed: ${msgs}`, errors: structuredErrors };
   }
 
   const view: DeploymentView = {

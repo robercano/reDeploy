@@ -435,3 +435,101 @@ describe("ContractNode — ref slots (bound by constructorRef edge)", () => {
     expect(slot.textContent).toBe("token.address");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: field/node-level error highlighting (issue #83)
+// ---------------------------------------------------------------------------
+
+describe("ContractNode — error highlighting (issue #83)", () => {
+  it("marks the deploy-id input as invalid and shows the message when errors.deployId is set", () => {
+    const data = makeData({
+      deployId: "",
+      errors: { deployId: "contract entry id must be a non-empty string" },
+    });
+
+    renderContractNode(data);
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBe("true");
+    expect(deployIdInput.style.border).toContain("rgb(217, 48, 37)");
+    expect(
+      screen.getByTestId("node-field-error-deploy-id-test-node").textContent,
+    ).toBe("contract entry id must be a non-empty string");
+  });
+
+  it("does not mark the deploy-id input as invalid when errors is absent", () => {
+    const data = makeData({ deployId: "token" });
+    renderContractNode(data);
+
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();
+    expect(screen.queryByTestId("node-field-error-deploy-id-test-node")).toBeNull();
+  });
+
+  it("marks only the arg slot with a matching errors.args entry", () => {
+    const data = makeData({
+      args: [
+        { index: 0, kind: "literal", value: "" },
+        { index: 1, kind: "literal", value: "" },
+      ],
+      errors: { args: { 1: "symbol_ must not be empty" } },
+    });
+
+    renderContractNode(data);
+
+    const arg0 = screen.getByLabelText("arg-0") as HTMLInputElement;
+    expect(arg0.getAttribute("aria-invalid")).toBeNull();
+
+    const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
+    expect(arg1.getAttribute("aria-invalid")).toBe("true");
+    expect(arg1.style.border).toContain("rgb(217, 48, 37)");
+    expect(
+      screen.getByTestId("node-field-error-arg-1-test-node").textContent,
+    ).toBe("symbol_ must not be empty");
+  });
+
+  it("red-borders the node container and renders the node-level message when errors.node is set (no field mapping)", () => {
+    const data = makeData({ errors: { node: "duplicate deploy id across contracts" } });
+    renderContractNode(data);
+
+    const nodeEl = screen.getByTestId("contract-node-test-node");
+    expect(nodeEl.getAttribute("data-node-invalid")).toBe("true");
+    expect(nodeEl.style.border).toContain("rgb(217, 48, 37)");
+    expect(screen.getByTestId("node-error-test-node").textContent).toBe(
+      "duplicate deploy id across contracts",
+    );
+
+    // No field-level highlight — deploy-id remains valid.
+    const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
+    expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("does not red-border the node container when errors is absent", () => {
+    const data = makeData();
+    renderContractNode(data);
+
+    const nodeEl = screen.getByTestId("contract-node-test-node");
+    expect(nodeEl.getAttribute("data-node-invalid")).toBeNull();
+    expect(nodeEl.style.border).not.toContain("rgb(217, 48, 37)");
+    expect(screen.queryByTestId("node-error-test-node")).toBeNull();
+  });
+
+  it("also red-borders the node container when a field-level error is present (deployId)", () => {
+    // A field-level error still flags the node itself for discoverability,
+    // in addition to highlighting the specific input.
+    const data = makeData({ errors: { deployId: "id must be non-empty" } });
+    renderContractNode(data);
+
+    const nodeEl = screen.getByTestId("contract-node-test-node");
+    expect(nodeEl.getAttribute("data-node-invalid")).toBe("true");
+  });
+
+  it("selected takes precedence over the error border color", () => {
+    const data = makeData({ errors: { node: "some node-level error" } });
+    renderContractNode(data, /* selected */ true);
+
+    const nodeEl = screen.getByTestId("contract-node-test-node");
+    // selected blue (#1a73e8 → rgb(26, 115, 232)) wins over the error red.
+    expect(nodeEl.style.border).toContain("rgb(26, 115, 232)");
+  });
+});

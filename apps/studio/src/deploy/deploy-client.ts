@@ -43,14 +43,22 @@
 
 import type { DeploymentView } from "@redeploy/reader";
 import { consumeSseFrames } from "./simulate-client.js";
+import type { StructuredDeployError } from "./field-errors.js";
 
 // ---------------------------------------------------------------------------
 // SSE frame shapes coming from the /api/deploy server
 // ---------------------------------------------------------------------------
 
-/** A deploy error received in the terminal done frame. */
+/**
+ * A deploy error received in the terminal done frame.
+ *
+ * `path` is a JSON-pointer-ish string relative to the DeploymentSpec's
+ * `contracts` array (e.g. "contracts[2].id"), used by field-errors.ts to
+ * highlight the offending input/node in the studio canvas (issue #83).
+ */
 export interface DeployStreamError {
   code?: string;
+  path?: string;
   message?: string;
   [key: string]: unknown;
 }
@@ -71,7 +79,7 @@ export type DeployEvent =
 
 export type DeployResult =
   | { ok: true; view: DeploymentView }
-  | { ok: false; error: string };
+  | { ok: false; error: string; errors?: StructuredDeployError[] };
 
 // ---------------------------------------------------------------------------
 // SSE frame parser (deploy-specific event union)
@@ -190,9 +198,17 @@ export async function runDeploy(
   }
 
   if (!doneEvent.success) {
-    const errors = (doneEvent as { success: false; errors: DeployStreamError[] }).errors ?? [];
-    const msgs = errors.map((e) => e.message ?? JSON.stringify(e)).join("; ");
-    return { ok: false, error: `Deployment failed: ${msgs}` };
+    const rawErrors = (doneEvent as { success: false; errors: DeployStreamError[] }).errors ?? [];
+    // Normalize into the structured shape shared with the simulate client so
+    // App.tsx can highlight the offending field/node (issue #83), while still
+    // keeping a joined plain-text message for the banner fallback.
+    const structuredErrors: StructuredDeployError[] = rawErrors.map((e) => ({
+      code: typeof e.code === "string" ? e.code : undefined,
+      path: typeof e.path === "string" ? e.path : undefined,
+      message: e.message ?? JSON.stringify(e),
+    }));
+    const msgs = structuredErrors.map((e) => e.message).join("; ");
+    return { ok: false, error: `Deployment failed: ${msgs}`, errors: structuredErrors };
   }
 
   // success:true — the deployment view carries contracts WITH real addresses.
