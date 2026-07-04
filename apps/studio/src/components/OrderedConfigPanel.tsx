@@ -46,12 +46,13 @@ const panelStyle: React.CSSProperties = {
   top: 0,
   bottom: 0,
   width: 300,
-  background: "#f8f9fa",
-  borderLeft: "1px solid #dee2e6",
+  background: "var(--color-bg-panel)",
+  borderLeft: "1px solid var(--color-border)",
   padding: 16,
   overflowY: "auto",
   zIndex: 10,
   fontSize: 13,
+  color: "var(--color-text)",
 };
 
 const sectionTitleStyle: React.CSSProperties = {
@@ -63,22 +64,24 @@ const sectionTitleStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   fontSize: 12,
   padding: "3px 6px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
   marginBottom: 6,
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
 };
 
 const labelStyle: React.CSSProperties = {
   fontSize: 11,
-  color: "#555",
+  color: "var(--color-text-secondary)",
   marginBottom: 2,
 };
 
 const stepCardStyle: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #dee2e6",
+  background: "var(--color-bg-elevated)",
+  border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: 10,
   marginBottom: 10,
@@ -136,7 +139,7 @@ function OrderedArgInput({
   return (
     <div style={argRowStyle}>
       {inputName && (
-        <span style={{ fontSize: 11, color: "#888" }}>{inputName}</span>
+        <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{inputName}</span>
       )}
       <div style={{ display: "flex", gap: 4 }}>
         <select
@@ -225,14 +228,14 @@ function OrderedStepCard({
     <div style={stepCardStyle} data-testid={`ordered-step-${step.id}`}>
       {/* Header: order index, remove, move buttons */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <span style={{ fontWeight: 500, fontSize: 12, color: "#555" }}>
+        <span style={{ fontWeight: 500, fontSize: 12, color: "var(--color-text-secondary)" }}>
           #{index + 1}
         </span>
         <div style={{ display: "flex", gap: 4 }}>
           <button
             onClick={onMoveUp}
             disabled={index === 0}
-            style={{ fontSize: 11, cursor: index === 0 ? "default" : "pointer", color: "#666", background: "none", border: "none", opacity: index === 0 ? 0.3 : 1 }}
+            style={{ fontSize: 11, cursor: index === 0 ? "default" : "pointer", color: "var(--color-text-secondary)", background: "none", border: "none", opacity: index === 0 ? 0.3 : 1 }}
             title="Move up"
             data-testid={`ordered-step-up-${step.id}`}
           >
@@ -241,7 +244,7 @@ function OrderedStepCard({
           <button
             onClick={onMoveDown}
             disabled={index === total - 1}
-            style={{ fontSize: 11, cursor: index === total - 1 ? "default" : "pointer", color: "#666", background: "none", border: "none", opacity: index === total - 1 ? 0.3 : 1 }}
+            style={{ fontSize: 11, cursor: index === total - 1 ? "default" : "pointer", color: "var(--color-text-secondary)", background: "none", border: "none", opacity: index === total - 1 ? 0.3 : 1 }}
             title="Move down"
             data-testid={`ordered-step-down-${step.id}`}
           >
@@ -249,7 +252,7 @@ function OrderedStepCard({
           </button>
           <button
             onClick={onRemove}
-            style={{ fontSize: 11, cursor: "pointer", color: "#dc3545", background: "none", border: "none" }}
+            style={{ fontSize: 11, cursor: "pointer", color: "var(--color-danger-simple)", background: "none", border: "none" }}
             title="Remove step"
             data-testid={`ordered-step-remove-${step.id}`}
           >
@@ -378,7 +381,7 @@ export function OrderedConfigPanel({
   return (
     <div style={panelStyle} data-testid="ordered-config-panel">
       <div style={sectionTitleStyle}>Ordered Config Steps</div>
-      <p style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>
+      <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 12 }}>
         These steps run after all per-node config, in strict order. Reorder with ▲/▼.
       </p>
 
@@ -397,7 +400,7 @@ export function OrderedConfigPanel({
       ))}
 
       <button
-        style={{ width: "100%", padding: "6px 12px", cursor: "pointer", fontSize: 12, borderRadius: 4, border: "1px solid #ccc" }}
+        style={{ width: "100%", padding: "6px 12px", cursor: "pointer", fontSize: 12, borderRadius: 4, border: "1px solid var(--color-border-strong)", background: "var(--color-bg-elevated)", color: "var(--color-text)" }}
         onClick={onAddStep}
         data-testid="ordered-add-step-btn"
       >

@@ -41,21 +41,23 @@ import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 const inputStyle: React.CSSProperties = {
   fontSize: 11,
   padding: "2px 4px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
 };
 
 const readonlyValueStyle: React.CSSProperties = {
   fontSize: 11,
   padding: "2px 4px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
-  background: "#f5f5f5",
-  color: "#444",
+  background: "var(--color-node-readonly-bg)",
+  color: "var(--color-node-readonly-text)",
   fontStyle: "italic",
   userSelect: "none",
 } as React.CSSProperties;
@@ -63,29 +65,29 @@ const readonlyValueStyle: React.CSSProperties = {
 const staticLabelValueStyle: React.CSSProperties = {
   fontSize: 11,
   padding: "2px 4px",
-  color: "#333",
+  color: "var(--color-text)",
   fontWeight: 500,
 };
 
 const labelStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "#666",
+  color: "var(--color-text-secondary)",
   marginBottom: 2,
 };
 
-// Error highlighting (issue #83): reuses the studio's existing red palette
-// (see App.tsx's errorBannerStyle / deployRealBtnStyle: #d93025 / #c5221f).
-const ERROR_BORDER_COLOR = "#d93025";
+// Error highlighting (issue #83): reuses the studio's shared "danger" tokens
+// (see App.tsx's errorBannerStyle / deployRealBtnStyle).
+const ERROR_BORDER_COLOR = "var(--color-danger)";
 
 const fieldErrorMessageStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "#c5221f",
+  color: "var(--color-danger-text)",
   marginTop: 2,
 };
 
 const nodeErrorMessageStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "#c5221f",
+  color: "var(--color-danger-text)",
   marginBottom: 6,
   fontWeight: 500,
 };
@@ -101,15 +103,15 @@ const deleteButtonStyle: React.CSSProperties = {
   width: 20,
   height: 20,
   borderRadius: "50%",
-  border: "1px solid #a50e0e",
-  background: "#d93025",
-  color: "#fff",
+  border: "1px solid var(--color-danger-border)",
+  background: "var(--color-danger)",
+  color: "var(--color-text-on-accent)",
   fontSize: 11,
   lineHeight: "18px",
   textAlign: "center",
   cursor: "pointer",
   padding: 0,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+  boxShadow: "var(--shadow-lg)",
 };
 
 const argRowStyle: React.CSSProperties = {
@@ -122,7 +124,7 @@ const argRowStyle: React.CSSProperties = {
 
 const paramTypeStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "#999",
+  color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
 
@@ -167,11 +169,11 @@ function ArgRow({
         type="target"
         position={Position.Left}
         id={handleId}
-        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? { opacity: 0 } : {}) }}
+        style={{ top: "50%", left: -8, background: "var(--color-handle)", ...(isOverview ? { opacity: 0 } : {}) }}
       />
       {/* Collapse visible content in overview mode; keep Handle above for edges. */}
       <div style={isOverview ? { height: 0, overflow: "hidden" } : { flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
-        <span style={{ fontSize: 10, color: "#999", minWidth: 12 }}>
+        <span style={{ fontSize: 10, color: "var(--color-text-muted)", minWidth: 12 }}>
           [{slot.index}]
         </span>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 1 }}>
@@ -269,8 +271,8 @@ export interface ConfigCallbacks {
 }
 
 const configCardStyle: React.CSSProperties = {
-  background: "#f9f9f9",
-  border: "1px solid #e0e0e0",
+  background: "var(--color-bg-subtle)",
+  border: "1px solid var(--color-border-faint)",
   borderRadius: 4,
   padding: "6px 8px",
   marginBottom: 6,
@@ -279,7 +281,7 @@ const configCardStyle: React.CSSProperties = {
 
 const configSectionStyle: React.CSSProperties = {
   marginTop: 6,
-  borderTop: "1px solid #eee",
+  borderTop: "1px solid var(--color-border-faint)",
   paddingTop: 6,
 };
 
@@ -293,7 +295,7 @@ const configArgRowStyle: React.CSSProperties = {
 const smallInputStyle: React.CSSProperties = {
   fontSize: 10,
   padding: "2px 4px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
@@ -302,7 +304,7 @@ const smallInputStyle: React.CSSProperties = {
 const smallSelectStyle: React.CSSProperties = {
   fontSize: 10,
   padding: "2px 4px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
@@ -335,7 +337,7 @@ function ConfigArgInput({
     <div style={configArgRowStyle}>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
         {inputName && (
-          <span style={{ fontSize: 10, color: "#888" }}>{inputName}</span>
+          <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{inputName}</span>
         )}
         <div style={{ display: "flex", gap: 4 }}>
           {/* Kind toggle: literal vs addressRef */}
@@ -414,10 +416,10 @@ function SetXCallCard({
   return (
     <div style={configCardStyle} data-testid={`node-config-step-${step.id}`}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontWeight: 500, fontSize: 10, color: "#555" }}>setX</span>
+        <span style={{ fontWeight: 500, fontSize: 10, color: "var(--color-text-secondary)" }}>setX</span>
         <button
           onClick={onRemove}
-          style={{ fontSize: 10, cursor: "pointer", color: "#dc3545", background: "none", border: "none", padding: 0 }}
+          style={{ fontSize: 10, cursor: "pointer", color: "var(--color-danger-simple)", background: "none", border: "none", padding: 0 }}
           title="Remove config call"
           data-testid={`node-config-step-remove-${step.id}`}
         >
@@ -518,10 +520,10 @@ function GrantRoleCallCard({
   return (
     <div style={configCardStyle} data-testid={`node-config-step-${step.id}`}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontWeight: 500, fontSize: 10, color: "#555" }}>grantRole</span>
+        <span style={{ fontWeight: 500, fontSize: 10, color: "var(--color-text-secondary)" }}>grantRole</span>
         <button
           onClick={onRemove}
-          style={{ fontSize: 10, cursor: "pointer", color: "#dc3545", background: "none", border: "none", padding: 0 }}
+          style={{ fontSize: 10, cursor: "pointer", color: "var(--color-danger-simple)", background: "none", border: "none", padding: 0 }}
           title="Remove config call"
           data-testid={`node-config-step-remove-${step.id}`}
         >
@@ -586,10 +588,10 @@ function NodeConfigSection({
         onClick={() => setCollapsed((v) => !v)}
         data-testid={`node-config-section-toggle-${nodeId}`}
       >
-        <span style={{ fontSize: 10, fontWeight: 600, color: "#555" }}>
+        <span style={{ fontSize: 10, fontWeight: 600, color: "var(--color-text-secondary)" }}>
           Config calls {configSteps.length > 0 ? `(${configSteps.length})` : ""}
         </span>
-        <span style={{ fontSize: 10, color: "#888" }}>{collapsed ? "▸" : "▾"}</span>
+        <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{collapsed ? "▸" : "▾"}</span>
       </div>
       {!collapsed && (
         <div>
@@ -622,7 +624,7 @@ function NodeConfigSection({
               idPrefix={`node-add-config-call-${nodeId}`}
               functions={addableFunctions}
               onSelect={(fn) => configCallbacks.onAddConfigStep(nodeId, fn)}
-              buttonStyle={{ width: "100%", padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
+              buttonStyle={{ width: "100%", padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid var(--color-border-strong)" }}
             />
           </div>
         </div>
@@ -676,12 +678,12 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
 
   const containerStyle: React.CSSProperties = {
     position: "relative",
-    background: "#fff",
-    border: `2px solid ${selected ? "#1a73e8" : hasAnyError ? ERROR_BORDER_COLOR : "#999"}`,
+    background: "var(--color-node-bg)",
+    border: `2px solid ${selected ? "var(--color-primary)" : hasAnyError ? ERROR_BORDER_COLOR : "var(--color-node-border)"}`,
     borderRadius: 6,
     padding: "8px 12px",
     minWidth: 200,
-    boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+    boxShadow: "var(--shadow-lg)",
     fontSize: 12,
   };
 
@@ -719,7 +721,7 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
         type="target"
         position={Position.Left}
         id={`${id}-input`}
-        style={{ top: "50%", left: -8, background: "#555", ...(isOverview ? {} : { opacity: 0 }) }}
+        style={{ top: "50%", left: -8, background: "var(--color-handle)", ...(isOverview ? {} : { opacity: 0 }) }}
       />
 
       {/* Node-level fallback error (issue #83): shown when a validation error
@@ -802,7 +804,7 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
         type="source"
         position={Position.Right}
         id={`${id}-output`}
-        style={{ top: "50%", right: -8, background: "#e8711a" }}
+        style={{ top: "50%", right: -8, background: "var(--color-handle-output)" }}
       />
     </div>
   );

@@ -74,6 +74,9 @@ import type { NodeFieldErrors } from "./deploy/field-errors.js";
 import type { DeploymentView } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
+import { ThemeToggle } from "./components/ThemeToggle.js";
+import { useTheme } from "./theme/useTheme.js";
+import type { ThemeMode } from "./theme/useTheme.js";
 
 // Register the custom node type once (stable reference required by React Flow).
 // Cast to NodeTypes to satisfy the `Record<string, unknown>` data constraint.
@@ -129,16 +132,17 @@ const btnStyle: React.CSSProperties = {
   cursor: "pointer",
   borderRadius: 4,
   fontSize: 13,
-  border: "1px solid #ccc",
-  background: "#fff",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+  border: "1px solid var(--color-border-strong)",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
+  boxShadow: "var(--shadow-md)",
 };
 
 const activeBtnStyle: React.CSSProperties = {
   ...btnStyle,
-  background: "#1a73e8",
-  color: "#fff",
-  border: "1px solid #1a73e8",
+  background: "var(--color-primary)",
+  color: "var(--color-text-on-accent)",
+  border: "1px solid var(--color-primary-border)",
 };
 
 type AppMode = "authoring" | "inspector";
@@ -187,6 +191,8 @@ interface AuthoringCanvasProps {
   onUpdateOrderedStep: ReturnType<typeof useGraph>["updateOrderedStep"];
   onMoveOrderedStepUp: ReturnType<typeof useGraph>["moveOrderedStepUp"];
   onMoveOrderedStepDown: ReturnType<typeof useGraph>["moveOrderedStepDown"];
+  /** Theme mode driving React Flow's built-in `colorMode` prop (issue #94). */
+  themeMode: ThemeMode;
 }
 
 function AuthoringCanvas({
@@ -216,6 +222,7 @@ function AuthoringCanvas({
   onUpdateOrderedStep,
   onMoveOrderedStepUp,
   onMoveOrderedStepDown,
+  themeMode,
 }: AuthoringCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -395,6 +402,7 @@ function AuthoringCanvas({
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
           deleteKeyCode={["Delete", "Backspace"]}
+          colorMode={themeMode}
           fitView
         >
           <Background />
@@ -411,6 +419,11 @@ function AuthoringCanvas({
 // ---------------------------------------------------------------------------
 
 export function App() {
+  // Dark-mode theme (issue #94): single source of truth for both the
+  // ThemeToggle control and React Flow's `colorMode` prop in BOTH canvases
+  // (authoring's AuthoringCanvas and the read-only Inspector).
+  const { mode: themeMode, setMode: setThemeMode } = useTheme();
+
   const [mode, setMode] = useState<AppMode>("authoring");
   const [showBrowser, setShowBrowser] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("detailed");
@@ -710,18 +723,22 @@ export function App() {
 
   const deployBtnStyle: React.CSSProperties = {
     ...btnStyle,
-    background: simulating ? "#e8f0fe" : "#34a853",
-    color: simulating ? "#1a73e8" : "#fff",
-    border: simulating ? "1px solid #1a73e8" : "1px solid #2d8f47",
+    background: simulating ? "var(--color-primary-bg-subtle)" : "var(--color-success)",
+    color: simulating ? "var(--color-primary-text)" : "var(--color-text-on-accent)",
+    border: simulating
+      ? "1px solid var(--color-primary-border)"
+      : "1px solid var(--color-success-border)",
     cursor: simulating ? "not-allowed" : "pointer",
   };
 
   // "Deploy (real)" button — red/warning tone to signal danger (irreversible).
   const deployRealBtnStyle: React.CSSProperties = {
     ...btnStyle,
-    background: deploying ? "#fce8e6" : "#d93025",
-    color: deploying ? "#c5221f" : "#fff",
-    border: deploying ? "1px solid #c5221f" : "1px solid #a50e0e",
+    background: deploying ? "var(--color-danger-bg)" : "var(--color-danger)",
+    color: deploying ? "var(--color-danger-text)" : "var(--color-text-on-accent)",
+    border: deploying
+      ? "1px solid var(--color-danger-text)"
+      : "1px solid var(--color-danger-border)",
     cursor: deploying ? "not-allowed" : "pointer",
   };
 
@@ -746,14 +763,14 @@ export function App() {
     top: ERROR_BANNER_TOP,
     left: 12,
     zIndex: 20,
-    background: "#fce8e6",
-    color: "#c5221f",
-    border: "1px solid #f28b82",
+    background: "var(--color-danger-bg)",
+    color: "var(--color-danger-text)",
+    border: "1px solid var(--color-danger-border-faint)",
     borderRadius: 4,
     padding: "6px 14px",
     fontSize: 13,
     maxWidth: 600,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+    boxShadow: "var(--shadow-md)",
   };
 
   const successBannerStyle: React.CSSProperties = {
@@ -761,21 +778,21 @@ export function App() {
     top: SUCCESS_BANNER_TOP,
     left: 12,
     zIndex: 20,
-    background: "#e6f4ea",
-    color: "#137333",
-    border: "1px solid #a8dab5",
+    background: "var(--color-success-bg)",
+    color: "var(--color-success-text)",
+    border: "1px solid var(--color-success-border-soft)",
     borderRadius: 4,
     padding: "6px 14px",
     fontSize: 13,
     maxWidth: 600,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+    boxShadow: "var(--shadow-md)",
   };
 
   // Confirm-modal styles (mirror SaveTemplateModal's overlay + card approach).
   const deployModalOverlayStyle: React.CSSProperties = {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.5)",
+    background: "var(--color-overlay)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -783,12 +800,12 @@ export function App() {
   };
 
   const deployModalStyle: React.CSSProperties = {
-    background: "#fff",
+    background: "var(--color-bg-elevated)",
     borderRadius: 8,
     padding: 24,
     width: 480,
     maxWidth: "90vw",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+    boxShadow: "var(--shadow-xl)",
   };
 
   return (
@@ -825,13 +842,14 @@ export function App() {
         >
           {deploying ? "Deploying…" : "Deploy (real)"}
         </button>
+        <ThemeToggle mode={themeMode} onChange={setThemeMode} />
       </div>
 
       {/* Deploy (real) confirmation modal — gates the irreversible POST */}
       {showDeployModal && (
         <div style={deployModalOverlayStyle} data-testid="deploy-real-modal">
           <div style={deployModalStyle}>
-            <h3 style={{ margin: "0 0 12px", fontSize: 16, color: "#c5221f" }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16, color: "var(--color-danger-text)" }}>
               Confirm real deployment
             </h3>
             <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
@@ -842,7 +860,7 @@ export function App() {
             <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
               Target: <strong data-testid="deploy-real-target">{deployTargetLabel}</strong>
               <br />
-              <span style={{ fontSize: 11, color: "#666" }}>
+              <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
                 Network / RPC is resolved server-side from its environment.
               </span>
             </p>
@@ -857,9 +875,9 @@ export function App() {
               <button
                 style={{
                   ...btnStyle,
-                  background: "#d93025",
-                  color: "#fff",
-                  border: "1px solid #a50e0e",
+                  background: "var(--color-danger)",
+                  color: "var(--color-text-on-accent)",
+                  border: "1px solid var(--color-danger-border)",
                 }}
                 onClick={() => { void handleDeploy(); }}
                 data-testid="deploy-real-confirm"
@@ -891,9 +909,9 @@ export function App() {
               <button
                 style={{
                   ...btnStyle,
-                  background: "#d93025",
-                  color: "#fff",
-                  border: "1px solid #a50e0e",
+                  background: "var(--color-danger)",
+                  color: "var(--color-text-on-accent)",
+                  border: "1px solid var(--color-danger-border)",
                 }}
                 onClick={handleConfirmNewCanvas}
                 data-testid="new-canvas-confirm"
@@ -962,6 +980,7 @@ export function App() {
             onUpdateOrderedStep={updateOrderedStep}
             onMoveOrderedStepUp={moveOrderedStepUp}
             onMoveOrderedStepDown={moveOrderedStepDown}
+            themeMode={themeMode}
           />
         </ReactFlowProvider>
       )}
@@ -976,6 +995,7 @@ export function App() {
                 : "Simulated plan (dry run)"
               : undefined
           }
+          themeMode={themeMode}
         />
       )}
     </div>

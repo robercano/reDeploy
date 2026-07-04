@@ -30,13 +30,13 @@ import type { ArgValue, BigIntValue } from "@redeploy/reader";
 
 const labelStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "#666",
+  color: "var(--color-text-secondary)",
   marginBottom: 2,
 };
 
 const valueStyle: React.CSSProperties = {
   fontSize: 11,
-  color: "#333",
+  color: "var(--color-text)",
   marginBottom: 6,
   wordBreak: "break-all",
 };
@@ -44,7 +44,7 @@ const valueStyle: React.CSSProperties = {
 const addressStyle: React.CSSProperties = {
   fontSize: 11,
   fontFamily: "monospace",
-  color: "#1a73e8",
+  color: "var(--color-primary-text)",
   marginBottom: 6,
   wordBreak: "break-all",
 };
@@ -52,7 +52,7 @@ const addressStyle: React.CSSProperties = {
 const notDeployedStyle: React.CSSProperties = {
   fontSize: 11,
   fontStyle: "italic",
-  color: "#999",
+  color: "var(--color-text-muted)",
   marginBottom: 6,
 };
 
@@ -61,7 +61,7 @@ const argRowStyle: React.CSSProperties = {
   gap: 4,
   marginBottom: 2,
   fontSize: 11,
-  color: "#333",
+  color: "var(--color-text)",
 };
 
 // ---------------------------------------------------------------------------
@@ -96,12 +96,12 @@ function InspectorContractNodeInner({ data: rawData }: NodeProps) {
   const { id, contractName, address, args } = data;
 
   const containerStyle: React.CSSProperties = {
-    background: "#f0f4ff",
-    border: "2px solid #5b8dee",
+    background: "var(--color-inspector-node-bg)",
+    border: "2px solid var(--color-inspector-node-border)",
     borderRadius: 6,
     padding: "8px 12px",
     minWidth: 220,
-    boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+    boxShadow: "var(--shadow-lg)",
     fontSize: 12,
   };
 
@@ -112,7 +112,7 @@ function InspectorContractNodeInner({ data: rawData }: NodeProps) {
         type="target"
         position={Position.Left}
         id={`${id}-input`}
-        style={{ top: "50%", left: -8, background: "#5b8dee" }}
+        style={{ top: "50%", left: -8, background: "var(--color-inspector-node-border)" }}
       />
 
       {/* Contract id */}
@@ -153,7 +153,7 @@ function InspectorContractNodeInner({ data: rawData }: NodeProps) {
           <div style={labelStyle}>Constructor Args</div>
           {args.map((arg, idx) => (
             <div key={idx} style={argRowStyle}>
-              <span style={{ color: "#999", minWidth: 18 }}>[{idx}]</span>
+              <span style={{ color: "var(--color-text-muted)", minWidth: 18 }}>[{idx}]</span>
               <span>{renderArgValue(arg)}</span>
             </div>
           ))}
@@ -165,7 +165,7 @@ function InspectorContractNodeInner({ data: rawData }: NodeProps) {
         type="source"
         position={Position.Right}
         id={`${id}-output`}
-        style={{ top: "50%", right: -8, background: "#e8711a" }}
+        style={{ top: "50%", right: -8, background: "var(--color-handle-output)" }}
       />
     </div>
   );

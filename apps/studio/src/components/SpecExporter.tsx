@@ -20,7 +20,7 @@ interface SpecExporterProps {
 const overlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.5)",
+  background: "var(--color-overlay)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -28,41 +28,43 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "#fff",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
   borderRadius: 8,
   padding: 24,
   width: 600,
   maxHeight: "80vh",
   overflowY: "auto",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  boxShadow: "var(--shadow-xl)",
 };
 
 const buttonStyle: React.CSSProperties = {
   padding: "6px 14px",
   cursor: "pointer",
   borderRadius: 4,
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
+  color: "var(--color-text)",
   fontSize: 13,
 };
 
 const errorStyle: React.CSSProperties = {
-  background: "#fff5f5",
-  border: "1px solid #fed7d7",
+  background: "var(--color-danger-bg-soft)",
+  border: "1px solid var(--color-danger-border-soft)",
   borderRadius: 4,
   padding: 10,
   marginBottom: 10,
   fontSize: 12,
-  color: "#c53030",
+  color: "var(--color-danger-text-soft)",
 };
 
 const okStyle: React.CSSProperties = {
-  background: "#f0fff4",
-  border: "1px solid #c6f6d5",
+  background: "var(--color-success-bg-soft)",
+  border: "1px solid var(--color-success-border-soft)",
   borderRadius: 4,
   padding: 10,
   marginBottom: 10,
   fontSize: 12,
-  color: "#276749",
+  color: "var(--color-success-text-soft)",
 };
 
 type SpecTab = "deployment" | "config";
@@ -74,7 +76,7 @@ export function SpecExporter({ deployment, config }: SpecExporterProps) {
   if (!open) {
     return (
       <button
-        style={{ ...buttonStyle, background: "#1a73e8", color: "#fff", border: "none" }}
+        style={{ ...buttonStyle, background: "var(--color-primary)", color: "var(--color-text-on-accent)", border: "none" }}
         onClick={() => setOpen(true)}
         data-testid="export-spec-btn"
       >
@@ -103,7 +105,7 @@ export function SpecExporter({ deployment, config }: SpecExporterProps) {
     <div style={overlayStyle} data-testid="spec-exporter-modal">
       <div style={modalStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Export Spec</h3>
+          <h3 style={{ margin: 0, fontSize: 16, color: "var(--color-text)" }}>Export Spec</h3>
           <button style={{ ...buttonStyle, background: "none" }} onClick={() => setOpen(false)}>✕ Close</button>
         </div>
 
@@ -126,13 +128,13 @@ export function SpecExporter({ deployment, config }: SpecExporterProps) {
         {/* Tab selector */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <button
-            style={{ ...buttonStyle, background: tab === "deployment" ? "#1a73e8" : "#fff", color: tab === "deployment" ? "#fff" : "#333" }}
+            style={{ ...buttonStyle, background: tab === "deployment" ? "var(--color-primary)" : "var(--color-bg-elevated)", color: tab === "deployment" ? "var(--color-text-on-accent)" : "var(--color-text)" }}
             onClick={() => setTab("deployment")}
           >
             deployment.json
           </button>
           <button
-            style={{ ...buttonStyle, background: tab === "config" ? "#1a73e8" : "#fff", color: tab === "config" ? "#fff" : "#333" }}
+            style={{ ...buttonStyle, background: tab === "config" ? "var(--color-primary)" : "var(--color-bg-elevated)", color: tab === "config" ? "var(--color-text-on-accent)" : "var(--color-text)" }}
             onClick={() => setTab("config")}
           >
             config.json
@@ -140,7 +142,7 @@ export function SpecExporter({ deployment, config }: SpecExporterProps) {
         </div>
 
         <textarea
-          style={{ width: "100%", height: 300, fontFamily: "monospace", fontSize: 12, padding: 8, boxSizing: "border-box", border: "1px solid #ccc", borderRadius: 4 }}
+          style={{ width: "100%", height: 300, fontFamily: "monospace", fontSize: 12, padding: 8, boxSizing: "border-box", border: "1px solid var(--color-border-strong)", borderRadius: 4, background: "var(--color-bg-elevated)", color: "var(--color-text)" }}
           readOnly
           value={tab === "deployment" ? deployJson : configJson}
           data-testid="spec-textarea"
@@ -148,13 +150,13 @@ export function SpecExporter({ deployment, config }: SpecExporterProps) {
 
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button
-            style={{ ...buttonStyle, background: "#28a745", color: "#fff", border: "none" }}
+            style={{ ...buttonStyle, background: "var(--color-success)", color: "var(--color-text-on-accent)", border: "none" }}
             onClick={() => downloadFile(deployJson, "deployment.json")}
           >
             Download deployment.json
           </button>
           <button
-            style={{ ...buttonStyle, background: "#28a745", color: "#fff", border: "none" }}
+            style={{ ...buttonStyle, background: "var(--color-success)", color: "var(--color-text-on-accent)", border: "none" }}
             onClick={() => downloadFile(configJson, "config.json")}
           >
             Download config.json

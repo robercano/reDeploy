@@ -142,8 +142,8 @@ const panelStyle: React.CSSProperties = {
   top: 56,
   bottom: 0,
   width: 280,
-  background: "#f8f9fa",
-  borderRight: "1px solid #dee2e6",
+  background: "var(--color-bg-panel)",
+  borderRight: "1px solid var(--color-border)",
   display: "flex",
   flexDirection: "column",
   zIndex: 10,
@@ -152,7 +152,7 @@ const panelStyle: React.CSSProperties = {
 
 const headerStyle: React.CSSProperties = {
   padding: "12px 16px 8px",
-  borderBottom: "1px solid #dee2e6",
+  borderBottom: "1px solid var(--color-border)",
   flexShrink: 0,
 };
 
@@ -160,6 +160,7 @@ const titleStyle: React.CSSProperties = {
   fontWeight: 600,
   fontSize: 14,
   marginBottom: 8,
+  color: "var(--color-text)",
 };
 
 const searchInputStyle: React.CSSProperties = {
@@ -167,9 +168,11 @@ const searchInputStyle: React.CSSProperties = {
   boxSizing: "border-box",
   fontSize: 12,
   padding: "4px 8px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   marginBottom: 8,
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
 };
 
 const modeBtnStyle: React.CSSProperties = {
@@ -177,16 +180,17 @@ const modeBtnStyle: React.CSSProperties = {
   cursor: "pointer",
   borderRadius: 4,
   fontSize: 12,
-  border: "1px solid #ccc",
-  background: "#fff",
-  boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+  border: "1px solid var(--color-border-strong)",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
+  boxShadow: "var(--shadow-sm)",
 };
 
 const activeModeBtnStyle: React.CSSProperties = {
   ...modeBtnStyle,
-  background: "#1a73e8",
-  color: "#fff",
-  border: "1px solid #1a73e8",
+  background: "var(--color-primary)",
+  color: "var(--color-text-on-accent)",
+  border: "1px solid var(--color-primary-border)",
 };
 
 const listStyle: React.CSSProperties = {
@@ -203,19 +207,20 @@ const contractRowStyle: React.CSSProperties = {
 
 const contractRowSelectedStyle: React.CSSProperties = {
   ...contractRowStyle,
-  background: "#e8f0fe",
-  borderLeft: "3px solid #1a73e8",
+  background: "var(--color-primary-bg-subtle)",
+  borderLeft: "3px solid var(--color-primary)",
   paddingLeft: 13,
 };
 
 const contractNameStyle: React.CSSProperties = {
   fontWeight: 500,
   fontSize: 13,
+  color: "var(--color-text)",
 };
 
 const contractHintStyle: React.CSSProperties = {
   fontSize: 11,
-  color: "#888",
+  color: "var(--color-text-muted)",
   marginTop: 1,
 };
 
@@ -224,7 +229,7 @@ const folderRowStyle: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
   fontSize: 12,
-  color: "#444",
+  color: "var(--color-text-secondary)",
   userSelect: "none",
   display: "flex",
   alignItems: "center",
@@ -233,8 +238,9 @@ const folderRowStyle: React.CSSProperties = {
 
 const sigPanelStyle: React.CSSProperties = {
   padding: "10px 16px",
-  borderTop: "1px solid #dee2e6",
-  background: "#fff",
+  borderTop: "1px solid var(--color-border)",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
   flexShrink: 0,
   fontSize: 12,
 };
@@ -242,7 +248,7 @@ const sigPanelStyle: React.CSSProperties = {
 const sigCodeStyle: React.CSSProperties = {
   fontFamily: "monospace",
   fontSize: 11,
-  color: "#1a73e8",
+  color: "var(--color-primary-text)",
   wordBreak: "break-all",
   marginTop: 4,
 };
