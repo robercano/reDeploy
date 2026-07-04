@@ -161,7 +161,55 @@ describe("App — config panel", () => {
     expect(configSection).not.toBeNull();
   });
 
-  it("can add a setX step via config panel", () => {
+  it("shows exactly ONE 'Add config call' button and no old +setX/+grantRole buttons", () => {
+    render(<App />);
+    addNodeByName("Registry");
+
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
+
+    expect(within(configSection).getAllByText("Add config call")).toHaveLength(1);
+    expect(within(configSection).queryByText("+ setX")).toBeNull();
+    expect(within(configSection).queryByText("+ grantRole")).toBeNull();
+  });
+
+  it("'Add config call' picker lists Registry's REAL state-changing functions (register, grantRole, revokeRole, renounceRole), not synthetic setX/grantRole", () => {
+    // NOTE: this test renders the full App, whose nodes go through React
+    // Flow's real (unmeasured, in jsdom) node wrapper — that wrapper is kept
+    // `visibility: hidden` until a ResizeObserver reports its size, which
+    // never fires in jsdom. RTL's `getByRole` filters out elements under an
+    // inaccessible (hidden) ancestor, so we query by the menu/menuitem
+    // `role` attribute directly via querySelector instead of `getByRole`
+    // (functional behavior — click handling — is unaffected by the CSS
+    // visibility quirk; only the accessibility-tree-based query is).
+    //
+    // Registry's real nonpayable functions (from the manifest) are, in
+    // order: register(string,address), grantRole(bytes32,address),
+    // revokeRole(bytes32,address), renounceRole(bytes32,address). view/pure
+    // functions (lookup, hasRole, getRoleAdmin, supportsInterface) are
+    // excluded. grantRole is NOT special-cased — it appears only because
+    // Registry's ABI (via AccessControl) declares it, alongside the others.
+    render(<App />);
+    addNodeByName("Registry");
+
+    const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
+    expect(configSection).not.toBeNull();
+
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    const menu = configSection.querySelector("[role='menu']") as HTMLElement;
+    expect(menu).not.toBeNull();
+    const items = Array.from(menu.querySelectorAll("[role='menuitem']"));
+    expect(items.map((i) => i.textContent)).toEqual([
+      "register(string,address)",
+      "grantRole(bytes32,address)",
+      "revokeRole(bytes32,address)",
+      "renounceRole(bytes32,address)",
+    ]);
+    // No literal synthetic "setX" menu entry.
+    expect(within(menu).queryByText("setX")).toBeNull();
+  });
+
+  it("can add a config-call step targeting a real function (register), pre-populated with one arg input per real parameter", () => {
     render(<App />);
     addNodeByName("Registry");
 
@@ -169,27 +217,35 @@ describe("App — config panel", () => {
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    const addSetXBtn = within(configSection).getByText("+ setX");
-    fireEvent.click(addSetXBtn);
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("register(string,address)"));
 
     // Should show a step card (each step has a card div; the remove button is a
     // child element with a more specific testid so we match only card divs here)
     const steps = document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])");
     expect(steps).toHaveLength(1);
+    // register(string,address) has 2 real parameters — one arg input per
+    // parameter must be rendered immediately (default literal mode).
+    const argInputs = within(steps[0] as HTMLElement).getAllByPlaceholderText("value");
+    expect(argInputs).toHaveLength(2);
   });
 
-  it("can add a grantRole step via config panel", () => {
+  it("adding grantRole from the picker creates a setX-shaped step (real function), pre-populated with its 2 real parameters", () => {
     render(<App />);
     addNodeByName("Registry");
 
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    const addGrantBtn = within(configSection).getByText("+ grantRole");
-    fireEvent.click(addGrantBtn);
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("grantRole(bytes32,address)"));
 
     const steps = document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])");
     expect(steps).toHaveLength(1);
+    // grantRole(bytes32,address) has 2 real parameters (role, account) — one
+    // arg input per parameter must be rendered immediately.
+    const argInputs = within(steps[0] as HTMLElement).getAllByPlaceholderText("value");
+    expect(argInputs).toHaveLength(2);
   });
 
   it("can remove a config step", () => {
@@ -199,7 +255,8 @@ describe("App — config panel", () => {
     const configSection = document.querySelector("[data-testid^='node-config-section-']") as HTMLElement;
     expect(configSection).not.toBeNull();
 
-    fireEvent.click(within(configSection).getByText("+ setX"));
+    fireEvent.click(within(configSection).getByText("Add config call"));
+    fireEvent.click(within(configSection).getByText("register(string,address)"));
     expect(document.querySelectorAll("[data-testid^='node-config-step-']:not([data-testid*='-remove-'])")).toHaveLength(1);
 
     const removeBtn = within(configSection).getByTitle("Remove config call");

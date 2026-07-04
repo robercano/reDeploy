@@ -216,10 +216,9 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     expect(container.querySelector("[data-testid='node-config-step-step-1']")).not.toBeNull();
   });
 
-  it("+ setX button calls onAddConfigStep with 'setX'", () => {
-    const calls: Array<[string, string]> = [];
+  it("renders exactly ONE 'Add config call' button and no old +setX/+grantRole buttons", () => {
     const configCallbacks = {
-      onAddConfigStep: (nodeId: string, kind: string) => calls.push([nodeId, kind]),
+      onAddConfigStep: noop,
       onRemoveConfigStep: noop,
       onUpdateSetXStep: noop,
       onUpdateGrantRoleStep: noop,
@@ -228,15 +227,21 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
     const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
     const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
-    fireEvent.click(within(section).getByText("+ setX"));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(["n1", "setX"]);
+    expect(within(section).getAllByText("Add config call")).toHaveLength(1);
+    expect(within(section).queryByText("+ setX")).toBeNull();
+    expect(within(section).queryByText("+ grantRole")).toBeNull();
   });
 
-  it("+ grantRole button calls onAddConfigStep with 'grantRole'", () => {
-    const calls: Array<[string, string]> = [];
+  it("picker lists the target contract's (Token) REAL state-changing functions, not synthetic setX/grantRole", () => {
+    // makeContractNodeData() defaults contractName to "Token", whose real
+    // nonpayable functions are, in manifest order: mint, grantRole,
+    // revokeRole, renounceRole, transfer, approve, transferFrom. view/pure
+    // functions (name, symbol, decimals, totalSupply, balanceOf, allowance,
+    // hasRole, getRoleAdmin, supportsInterface) are excluded. grantRole is
+    // NOT special-cased — it appears because Token's ABI (via AccessControl)
+    // declares it, alongside every other real function.
     const configCallbacks = {
-      onAddConfigStep: (nodeId: string, kind: string) => calls.push([nodeId, kind]),
+      onAddConfigStep: noop,
       onRemoveConfigStep: noop,
       onUpdateSetXStep: noop,
       onUpdateGrantRoleStep: noop,
@@ -245,9 +250,125 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
     const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
     const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
-    fireEvent.click(within(section).getByText("+ grantRole"));
+    fireEvent.click(within(section).getByText("Add config call"));
+    const menu = within(section).getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      "mint(address,uint256)",
+      "grantRole(bytes32,address)",
+      "revokeRole(bytes32,address)",
+      "renounceRole(bytes32,address)",
+      "transfer(address,uint256)",
+      "approve(address,uint256)",
+      "transferFrom(address,address,uint256)",
+    ]);
+    expect(within(menu).queryByText("setX")).toBeNull();
+  });
+
+  it("excludes view/pure Token functions from the picker", () => {
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    fireEvent.click(within(section).getByText("Add config call"));
+    const menu = within(section).getByRole("menu");
+    for (const viewFn of ["name", "symbol", "decimals", "totalSupply", "balanceOf", "allowance", "hasRole", "getRoleAdmin", "supportsInterface"]) {
+      expect(within(menu).queryAllByRole("menuitem", { name: new RegExp(`^${viewFn}\\(`) })).toHaveLength(0);
+    }
+  });
+
+  it("'Add config call' → selecting a real function calls onAddConfigStep with its manifest entry", () => {
+    const calls: Array<[string, { name: string; signature: string; inputs: unknown[] }]> = [];
+    const configCallbacks = {
+      onAddConfigStep: (nodeId: string, fn: { name: string; signature: string; inputs: unknown[] }) => calls.push([nodeId, fn]),
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    fireEvent.click(within(section).getByText("Add config call"));
+    fireEvent.click(within(section).getByRole("menuitem", { name: "mint(address,uint256)" }));
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(["n1", "grantRole"]);
+    const [nodeId, fn] = calls[0];
+    expect(nodeId).toBe("n1");
+    expect(fn.name).toBe("mint");
+    expect(fn.signature).toBe("mint(address,uint256)");
+    expect(fn.inputs).toEqual([
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ]);
+  });
+
+  it("'Add config call' → selecting grantRole (a real function, not a synthetic kind) calls onAddConfigStep with its manifest entry", () => {
+    const calls: Array<[string, { name: string; signature: string; inputs: unknown[] }]> = [];
+    const configCallbacks = {
+      onAddConfigStep: (nodeId: string, fn: { name: string; signature: string; inputs: unknown[] }) => calls.push([nodeId, fn]),
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    fireEvent.click(within(section).getByText("Add config call"));
+    fireEvent.click(within(section).getByRole("menuitem", { name: "grantRole(bytes32,address)" }));
+    expect(calls).toHaveLength(1);
+    const [nodeId, fn] = calls[0];
+    expect(nodeId).toBe("n1");
+    expect(fn.name).toBe("grantRole");
+    expect(fn.signature).toBe("grantRole(bytes32,address)");
+    expect(fn.inputs).toEqual([
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ]);
+  });
+
+  it("back-compat: a legacy grantRole-kind step (from a persisted graph/template) renders via its own card without crashing, even though the picker no longer creates that kind", () => {
+    const legacyGrantRoleStep: ContractNodeData["configSteps"][number] = {
+      kind: "grantRole",
+      id: "legacy-1",
+      role: "MINTER_ROLE",
+      accountKind: "literal",
+      accountValue: "0xabc",
+    };
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [legacyGrantRoleStep] }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    expect(container.querySelector("[data-testid='node-config-step-legacy-1']")).not.toBeNull();
+    expect(within(container).getByLabelText("node-grantrole-role-n1-legacy-1")).not.toBeNull();
+  });
+
+  it("contract not in manifest → picker shows 'No functions available' empty state, never crashes", () => {
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [], contractName: "TotallyUnknownContract" }), configCallbacks };
+    const { container } = renderContractNode(data as unknown as ContractNodeData, "n1");
+    const section = container.querySelector("[data-testid='node-config-section-n1']") as HTMLElement;
+    fireEvent.click(within(section).getByText("Add config call"));
+    const menu = within(section).getByRole("menu");
+    expect(within(menu).queryAllByRole("menuitem")).toHaveLength(0);
+    expect(within(menu).getByText("No functions available")).not.toBeNull();
   });
 
   it("remove button on a step card calls onRemoveConfigStep", () => {

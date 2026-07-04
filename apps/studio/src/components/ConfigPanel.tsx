@@ -10,9 +10,10 @@
  * values) with a literal/addressRef toggle for each arg.
  */
 
-import { getContract } from "../manifest/index.js";
+import { getContract, getStateChangingFunctions } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
 import type { ContractNodeData, StudioConfigStep, StudioSetXStep, StudioGrantRoleStep, StudioConfigArg, StudioAddressRef } from "../spec/types.js";
+import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 
 /** A deploy-id / contractName pair used to populate the target picker. */
 export interface DeployTarget {
@@ -25,7 +26,13 @@ interface ConfigPanelProps {
   data: ContractNodeData;
   /** All deploy targets currently in the graph (for the setX target picker). */
   deployTargets: DeployTarget[];
-  onAddStep: (nodeId: string, kind: "setX" | "grantRole") => void;
+  /**
+   * Adds a config-call step targeting the selected REAL manifest function
+   * (issue #85/#89 owner feedback: the picker no longer offers synthetic
+   * "setX"/"grantRole" kinds — it lists the attached node's actual
+   * state-changing functions and this callback receives the chosen one).
+   */
+  onAddStep: (nodeId: string, fn: ManifestFunction) => void;
   onRemoveStep: (nodeId: string, stepId: string) => void;
   onUpdateSetXStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => void;
   onUpdateGrantRoleStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>) => void;
@@ -386,6 +393,13 @@ export function ConfigPanel({
   onUpdateSetXStep,
   onUpdateGrantRoleStep,
 }: ConfigPanelProps) {
+  // Real, state-changing functions from the attached node's own contract
+  // (issue #85/#89): a freshly-added step defaults to targeting the attached
+  // node (see SetXStepCard's targetDeployId resolution), so the picker is
+  // seeded from data.contractName. Empty when the contract isn't in the
+  // manifest (free-text fallback).
+  const addableFunctions = getStateChangingFunctions(data.contractName);
+
   return (
     <div style={panelStyle} data-testid="config-panel">
       <div style={sectionTitleStyle}>Config Steps — {data.deployId || "(no id)"}</div>
@@ -415,20 +429,12 @@ export function ConfigPanel({
         );
       })}
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          style={{ flex: 1, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
-          onClick={() => onAddStep(nodeId, "setX")}
-        >
-          + setX
-        </button>
-        <button
-          style={{ flex: 1, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
-          onClick={() => onAddStep(nodeId, "grantRole")}
-        >
-          + grantRole
-        </button>
-      </div>
+      <AddConfigCallMenu
+        idPrefix={`config-panel-add-config-call-${nodeId}`}
+        functions={addableFunctions}
+        onSelect={(fn) => onAddStep(nodeId, fn)}
+        buttonStyle={{ width: "100%", padding: "4px 8px", cursor: "pointer", fontSize: 12 }}
+      />
     </div>
   );
 }

@@ -34,8 +34,9 @@ import { memo, useCallback, useState } from "react";
 import { Handle, Position, useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import type { ContractNodeData, ArgSlot, StudioConfigStep, StudioAddressRef, StudioSetXStep, StudioGrantRoleStep } from "../spec/types.js";
-import { getContract } from "../manifest/index.js";
+import { getContract, getStateChangingFunctions } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
+import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 
 const inputStyle: React.CSSProperties = {
   fontSize: 11,
@@ -253,7 +254,13 @@ export interface CanvasDeployTarget {
 
 /** Callbacks for per-node config calls section (injected into node data via App.tsx). */
 export interface ConfigCallbacks {
-  onAddConfigStep: (nodeId: string, kind: "setX" | "grantRole") => void;
+  /**
+   * Adds a config-call step targeting the selected REAL manifest function
+   * (issue #85/#89 owner feedback: the picker no longer offers synthetic
+   * "setX"/"grantRole" kinds — it lists the target contract's actual
+   * state-changing functions and this callback receives the chosen one).
+   */
+  onAddConfigStep: (nodeId: string, fn: ManifestFunction) => void;
   onRemoveConfigStep: (nodeId: string, stepId: string) => void;
   onUpdateSetXStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioSetXStep, "kind" | "id">>) => void;
   onUpdateGrantRoleStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>) => void;
@@ -567,6 +574,10 @@ function NodeConfigSection({
   deployTargets: CanvasDeployTarget[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  // Real, state-changing functions from the target contract's manifest entry
+  // (issue #85/#89): the picker lists these instead of synthetic setX/grantRole
+  // options. Empty when the contract isn't in the manifest (free-text fallback).
+  const addableFunctions = getStateChangingFunctions(contractName);
 
   return (
     <div style={configSectionStyle} data-testid={`node-config-section-${nodeId}`}>
@@ -606,21 +617,13 @@ function NodeConfigSection({
               />
             );
           })}
-          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-            <button
-              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
-              onClick={() => configCallbacks.onAddConfigStep(nodeId, "setX")}
-              data-testid={`node-add-setx-${nodeId}`}
-            >
-              + setX
-            </button>
-            <button
-              style={{ flex: 1, padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
-              onClick={() => configCallbacks.onAddConfigStep(nodeId, "grantRole")}
-              data-testid={`node-add-grantrole-${nodeId}`}
-            >
-              + grantRole
-            </button>
+          <div style={{ marginTop: 4 }}>
+            <AddConfigCallMenu
+              idPrefix={`node-add-config-call-${nodeId}`}
+              functions={addableFunctions}
+              onSelect={(fn) => configCallbacks.onAddConfigStep(nodeId, fn)}
+              buttonStyle={{ width: "100%", padding: "2px 4px", cursor: "pointer", fontSize: 10, borderRadius: 3, border: "1px solid #ccc" }}
+            />
           </div>
         </div>
       )}

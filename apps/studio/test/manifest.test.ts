@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import fixtureOutputs from "./fixtures/contracts-build-info.json";
-import { contractManifest, getContract } from "../src/manifest/index.js";
+import { contractManifest, getContract, getStateChangingFunctions } from "../src/manifest/index.js";
 import type { ContractManifest } from "../src/manifest/types.js";
 import { deriveManifests, derivePackageSegments } from "../src/manifest/derive.js";
 import type { FoundryContractOutput } from "../src/manifest/derive.js";
@@ -275,6 +275,62 @@ describe("getContract", () => {
     const entry = getContract("Token");
     expect(entry).toBeDefined();
     expect(entry!.name).toBe("Token");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getStateChangingFunctions — issue #85/#89: the "Add config call" picker
+// (AddConfigCallMenu) lists a contract's REAL state-changing functions
+// instead of a synthetic setX/grantRole pair.
+// ---------------------------------------------------------------------------
+
+describe("getStateChangingFunctions", () => {
+  it("returns an empty array for a contract not in the manifest (free-text fallback never crashes)", () => {
+    expect(getStateChangingFunctions("NonExistentContract123")).toEqual([]);
+  });
+
+  it("Token: includes real nonpayable functions (mint, grantRole, revokeRole, renounceRole, transfer, approve, transferFrom)", () => {
+    const names = getStateChangingFunctions("Token").map((f) => f.name);
+    for (const expected of ["mint", "grantRole", "revokeRole", "renounceRole", "transfer", "approve", "transferFrom"]) {
+      expect(names).toContain(expected);
+    }
+  });
+
+  it("Token: excludes view/pure functions (name, symbol, decimals, totalSupply, balanceOf, allowance, hasRole, getRoleAdmin, supportsInterface)", () => {
+    const names = getStateChangingFunctions("Token").map((f) => f.name);
+    for (const viewFn of ["name", "symbol", "decimals", "totalSupply", "balanceOf", "allowance", "hasRole", "getRoleAdmin", "supportsInterface"]) {
+      expect(names).not.toContain(viewFn);
+    }
+  });
+
+  it("grantRole is not special-cased — it is just one function among Token's real functions", () => {
+    const grantRole = getStateChangingFunctions("Token").find((f) => f.name === "grantRole");
+    expect(grantRole).toBeDefined();
+    expect(grantRole!.signature).toBe("grantRole(bytes32,address)");
+    expect(grantRole!.inputs).toEqual([
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ]);
+  });
+
+  it("Overloaded: keeps distinct overload signatures as separate entries (dedup is by signature, not name)", () => {
+    const fns = getStateChangingFunctions("Overloaded");
+    const setLimitSigs = fns.filter((f) => f.name === "setLimit").map((f) => f.signature);
+    expect(setLimitSigs.sort()).toEqual(["setLimit(uint256)", "setLimit(uint256,address)"]);
+  });
+
+  it("returned functions have no duplicate signatures", () => {
+    for (const name of ["Token", "Vault", "Registry", "Overloaded"]) {
+      const sigs = getStateChangingFunctions(name).map((f) => f.signature);
+      expect(sigs.length).toBe(new Set(sigs).size);
+    }
+  });
+
+  it("preserves the manifest's declared order", () => {
+    const manifestOrder = getContract("Token")!
+      .functions.filter((f) => f.stateMutability === "nonpayable" || f.stateMutability === "payable")
+      .map((f) => f.signature);
+    expect(getStateChangingFunctions("Token").map((f) => f.signature)).toEqual(manifestOrder);
   });
 });
 

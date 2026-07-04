@@ -58,7 +58,7 @@ import type {
   StudioGrantRoleStep,
   StudioOrderedConfigStep,
 } from "../spec/types.js";
-import type { ContractManifest } from "../manifest/index.js";
+import type { ContractManifest, ManifestFunction } from "../manifest/index.js";
 import type { Template } from "../templates/types.js";
 import {
   loadPersistedState,
@@ -239,7 +239,23 @@ interface UseGraphReturn {
     position?: { x: number; y: number },
   ) => void;
   setSelectedNodeId: (id: string | null) => void;
-  addConfigStep: (nodeId: string, kind: "setX" | "grantRole") => void;
+  /**
+   * Add a config-call step to a node.
+   *
+   * - Pass a `ManifestFunction` (the normal path, driven by AddConfigCallMenu
+   *   listing the target contract's REAL state-changing functions — issue
+   *   #85/#89) to add a setX step pre-populated with `functionName` /
+   *   `functionSignature` and one empty arg slot per real parameter
+   *   (`fn.inputs`).
+   * - Pass the literal `"grantRole"` to add a blank legacy grantRole-kind
+   *   step. The picker itself no longer offers this (grantRole now appears
+   *   as a normal setX-shaped function when a contract's ABI declares it),
+   *   but the capability is kept on the hook for back-compat: existing
+   *   grantRole steps (loaded from persisted graphs / templates) must
+   *   remain fully editable via updateGrantRoleStep, and this keeps that
+   *   step kind creatable at the hook level for tests / programmatic use.
+   */
+  addConfigStep: (nodeId: string, choice: ManifestFunction | "grantRole") => void;
   removeConfigStep: (nodeId: string, stepId: string) => void;
   updateSetXStep: (
     nodeId: string,
@@ -588,13 +604,11 @@ export function useGraph(): UseGraphReturn {
   // ---- Per-node config steps ------------------------------------------------
 
   const addConfigStep = useCallback(
-    (nodeId: string, kind: "setX" | "grantRole") => {
-      const stepId = makeStepId(kind);
-      updateNodeData(nodeId, (d) => {
-        if (kind === "setX") {
-          const step: StudioSetXStep = { kind: "setX", id: stepId, functionName: "", args: [] };
-          return { ...d, configSteps: [...d.configSteps, step] };
-        }
+    (nodeId: string, choice: ManifestFunction | "grantRole") => {
+      if (choice === "grantRole") {
+        // Legacy path (see UseGraphReturn.addConfigStep doc) — no longer
+        // reachable from AddConfigCallMenu, kept for back-compat / tests.
+        const stepId = makeStepId("grantRole");
         const step: StudioGrantRoleStep = {
           kind: "grantRole",
           id: stepId,
@@ -602,8 +616,23 @@ export function useGraph(): UseGraphReturn {
           accountKind: "literal",
           accountValue: "",
         };
-        return { ...d, configSteps: [...d.configSteps, step] };
-      });
+        updateNodeData(nodeId, (d) => ({ ...d, configSteps: [...d.configSteps, step] }));
+        return;
+      }
+      // Normal path (issue #85/#89): choice is a REAL manifest function
+      // (chosen from AddConfigCallMenu, which lists the target contract's
+      // actual state-changing functions). Pre-populate one empty arg slot
+      // per real parameter so the step card immediately shows a labeled
+      // input for each — see SetXCallCard/ConfigArgInput.
+      const stepId = makeStepId("setX");
+      const step: StudioSetXStep = {
+        kind: "setX",
+        id: stepId,
+        functionName: choice.name,
+        functionSignature: choice.signature,
+        args: choice.inputs.map(() => ""),
+      };
+      updateNodeData(nodeId, (d) => ({ ...d, configSteps: [...d.configSteps, step] }));
     },
     [updateNodeData],
   );

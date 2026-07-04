@@ -26,8 +26,22 @@ import { ReactFlow, ReactFlowProvider } from "@xyflow/react";
 import type { NodeTypes } from "@xyflow/react";
 import { useGraph } from "../src/hooks/useGraph.js";
 import { ContractNode } from "../src/components/ContractNode.js";
-import type { ContractManifest } from "../src/manifest/types.js";
+import type { ContractManifest, ManifestFunction } from "../src/manifest/types.js";
 import type { ContractNodeData } from "../src/spec/types.js";
+
+/**
+ * addConfigStep now takes a ManifestFunction (issue #85/#89: the picker
+ * lists the target contract's REAL state-changing functions instead of a
+ * synthetic "setX" kind). This fixture stands in for "some real function" —
+ * this harness only needs A setX step to exist so it can be re-targeted.
+ */
+const A_WRITE_FN: ManifestFunction = {
+  name: "setOwner",
+  signature: "setOwner(address)",
+  declaredIn: "Test",
+  inputs: [{ name: "owner", type: "address" }],
+  stateMutability: "nonpayable",
+};
 
 afterEach(() => {
   cleanup();
@@ -102,7 +116,7 @@ function Harness() {
       <button
         data-testid="add-setx-step-targeting-node0-on-node1"
         onClick={() => {
-          graph.addConfigStep(graph.nodes[1].id, "setX");
+          graph.addConfigStep(graph.nodes[1].id, A_WRITE_FN);
         }}
       >
         add setX step
