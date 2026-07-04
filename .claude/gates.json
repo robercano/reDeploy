@@ -86,5 +86,13 @@
     "policy": "pr-per-agent",
     "_policy_options": "pr-per-agent | orchestrated-sequential-merge",
     "baseBranch": "main"
+  },
+
+  "humanTest": {
+    "_note": "Consumed by .claude/scripts/prepare-pr.sh (the /test-pr command). 'prepare' runs INSIDE the PR worktree to make it runnable; 'launch' is printed for the user to run in their own terminal. The studio (apps/studio) is the human-test surface; its Vite dev server proxies /api to the deploy-server on :8787 (see apps/studio/vite.config.ts), so BOTH must run. prepare builds the libs the studio imports (core/config/reader) AND the deploy-server (its dev script runs a prebuilt dist/index.js). launch runs both in parallel; Ctrl-C stops both. prepare-pr.sh also symlinks the repo-root .env into the worktree for the server. launchPhone (opt-in, via `/test-pr <n> --phone`) additionally exposes the already-running studio to a phone through a cloudflared quick tunnel (--http-host-header localhost makes cloudflared send Host: localhost so Vite's allowedHosts guard accepts it — no app config change). It backgrounds the dev servers and runs cloudflared in the foreground so its printed https://<random>.trycloudflare.com URL is visible; Ctrl-C tears down both the tunnel and the dev servers. It is PUBLIC, ephemeral, and exposes /api (which can trigger real deploys) — attended use only.",
+    "prepare": "pnpm install --prefer-offline && pnpm -F @redeploy/core -F @redeploy/config -F @redeploy/reader -F @redeploy/deploy-server build",
+    "launch": "pnpm -r --parallel --filter @redeploy/deploy-server --filter @redeploy/studio dev",
+    "launchPhone": "sh -c 'pnpm -r --parallel --filter @redeploy/deploy-server --filter @redeploy/studio dev & devpid=$!; trap \"kill $devpid 2>/dev/null\" EXIT INT TERM; echo \"waiting for studio on :5173 …\"; cloudflared tunnel --url http://localhost:5173 --http-host-header localhost'",
+    "worktreeDir": ".worktrees"
   }
 }

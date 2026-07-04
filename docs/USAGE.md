@@ -127,6 +127,19 @@ the desired cadence, and if the current job's schedule doesn't match, it `CronDe
 when you add issues / a PR opens, and falls back to hourly once everything is merged. The cron prompt is
 identical at both cadences (it carries the STEP 0 logic), so it stays stable across self-recreation.
 
+## Testing on a phone (opt-in)
+`/test-pr <pr-number>` normally prepares a PR worktree and prints `humanTest.launch` (studio + deploy-server on
+`localhost`, browser-only). Add `--phone` (or set `PHONE=1`) to instead print `humanTest.launchPhone`, which
+starts the same dev servers and additionally opens a `cloudflared` quick tunnel to the studio so a phone can
+reach it over the internet — no app/source changes, same Vite dev server, just tunneled.
+
+This is opt-in, and *not* meant to be left unattended — before using it, know that:
+- The tunnel's `https://*.trycloudflare.com` URL is **public** for anyone who has it while it's up.
+- It exposes the studio's dev server **and its `/api` proxy** to the deploy-server, so a visitor can trigger
+  **real deploys** using the worktree's `.env` (RPC URL / private keys).
+- It's **ephemeral** — Ctrl-C tears down the tunnel and both dev servers together.
+- It must be **attended** — don't leave it running unsupervised.
+
 ## Merge discipline
 - **`pr-per-agent`** (default): each worker → branch → PR. You (or a merge step) integrate; conflicts surface
   at PR time. Cleanest/auditable.
