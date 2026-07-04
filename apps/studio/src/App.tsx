@@ -143,6 +143,12 @@ const activeBtnStyle: React.CSSProperties = {
 
 type AppMode = "authoring" | "inspector";
 
+// Tap-to-add (issue #90) cascade-offset tuning: each successive tap shifts
+// the placed node by TAP_CASCADE_STEP_PX (both x and y), wrapping back to 0
+// after TAP_CASCADE_MAX steps so the offset never drifts far from center.
+const TAP_CASCADE_STEP_PX = 24;
+const TAP_CASCADE_MAX = 6;
+
 // ---------------------------------------------------------------------------
 // Inner authoring canvas (must be inside ReactFlowProvider to use useReactFlow)
 // ---------------------------------------------------------------------------
@@ -214,6 +220,16 @@ function AuthoringCanvas({
   const { screenToFlowPosition } = useReactFlow();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
+  // Ref to the canvas drop-target wrapper, used by the tap-to-add fallback
+  // (issue #90) to compute the visible canvas center in screen coordinates.
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
+
+  // Counts successive taps so handleTapAddContract can cascade the placement
+  // offset — otherwise repeated taps would stack every node on the exact
+  // same canvas-center point. Wraps after TAP_CASCADE_MAX steps so the
+  // offset doesn't drift indefinitely off-screen.
+  const tapCascadeRef = useRef(0);
+
   // Build a stable lookup map from uniqueId (sourcePath::name) → ContractManifest
   const manifestById = useMemo(() => {
     const m = new Map<string, ContractManifest>();
@@ -222,6 +238,18 @@ function AuthoringCanvas({
     }
     return m;
   }, []);
+
+  // Materializes a contract node at a given flow-space position. Shared by
+  // the HTML5 drag/drop path (handleDrop) and the tap/click fallback add
+  // path (handleTapAddContract) so both go through the exact same
+  // node-creation logic (id-generation / uniqueId conventions live inside
+  // addContractFromManifest itself).
+  const materializeContractAt = useCallback(
+    (manifest: ContractManifest, position: { x: number; y: number }) => {
+      addContractFromManifest(manifest, position);
+    },
+    [addContractFromManifest],
+  );
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (e.dataTransfer.types.includes(DRAG_TRANSFER_KEY)) {
@@ -238,9 +266,32 @@ function AuthoringCanvas({
       const manifest = manifestById.get(uniqueId);
       if (!manifest) return;
       const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      addContractFromManifest(manifest, position);
+      materializeContractAt(manifest, position);
     },
-    [manifestById, screenToFlowPosition, addContractFromManifest],
+    [manifestById, screenToFlowPosition, materializeContractAt],
+  );
+
+  // Tap-to-add fallback (issue #90): native HTML5 drag-and-drop never fires
+  // from touch input, so ContractsBrowser rows also call this handler
+  // directly (via onAddContract) on tap/click. Places the new node at the
+  // visible canvas center — computed from the canvas wrapper's bounding
+  // rect, converted to flow space via screenToFlowPosition — with a small
+  // cascading offset per successive tap so repeated taps don't stack nodes
+  // exactly on top of one another.
+  const handleTapAddContract = useCallback(
+    (manifest: ContractManifest) => {
+      const rect = canvasWrapperRef.current?.getBoundingClientRect();
+      const centerX = rect ? rect.left + rect.width / 2 : 0;
+      const centerY = rect ? rect.top + rect.height / 2 : 0;
+
+      const step = tapCascadeRef.current % TAP_CASCADE_MAX;
+      tapCascadeRef.current += 1;
+      const offset = step * TAP_CASCADE_STEP_PX;
+
+      const position = screenToFlowPosition({ x: centerX + offset, y: centerY + offset });
+      materializeContractAt(manifest, position);
+    },
+    [screenToFlowPosition, materializeContractAt],
   );
 
   // Canvas left offset when browser is visible
@@ -322,14 +373,13 @@ function AuthoringCanvas({
           fixed toolbar rows (see BROWSER_PANEL_TOP) so opening/closing this
           panel never requires shifting either toolbar row (issue #80). */}
       {showBrowser && (
-        <ContractsBrowser
-          onAddContract={(c) => addContractFromManifest(c)}
-          top={BROWSER_PANEL_TOP}
-        />
+        <ContractsBrowser onAddContract={handleTapAddContract} top={BROWSER_PANEL_TOP} />
       )}
 
-      {/* React Flow canvas (drag-drop target) */}
+      {/* React Flow canvas (drag-drop target). canvasWrapperRef lets the
+          tap-to-add fallback (issue #90) compute the visible canvas center. */}
       <div
+        ref={canvasWrapperRef}
         style={canvasStyle}
         onDragOver={handleDragOver}
         onDrop={handleDrop}

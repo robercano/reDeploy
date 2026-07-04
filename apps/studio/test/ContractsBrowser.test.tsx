@@ -513,6 +513,111 @@ describe("ContractsBrowser — duplicate contract names", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tap-to-add fallback (issue #90) — touchstart/touchend on contract rows
+// ---------------------------------------------------------------------------
+
+function touchAt(x: number, y: number) {
+  return { touches: [{ clientX: x, clientY: y }] };
+}
+
+function touchEndAt(x: number, y: number) {
+  return { changedTouches: [{ clientX: x, clientY: y }] };
+}
+
+describe("ContractsBrowser — tap-to-add (touch fallback)", () => {
+  it("calls onAddContract on a tap (touchstart+touchend with no movement)", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    fireEvent.touchStart(row, touchAt(10, 10));
+    fireEvent.touchEnd(row, touchEndAt(10, 10));
+
+    expect(onAddContract).toHaveBeenCalledTimes(1);
+    expect(onAddContract).toHaveBeenCalledWith(TOKEN);
+  });
+
+  it("also selects the contract (shows signature panel) on tap", () => {
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    fireEvent.touchStart(row, touchAt(10, 10));
+    fireEvent.touchEnd(row, touchEndAt(10, 10));
+
+    expect(screen.getByTestId("constructor-signature-panel")).not.toBeNull();
+  });
+
+  it("tolerates small jitter (below the tap threshold) as a tap", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Vault");
+    fireEvent.touchStart(row, touchAt(10, 10));
+    fireEvent.touchEnd(row, touchEndAt(14, 12));
+
+    expect(onAddContract).toHaveBeenCalledWith(VAULT);
+  });
+
+  it("does NOT call onAddContract when touchend is far from touchstart (scroll gesture)", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Vault");
+    fireEvent.touchStart(row, touchAt(10, 10));
+    fireEvent.touchEnd(row, touchEndAt(60, 60));
+
+    expect(onAddContract).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call onAddContract on a pure-vertical scroll (dx=0, dy beyond threshold)", () => {
+    // A vertically-scrollable list's dominant gesture is a pure-vertical drag: dx≈0,
+    // dy large. Diagonal-gesture tests above short-circuit on the dx term, so this
+    // exercises the `dy > TAP_MOVE_THRESHOLD_PX` branch specifically.
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    fireEvent.touchStart(row, touchAt(100, 200));
+    fireEvent.touchEnd(row, touchEndAt(100, 80));
+
+    expect(onAddContract).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when onAddContract is not provided and the row is tapped", () => {
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    expect(() => {
+      fireEvent.touchStart(row, touchAt(10, 10));
+      fireEvent.touchEnd(row, touchEndAt(10, 10));
+    }).not.toThrow();
+  });
+
+  it("does not throw and adds nothing when touchend fires without a prior touchstart", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    expect(() => {
+      fireEvent.touchEnd(row, touchEndAt(10, 10));
+    }).not.toThrow();
+    expect(onAddContract).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when touchend fires with no changedTouches", () => {
+    const onAddContract = vi.fn();
+    render(<ContractsBrowser contracts={ALL_CONTRACTS} onAddContract={onAddContract} />);
+
+    const row = screen.getByTestId("contract-row-Token");
+    fireEvent.touchStart(row, touchAt(10, 10));
+    expect(() => {
+      fireEvent.touchEnd(row, { changedTouches: [] });
+    }).not.toThrow();
+    expect(onAddContract).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Drag SOURCE — handleDragStart on contract rows
 // ---------------------------------------------------------------------------
 

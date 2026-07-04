@@ -7,6 +7,15 @@
  * - Drag-to-canvas: each row is draggable; dragStart sets the dataTransfer key
  *   "application/redeploy-contract" to the contract's unique id
  *   (`sourcePath::name`). App.tsx reads this on drop and looks up the manifest.
+ * - Tap-to-add fallback (issue #90): HTML5 drag-and-drop (`draggable` +
+ *   dragstart/drop) never fires from touch input on mobile browsers, so each
+ *   row also tracks touchstart/touchend directly. A touchend that ends close
+ *   to where the touch started (i.e. not a scroll/drag gesture) is treated as
+ *   a tap and calls the SAME `onAddContract` callback used by click, via
+ *   `preventDefault()` on the touchend to suppress the browser's synthesized
+ *   click that would otherwise follow (avoiding a double-add). The caller
+ *   (App.tsx) positions the resulting node at the canvas center with a small
+ *   cascade offset — see AuthoringCanvas.handleTapAddContract.
  *
  * ## View modes
  * - Flat: all contracts sorted alphabetically by name, filtered by search.
@@ -22,7 +31,7 @@
  * e.g. `constructor(uint256 amount, address owner)` or `constructor()`.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { contractManifest } from "../manifest/index.js";
 import type { ContractManifest } from "../manifest/types.js";
 
@@ -81,6 +90,18 @@ interface FolderNode {
 function contractUniqueId(contract: ContractManifest): string {
   return `${contract.sourcePath}::${contract.name}`;
 }
+
+// ---------------------------------------------------------------------------
+// Tap-to-add (issue #90)
+// ---------------------------------------------------------------------------
+
+/**
+ * Max finger movement (px) between touchstart and touchend still considered a
+ * tap rather than a scroll/drag gesture. The contracts list is scrollable
+ * (see `listStyle.overflowY`), so a touchend that lands on a row after the
+ * user scrolled must NOT be treated as an add.
+ */
+const TAP_MOVE_THRESHOLD_PX = 10;
 
 function buildFolderTree(contracts: ContractManifest[]): Map<string, FolderNode> {
   const root = new Map<string, FolderNode>();
@@ -266,6 +287,10 @@ function ContractRow({ contract, selected, onSelect, onAddContract, indent = 0 }
     ? { ...contractRowSelectedStyle, paddingLeft: 13 + indent * 8 }
     : { ...contractRowStyle, paddingLeft: 16 + indent * 8 };
 
+  // Tracks the touch start point so touchend can tell a tap (small/no
+  // movement) apart from a scroll/drag gesture within the list.
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
   function handleClick() {
     onSelect(contractUniqueId(contract));
     onAddContract?.(contract);
@@ -276,6 +301,38 @@ function ContractRow({ contract, selected, onSelect, onAddContract, indent = 0 }
     e.dataTransfer.setData(DRAG_TRANSFER_KEY, contractUniqueId(contract));
   }
 
+  function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    const touch = e.touches[0];
+    touchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  }
+
+  // Tap-to-add fallback (issue #90) — HTML5 drag-and-drop never fires from
+  // touch input, so a genuine tap (touchend close to where the touch
+  // started) must add the contract directly, exactly like handleClick.
+  function handleTouchEnd(e: React.TouchEvent<HTMLDivElement>) {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+
+    const dx = Math.abs(touch.clientX - start.x);
+    const dy = Math.abs(touch.clientY - start.y);
+    if (dx > TAP_MOVE_THRESHOLD_PX || dy > TAP_MOVE_THRESHOLD_PX) {
+      // Scroll/drag gesture, not a tap — let the browser handle it natively
+      // (e.g. scrolling the contracts list) instead of adding a node.
+      return;
+    }
+
+    // preventDefault() suppresses the browser's synthesized mouse events
+    // (mousedown/mouseup/click) that would otherwise follow this touchend,
+    // so the add only fires once (not once here + once via handleClick).
+    e.preventDefault();
+    onSelect(contractUniqueId(contract));
+    onAddContract?.(contract);
+  }
+
   return (
     <div
       style={style}
@@ -283,6 +340,8 @@ function ContractRow({ contract, selected, onSelect, onAddContract, indent = 0 }
       draggable
       onClick={handleClick}
       onDragStart={handleDragStart}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
       <div style={contractNameStyle}>{contract.name}</div>
       <div style={contractHintStyle}>{buildPackageHint(contract)}</div>
