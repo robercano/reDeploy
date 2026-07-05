@@ -884,6 +884,67 @@ describe("POST /api/deploy — snapshot skipped on failure", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Snapshot persistence failure — success:true deploy but snapshot step throws
+// (issue #104: a snapshot RPC/build/write failure must degrade to a warning,
+// mirroring the "readDeployment failure after success" suite above, and must
+// NOT turn a successful deploy into a hard failure).
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — snapshot failure degrades to warning", () => {
+  const SENTINEL_KEY =
+    "0xcafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe";
+  const SENTINEL_RPC = "http://secret-rpc.snapshot-failure-test.example.com";
+
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-snapshot-failure-test-"));
+    process.env["DEPLOYMENT_DIR"] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("emits done{success:true, deployment, warning:'could not persist deployment snapshot'} when buildSnapshot throws, with HTTP 200 and no snapshot file written", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
+    process.env["RPC_URL"] = SENTINEL_RPC;
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+    // Force the snapshot step to throw — a failure here (whether from the
+    // eth_chainId RPC call, buildSnapshot itself, or the fs write) must
+    // degrade gracefully rather than fail the whole deploy.
+    readerMod.buildSnapshot.mockImplementationOnce(() => {
+      throw new Error(`buildSnapshot boom: ${SENTINEL_RPC}`);
+    });
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+
+    const done = doneEvent!.data as Record<string, unknown>;
+    // Successful deploy must not become a hard failure.
+    expect(done["success"]).toBe(true);
+    expect(done["warning"]).toBe("could not persist deployment snapshot");
+    // The deployment view (read before the snapshot step) must still be present.
+    expect(done["deployment"]).not.toBeNull();
+    expect(done["deployment"]).toEqual(FAKE_DEPLOYMENT_VIEW);
+
+    // No snapshot file was written since the snapshot step failed.
+    expect(fs.existsSync(path.join(tmpDir, "snapshots"))).toBe(false);
+
+    // SECURITY: the caught error (embedding the RPC sentinel) must never be
+    // forwarded to the client, and the private key must never leak either.
+    expect(res.body).not.toContain(SENTINEL_RPC);
+    expect(res.body).not.toContain(SENTINEL_KEY);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Regression tests — ensure existing routes are unaffected
 // ---------------------------------------------------------------------------
 
