@@ -62,7 +62,7 @@
     "test_affected": "pnpm -r build && pnpm -r test && (cd contracts && forge test)",
     "coverage": "pnpm -r build && pnpm -r coverage",
     "coverage_threshold": 80,
-    "e2e": "",
+    "e2e": "pnpm -F @redeploy/core build && (cd contracts && forge build) && pnpm -F @redeploy/core test:e2e",
     "security": ""
   },
 
