@@ -122,6 +122,9 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      viem:
+        specifier: ^2.54.1
+        version: 2.54.1(typescript@5.9.3)(zod@4.4.3)
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.7.5)(jsdom@26.1.0)
