@@ -7,7 +7,7 @@ import * as core from "@redeploy/core";
 import { simulate } from "@redeploy/core";
 import type { PlannedStep, SimulateError, DeploymentSpec } from "@redeploy/core";
 import { DeployError } from "@redeploy/core";
-import { readDeployment, ReadError } from "@redeploy/reader";
+import { readDeployment, ReadError, buildSnapshot, snapshotRelativePath } from "@redeploy/reader";
 import type { DeploymentView } from "@redeploy/reader";
 import { normalizePrivateKey } from "./env.js";
 
@@ -31,6 +31,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *   <repo-root>/contracts/out
  */
 const DEFAULT_FOUNDRY_OUT = path.resolve(__dirname, "../../../contracts/out");
+
+/**
+ * Path to this package's own `package.json`, resolved relative to the
+ * compiled dist/ dir: apps/deploy-server/dist/ -> ../package.json ->
+ * apps/deploy-server/package.json.
+ */
+const PACKAGE_JSON_PATH = path.resolve(__dirname, "../package.json");
+
+/** Fallback tool version used when package.json cannot be read/parsed. */
+const FALLBACK_TOOL_VERSION = "0.0.0";
+
+/**
+ * Read this package's `version` field, for stamping into deployment
+ * snapshots as `toolVersion`. Never throws — falls back to
+ * `FALLBACK_TOOL_VERSION` on any read/parse error.
+ */
+function readToolVersion(): string {
+  try {
+    const raw = fs.readFileSync(PACKAGE_JSON_PATH, "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : FALLBACK_TOOL_VERSION;
+  } catch {
+    return FALLBACK_TOOL_VERSION;
+  }
+}
 
 export type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -208,6 +233,17 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  * If it throws ReadError we still emit done{success:true, deployment:null,
  * warning:"could not read journal"} — a successful deploy must not become a 500.
  *
+ * Snapshot persistence: on a successful deploy where readDeployment() also
+ * succeeded, we build a DeploymentSnapshot via @redeploy/reader's
+ * buildSnapshot() (reusing the already-read DeploymentView) and persist it to
+ * `<deploymentDir>/snapshots/<takenAt>.json`. chainId is obtained via a
+ * `eth_chainId` RPC call on the already-built provider; toolVersion is this
+ * package's own `package.json` version; spec is the parsed request body. This
+ * step is best-effort: any failure (RPC error, fs error, etc.) is caught and
+ * surfaced as a `warning` on the success `done` payload — it never turns a
+ * successful deploy into a failure, and is skipped entirely when
+ * readDeployment() itself failed (no DeploymentView to snapshot).
+ *
  * Error responses (non-SSE):
  *   - 413  body exceeds MAX_BODY_BYTES
  *   - 400  malformed JSON
@@ -371,6 +407,41 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
 
   if (warning !== undefined) {
     writeSseEvent(res, "done", { success: true, deployment: null, warning });
+    res.end();
+    return;
+  }
+
+  // --- Persist deployment snapshot (best-effort, non-fatal) ---------------
+  // Only attempted when readDeployment() succeeded above (deployment is
+  // non-null here, since `warning` is undefined). A failure here must not
+  // turn a successful deploy into a failure — it degrades to a `warning` on
+  // the existing success `done` payload, mirroring the readDeployment
+  // failure pattern above.
+  // SECURITY: the caught error is never logged/forwarded verbatim — the
+  // eth_chainId RPC call may fail with an error embedding rpcUrl.
+  let snapshotWarning: string | undefined;
+  try {
+    const chainIdHex = (await provider.request({ method: "eth_chainId" })) as string;
+    const chainId = Number.parseInt(chainIdHex, 16);
+    const toolVersion = readToolVersion();
+
+    const snapshot = buildSnapshot({
+      deployment: deployment as DeploymentView,
+      chainId,
+      toolVersion,
+      spec: { spec: body },
+    });
+
+    const snapshotPath = path.join(deploymentDir, snapshotRelativePath(snapshot.takenAt));
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+  } catch {
+    snapshotWarning = "could not persist deployment snapshot";
+    process.stderr.write("[deploy-server] unexpected snapshot error\n");
+  }
+
+  if (snapshotWarning !== undefined) {
+    writeSseEvent(res, "done", { success: true, deployment, warning: snapshotWarning });
   } else {
     writeSseEvent(res, "done", { success: true, deployment });
   }
