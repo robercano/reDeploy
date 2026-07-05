@@ -22,3 +22,18 @@ export type {
   BigIntValue,
   ReadErrorCode,
 } from "./read/reader.js";
+
+// Public snapshot API
+export {
+  buildSnapshot,
+  hashSpec,
+  snapshotRelativePath,
+  SNAPSHOT_SCHEMA_VERSION,
+  SNAPSHOTS_DIR,
+} from "./snapshot/snapshot.js";
+
+export type {
+  DeploymentSnapshot,
+  BuildSnapshotOptions,
+  SnapshotVersion,
+} from "./snapshot/snapshot.js";
