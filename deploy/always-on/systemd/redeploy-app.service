@@ -27,5 +27,12 @@ ExecStart=/bin/bash -c 'pnpm -r --parallel --filter @redeploy/deploy-server --fi
 Restart=always
 RestartSec=5
 
+# The ExecStartPre install+build above can take well over systemd's 90s default
+# TimeoutStartSec on a cold checkout or crash recovery (empty pnpm store, no dist/
+# yet), which would otherwise get the unit SIGTERM'd mid-build and eventually
+# left failed (StartLimitBurst). Disable the start timeout so slow first-time /
+# cold-start builds always get to finish. See docs/ALWAYS-ON-TUNNEL.md section 10.
+TimeoutStartSec=0
+
 [Install]
 WantedBy=default.target

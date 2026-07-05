@@ -67,6 +67,14 @@ as its own file, e.g. `~/.cloudflared/redeploy-studio.yml`.
 
 Template: [`deploy/always-on/redeploy-studio.yml.example`](../deploy/always-on/redeploy-studio.yml.example)
 
+```
+cp deploy/always-on/redeploy-studio.yml.example ~/.cloudflared/redeploy-studio.yml
+# Edit the copy to substitute <TUNNEL_UUID> / $HOME / <STUDIO_HOSTNAME> placeholders.
+$EDITOR ~/.cloudflared/redeploy-studio.yml
+```
+
+Contents (for reference — this is what the template above contains):
+
 ```yaml
 tunnel: <TUNNEL_UUID>
 credentials-file: $HOME/.cloudflared/<TUNNEL_UUID>.json
@@ -106,6 +114,7 @@ outside the repo entirely:
 ```
 mkdir -p ~/.config/redeploy
 cat > ~/.config/redeploy/env.anvil <<'EOF'
+RPC_URL=http://127.0.0.1:8545
 RPC_URL_SEPOLIA=http://127.0.0.1:8545
 RPC_URL_MAINNET=http://127.0.0.1:8545
 DEPLOYER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
@@ -116,6 +125,12 @@ EOF
 `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` is Anvil's **well-known dev
 account #0** — public and test-only, funded only on ephemeral local Anvil chains. It is safe to write
 down; it controls no real funds anywhere.
+
+`RPC_URL` is the variable the deploy-server actually reads (default `http://127.0.0.1:8545` if unset);
+`RPC_URL_SEPOLIA`/`RPC_URL_MAINNET` are kept alongside it as belt-and-suspenders for any other tooling
+that reads the per-chain names. Setting `RPC_URL` explicitly here — rather than relying on the
+deploy-server's own default — keeps the "throwaway local Anvil chain" guarantee true even if the
+deploy-server's default ever changes.
 
 Rules:
 - `env.anvil` must point **only** at the local Anvil chain (`http://127.0.0.1:8545`) — never a real
@@ -147,6 +162,13 @@ cp deploy/always-on/systemd/cloudflared-redeploy.service ~/.config/systemd/user/
 # Edit the copies to substitute <STUDIO_HOSTNAME> / <NODE_BIN_DIR> placeholders.
 $EDITOR ~/.config/systemd/user/redeploy-app.service
 $EDITOR ~/.config/systemd/user/cloudflared-redeploy.service
+
+# redeploy-app.service's WorkingDirectory is %h/.local/share/redeploy/active — a
+# stable symlink, not a hardcoded repo path (see "The active symlink model" below).
+# It MUST exist before the app service is enabled/started, or the service will
+# fail to find its WorkingDirectory.
+mkdir -p ~/.local/share/redeploy
+ln -sfn <path-to-your-main-checkout> ~/.local/share/redeploy/active
 
 systemctl --user daemon-reload
 systemctl --user enable --now redeploy-anvil redeploy-app cloudflared-redeploy
@@ -182,11 +204,8 @@ moment your last login session ends).
 > the unit file. `env.anvil` (section 5) is a fixed, shared file outside any checkout, so it keeps
 > working no matter what `active` points at.
 >
-> Initial setup:
-> ```
-> mkdir -p ~/.local/share/redeploy
-> ln -sfn <path-to-your-main-checkout> ~/.local/share/redeploy/active
-> ```
+> The symlink must exist **before** `redeploy-app` is enabled/started — see the `ln -sfn` step in the
+> Install block above.
 
 ## 7. Cloudflare Access (the login page)
 
@@ -236,6 +255,14 @@ See also `.claude/commands/test-pr.md` for the `/test-pr` command reference.
 ## 10. Operations
 
 - **Pull + restart** (main checkout): `cd <checkout> && git pull && systemctl --user restart redeploy-app`
+- **Restarts are not instant.** Every `systemctl --user restart redeploy-app` — and therefore every
+  `/test-pr --serve`/`--reset` (section 9), which restarts the service after repointing `active` — re-runs
+  the full `ExecStartPre` (`pnpm install` + the core/config/reader/deploy-server build) before the app
+  comes back up. Expect tens of seconds to a couple of minutes, not an instant restart. This rebuild is
+  intentional, not a bug: it guarantees there's never a stale `dist/` when `active` switches checkouts —
+  whatever checkout `active` now points at is always compiled before it starts serving. `redeploy-app.service`
+  sets `TimeoutStartSec=0` (see `deploy/always-on/systemd/redeploy-app.service`) specifically so this slower
+  cold/PR-switch rebuild is never killed for taking "too long" to start.
 - **Stop everything**: `systemctl --user stop cloudflared-redeploy redeploy-app redeploy-anvil`
 - **Disable at boot**:
   ```
