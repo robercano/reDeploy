@@ -1,0 +1,25 @@
+# Dedicated cloudflared config for the reDeploy studio tunnel.
+# Install at: ~/.cloudflared/redeploy-studio.yml  (NOT ~/.cloudflared/config.yaml —
+# keeping it a separate, explicitly-named file is what avoids the "wrong tunnel"
+# gotcha described in docs/ALWAYS-ON-TUNNEL.md).
+#
+# Substitute before use:
+#   <TUNNEL_UUID>       -> the UUID printed by `cloudflared tunnel create redeploy-studio`
+#   <STUDIO_HOSTNAME>   -> the hostname you mapped, e.g. studio.example.com
+#   $HOME below         -> your actual home directory (cloudflared does not expand
+#                          the systemd "%h" token; this file is read by cloudflared
+#                          directly, so use a literal absolute path, e.g. /home/you)
+
+tunnel: <TUNNEL_UUID>
+credentials-file: $HOME/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: <STUDIO_HOSTNAME>
+    service: http://localhost:5173
+    originRequest:
+      # Makes cloudflared send "Host: localhost" to Vite so its allowedHosts
+      # guard accepts the tunneled request — same trick as the quick-tunnel's
+      # `--http-host-header localhost` flag (see humanTest.launchPhone in
+      # .claude/gates.json). No app-side change needed.
+      httpHostHeader: localhost
+  - service: http_status:404

@@ -1,0 +1,23 @@
+[Unit]
+Description=cloudflared named tunnel for reDeploy studio (<STUDIO_HOSTNAME>)
+After=network-online.target redeploy-app.service
+Wants=network-online.target redeploy-app.service
+
+[Service]
+# Dedicated config file (deploy/always-on/redeploy-studio.yml.example, installed at
+# ~/.cloudflared/redeploy-studio.yml) so this tunnel is independent of any other
+# cloudflared tunnel/config.yaml you may already run on this machine.
+#
+# Passing --config (and running the named tunnel by its explicit UUID/name here) is
+# what avoids the "wrong tunnel" gotcha: a bare `cloudflared tunnel run` reads
+# ~/.cloudflared/config.yaml by default, which may belong to a different tunnel.
+# See docs/ALWAYS-ON-TUNNEL.md for details.
+#
+# The cloudflared binary may live elsewhere depending on how it was installed —
+# find yours with `which cloudflared` and adjust ExecStart if needed.
+ExecStart=/usr/local/bin/cloudflared tunnel --config %h/.cloudflared/redeploy-studio.yml run redeploy-studio
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
