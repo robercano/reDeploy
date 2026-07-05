@@ -44,12 +44,13 @@ const panelStyle: React.CSSProperties = {
   top: 0,
   bottom: 0,
   width: 280,
-  background: "#f8f9fa",
-  borderLeft: "1px solid #dee2e6",
+  background: "var(--color-bg-panel)",
+  borderLeft: "1px solid var(--color-border)",
   padding: 16,
   overflowY: "auto",
   zIndex: 10,
   fontSize: 13,
+  color: "var(--color-text)",
 };
 
 const sectionTitleStyle: React.CSSProperties = {
@@ -61,22 +62,24 @@ const sectionTitleStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   fontSize: 12,
   padding: "3px 6px",
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   width: "100%",
   boxSizing: "border-box",
   marginBottom: 6,
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
 };
 
 const labelStyle: React.CSSProperties = {
   fontSize: 11,
-  color: "#555",
+  color: "var(--color-text-secondary)",
   marginBottom: 2,
 };
 
 const stepCardStyle: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #dee2e6",
+  background: "var(--color-bg-elevated)",
+  border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: 10,
   marginBottom: 10,
@@ -225,7 +228,7 @@ function SetXStepCard({
     <div style={stepCardStyle} data-testid={`step-${step.id}`}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
         <span style={{ fontWeight: 500, fontSize: 12 }}>setX ({step.id})</span>
-        <button onClick={onRemove} style={{ fontSize: 11, cursor: "pointer", color: "#dc3545", background: "none", border: "none" }} title="Remove step">✕</button>
+        <button onClick={onRemove} style={{ fontSize: 11, cursor: "pointer", color: "var(--color-danger-simple)", background: "none", border: "none" }} title="Remove step">✕</button>
       </div>
 
       {/* Target contract picker */}
@@ -352,7 +355,7 @@ function GrantRoleStepCard({
     <div style={stepCardStyle} data-testid={`step-${step.id}`}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
         <span style={{ fontWeight: 500, fontSize: 12 }}>grantRole ({step.id})</span>
-        <button onClick={onRemove} style={{ fontSize: 11, cursor: "pointer", color: "#dc3545", background: "none", border: "none" }} title="Remove step">✕</button>
+        <button onClick={onRemove} style={{ fontSize: 11, cursor: "pointer", color: "var(--color-danger-simple)", background: "none", border: "none" }} title="Remove step">✕</button>
       </div>
       <div style={labelStyle}>Role</div>
       <input

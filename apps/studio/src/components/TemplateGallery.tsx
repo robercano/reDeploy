@@ -32,7 +32,7 @@ import type { Template, TemplateParam } from "../templates/types.js";
 const overlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.5)",
+  background: "var(--color-overlay)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -40,25 +40,27 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "#fff",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
   borderRadius: 8,
   padding: 24,
   width: 560,
   maxHeight: "80vh",
   overflowY: "auto",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  boxShadow: "var(--shadow-xl)",
 };
 
 const buttonStyle: React.CSSProperties = {
   padding: "6px 14px",
   cursor: "pointer",
   borderRadius: 4,
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
+  color: "var(--color-text)",
   fontSize: 13,
 };
 
 const templateCardStyle: React.CSSProperties = {
-  border: "1px solid #e2e8f0",
+  border: "1px solid var(--color-border-subtle)",
   borderRadius: 6,
   padding: "12px 14px",
   marginBottom: 10,
@@ -68,13 +70,13 @@ const templateCardStyle: React.CSSProperties = {
 
 const templateCardHoverStyle: React.CSSProperties = {
   ...templateCardStyle,
-  borderColor: "#1a73e8",
-  background: "#f0f7ff",
+  borderColor: "var(--color-primary-border)",
+  background: "var(--color-bg-hover)",
 };
 
 const paramListStyle: React.CSSProperties = {
-  background: "#f7fafc",
-  border: "1px solid #e2e8f0",
+  background: "var(--color-bg-subtle)",
+  border: "1px solid var(--color-border-subtle)",
   borderRadius: 6,
   padding: "12px 14px",
   marginTop: 12,
@@ -96,16 +98,16 @@ function ParamChecklist({ params }: { params: TemplateParam[] }) {
   if (params.length === 0) return null;
   return (
     <div style={paramListStyle} data-testid="template-params-list">
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: "#2d3748" }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: "var(--color-text)" }}>
         Fill in these args after the template is added to the canvas:
       </div>
       {params.map((p, i) => (
         <div key={i} style={paramItemStyle}>
-          <span style={{ color: "#718096", marginTop: 1 }}>□</span>
+          <span style={{ color: "var(--color-text-muted)", marginTop: 1 }}>□</span>
           <span>
             <strong>{p.label}</strong>
             {p.hint && (
-              <span style={{ color: "#718096", marginLeft: 6 }}>— {p.hint}</span>
+              <span style={{ color: "var(--color-text-muted)", marginLeft: 6 }}>— {p.hint}</span>
             )}
           </span>
         </div>
@@ -143,8 +145,8 @@ function TemplateCard({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{template.name}</div>
-          <div style={{ fontSize: 12, color: "#718096" }}>{template.description}</div>
-          <div style={{ fontSize: 11, color: "#a0aec0", marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{template.description}</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 6 }}>
             {template.nodes.length} contract{template.nodes.length !== 1 ? "s" : ""},
             {" "}{template.edges.length} edge{template.edges.length !== 1 ? "s" : ""}
           </div>
@@ -156,9 +158,9 @@ function TemplateCard({
               padding: "2px 8px",
               cursor: "pointer",
               borderRadius: 4,
-              border: "1px solid #fed7d7",
-              background: "#fff5f5",
-              color: "#c53030",
+              border: "1px solid var(--color-danger-border-soft)",
+              background: "var(--color-danger-bg-soft)",
+              color: "var(--color-danger-text-soft)",
               fontSize: 11,
               flexShrink: 0,
             }}
@@ -200,7 +202,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
   if (!open) {
     return (
       <button
-        style={{ ...buttonStyle, background: "#6f42c1", color: "#fff", border: "none" }}
+        style={{ ...buttonStyle, background: "var(--color-purple)", color: "var(--color-text-on-accent)", border: "none" }}
         onClick={() => {
           setInstantiated(null);
           setOpen(true);
@@ -229,7 +231,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
       <div style={modalStyle}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, color: "var(--color-text)" }}>
             {instantiated ? "Template Added" : "Choose a Template"}
           </h3>
           <button
@@ -244,7 +246,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
         {!instantiated ? (
           /* Template list */
           <div>
-            <p style={{ fontSize: 12, color: "#718096", margin: "0 0 12px" }}>
+            <p style={{ fontSize: 12, color: "var(--color-text-muted)", margin: "0 0 12px" }}>
               Select a template to add a pre-arranged set of contracts to the canvas.
               Fill in the highlighted arg slots before exporting.
             </p>
@@ -252,7 +254,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
             {/* Built-in templates */}
             {BUILTIN_TEMPLATES.length > 0 && (
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#a0aec0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-faint)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
                   Built-in
                 </div>
                 {BUILTIN_TEMPLATES.map((t) => (
@@ -264,7 +266,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
             {/* User-saved templates */}
             {userTemplates.length > 0 && (
               <div style={{ marginTop: BUILTIN_TEMPLATES.length > 0 ? 12 : 0 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#a0aec0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-faint)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
                   My Templates
                 </div>
                 {userTemplates.map((t) => (
@@ -279,7 +281,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
             )}
 
             {allTemplatesEmpty && (
-              <p style={{ color: "#a0aec0", fontSize: 13 }}>No templates available.</p>
+              <p style={{ color: "var(--color-text-faint)", fontSize: 13 }}>No templates available.</p>
             )}
           </div>
         ) : (
@@ -287,13 +289,13 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
           <div>
             <div
               style={{
-                background: "#f0fff4",
-                border: "1px solid #c6f6d5",
+                background: "var(--color-success-bg-soft)",
+                border: "1px solid var(--color-success-border-soft)",
                 borderRadius: 4,
                 padding: 10,
                 marginBottom: 12,
                 fontSize: 13,
-                color: "#276749",
+                color: "var(--color-success-text-soft)",
               }}
               data-testid="template-instantiated-banner"
             >
@@ -302,7 +304,7 @@ export function TemplateGallery({ onInstantiate, userTemplates = [], onDelete }:
             <ParamChecklist params={instantiated.params} />
             <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
               <button
-                style={{ ...buttonStyle, background: "#6f42c1", color: "#fff", border: "none" }}
+                style={{ ...buttonStyle, background: "var(--color-purple)", color: "var(--color-text-on-accent)", border: "none" }}
                 onClick={() => setInstantiated(null)}
                 data-testid="template-gallery-add-another"
               >

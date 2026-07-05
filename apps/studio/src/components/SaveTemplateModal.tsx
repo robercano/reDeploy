@@ -13,8 +13,9 @@
  * can call graphToTemplate and persist the result via useUserTemplates.
  *
  * Styling mirrors SpecExporter.tsx / TemplateGallery.tsx:
- *   - fixed overlay, background rgba(0,0,0,0.5), zIndex 100
- *   - white modal, borderRadius 8, padding 24, width 560, maxHeight 80vh
+ *   - fixed overlay, background var(--color-overlay), zIndex 100
+ *   - elevated modal (var(--color-bg-elevated)), borderRadius 8, padding 24,
+ *     width 560, maxHeight 80vh
  */
 
 import { useState, useMemo } from "react";
@@ -29,7 +30,7 @@ import type { ParamSelection } from "../templates/serialize.js";
 const overlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.5)",
+  background: "var(--color-overlay)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -37,20 +38,22 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  background: "#fff",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
   borderRadius: 8,
   padding: 24,
   width: 560,
   maxHeight: "80vh",
   overflowY: "auto",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+  boxShadow: "var(--shadow-xl)",
 };
 
 const buttonStyle: React.CSSProperties = {
   padding: "6px 14px",
   cursor: "pointer",
   borderRadius: 4,
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
+  color: "var(--color-text)",
   fontSize: 13,
 };
 
@@ -58,16 +61,18 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "6px 8px",
   fontSize: 13,
-  border: "1px solid #ccc",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 4,
   boxSizing: "border-box",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
 };
 
 const labelStyle: React.CSSProperties = {
   display: "block",
   fontSize: 12,
   fontWeight: 600,
-  color: "#4a5568",
+  color: "var(--color-text-secondary)",
   marginBottom: 4,
 };
 
@@ -76,11 +81,11 @@ const sectionStyle: React.CSSProperties = {
 };
 
 const slotRowStyle: React.CSSProperties = {
-  border: "1px solid #e2e8f0",
+  border: "1px solid var(--color-border-subtle)",
   borderRadius: 6,
   padding: "10px 12px",
   marginBottom: 8,
-  background: "#fafafa",
+  background: "var(--color-bg-subtle)",
 };
 
 const slotHeaderStyle: React.CSSProperties = {
@@ -200,7 +205,7 @@ export function SaveTemplateModal({ nodes, onSave, onClose }: SaveTemplateModalP
       <div style={modalStyle}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Save as Template</h3>
+          <h3 style={{ margin: 0, fontSize: 16, color: "var(--color-text)" }}>Save as Template</h3>
           <button
             style={{ ...buttonStyle, background: "none" }}
             onClick={onClose}
@@ -213,7 +218,7 @@ export function SaveTemplateModal({ nodes, onSave, onClose }: SaveTemplateModalP
         {/* Name field */}
         <div style={sectionStyle}>
           <label style={labelStyle} htmlFor="save-template-name-input">
-            Template name <span style={{ color: "#e53e3e" }}>*</span>
+            Template name <span style={{ color: "var(--color-danger-strong)" }}>*</span>
           </label>
           <input
             id="save-template-name-input"
@@ -248,7 +253,7 @@ export function SaveTemplateModal({ nodes, onSave, onClose }: SaveTemplateModalP
             <label style={labelStyle}>
               Expose as params (optional)
             </label>
-            <p style={{ fontSize: 11, color: "#718096", margin: "0 0 8px" }}>
+            <p style={{ fontSize: 11, color: "var(--color-text-muted)", margin: "0 0 8px" }}>
               Check the arg slots users should fill before deploying. Each checked slot
               will appear as a reminder in the template gallery after instantiation.
             </p>
@@ -272,7 +277,7 @@ export function SaveTemplateModal({ nodes, onSave, onClose }: SaveTemplateModalP
                       <strong>{slot.deployId || slot.contractName}</strong>
                       {" — "}
                       {slot.argName
-                        ? <span>{slot.argName}{slot.argType ? <span style={{ color: "#a0aec0" }}> ({slot.argType})</span> : null}</span>
+                        ? <span>{slot.argName}{slot.argType ? <span style={{ color: "var(--color-text-faint)" }}> ({slot.argType})</span> : null}</span>
                         : <span>arg {slot.argIndex}</span>}
                     </label>
                   </div>
@@ -328,8 +333,8 @@ export function SaveTemplateModal({ nodes, onSave, onClose }: SaveTemplateModalP
           <button
             style={{
               ...buttonStyle,
-              background: name.trim() ? "#1a73e8" : "#a0aec0",
-              color: "#fff",
+              background: name.trim() ? "var(--color-primary)" : "var(--color-disabled-bg)",
+              color: "var(--color-text-on-accent)",
               border: "none",
               cursor: name.trim() ? "pointer" : "not-allowed",
             }}

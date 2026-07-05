@@ -451,7 +451,7 @@ describe("ContractNode — error highlighting (issue #83)", () => {
 
     const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
     expect(deployIdInput.getAttribute("aria-invalid")).toBe("true");
-    expect(deployIdInput.style.border).toContain("rgb(217, 48, 37)");
+    expect(deployIdInput.style.border).toContain("var(--color-danger)");
     expect(
       screen.getByTestId("node-field-error-deploy-id-test-node").textContent,
     ).toBe("contract entry id must be a non-empty string");
@@ -482,7 +482,7 @@ describe("ContractNode — error highlighting (issue #83)", () => {
 
     const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
     expect(arg1.getAttribute("aria-invalid")).toBe("true");
-    expect(arg1.style.border).toContain("rgb(217, 48, 37)");
+    expect(arg1.style.border).toContain("var(--color-danger)");
     expect(
       screen.getByTestId("node-field-error-arg-1-test-node").textContent,
     ).toBe("symbol_ must not be empty");
@@ -494,7 +494,7 @@ describe("ContractNode — error highlighting (issue #83)", () => {
 
     const nodeEl = screen.getByTestId("contract-node-test-node");
     expect(nodeEl.getAttribute("data-node-invalid")).toBe("true");
-    expect(nodeEl.style.border).toContain("rgb(217, 48, 37)");
+    expect(nodeEl.style.border).toContain("var(--color-danger)");
     expect(screen.getByTestId("node-error-test-node").textContent).toBe(
       "duplicate deploy id across contracts",
     );
@@ -510,7 +510,7 @@ describe("ContractNode — error highlighting (issue #83)", () => {
 
     const nodeEl = screen.getByTestId("contract-node-test-node");
     expect(nodeEl.getAttribute("data-node-invalid")).toBeNull();
-    expect(nodeEl.style.border).not.toContain("rgb(217, 48, 37)");
+    expect(nodeEl.style.border).not.toContain("var(--color-danger)");
     expect(screen.queryByTestId("node-error-test-node")).toBeNull();
   });
 
@@ -529,7 +529,7 @@ describe("ContractNode — error highlighting (issue #83)", () => {
     renderContractNode(data, /* selected */ true);
 
     const nodeEl = screen.getByTestId("contract-node-test-node");
-    // selected blue (#1a73e8 → rgb(26, 115, 232)) wins over the error red.
-    expect(nodeEl.style.border).toContain("rgb(26, 115, 232)");
+    // selected primary token wins over the error "danger" token.
+    expect(nodeEl.style.border).toContain("var(--color-primary)");
   });
 });

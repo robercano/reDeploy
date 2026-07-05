@@ -28,6 +28,7 @@ import "@xyflow/react/dist/style.css";
 import type { DeploymentView, ConfigStepStatus } from "@redeploy/reader";
 import { InspectorContractNode } from "./InspectorContractNode.js";
 import { deploymentViewToFlow } from "../inspector/view-to-flow.js";
+import type { ThemeMode } from "../theme/useTheme.js";
 
 // Register the custom node type once (stable reference required by React Flow).
 const INSPECTOR_NODE_TYPES: NodeTypes = {
@@ -44,12 +45,13 @@ const panelStyle: React.CSSProperties = {
   top: 0,
   bottom: 0,
   width: 280,
-  background: "#f8f9fa",
-  borderLeft: "1px solid #dee2e6",
+  background: "var(--color-bg-panel)",
+  borderLeft: "1px solid var(--color-border)",
   padding: 16,
   overflowY: "auto",
   zIndex: 10,
   fontSize: 13,
+  color: "var(--color-text)",
 };
 
 const contextBadgeStyle: React.CSSProperties = {
@@ -58,14 +60,14 @@ const contextBadgeStyle: React.CSSProperties = {
   left: "50%",
   transform: "translateX(-50%)",
   zIndex: 20,
-  background: "#fff8e1",
-  color: "#e65100",
-  border: "1px solid #ffcc02",
+  background: "var(--color-warning-bg-soft)",
+  color: "var(--color-warning-text-strong)",
+  border: "1px solid var(--color-warning-border)",
   borderRadius: 4,
   padding: "4px 16px",
   fontSize: 13,
   fontWeight: 600,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+  boxShadow: "var(--shadow-md)",
   whiteSpace: "nowrap",
 };
 
@@ -76,8 +78,8 @@ const sectionTitleStyle: React.CSSProperties = {
 };
 
 const stepCardStyle: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #dee2e6",
+  background: "var(--color-bg-elevated)",
+  border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: 10,
   marginBottom: 10,
@@ -93,14 +95,14 @@ const badgeBaseStyle: React.CSSProperties = {
 
 const completedBadgeStyle: React.CSSProperties = {
   ...badgeBaseStyle,
-  background: "#d4edda",
-  color: "#155724",
+  background: "var(--color-success-bg-strong)",
+  color: "var(--color-success-text-strong)",
 };
 
 const pendingBadgeStyle: React.CSSProperties = {
   ...badgeBaseStyle,
-  background: "#fff3cd",
-  color: "#856404",
+  background: "var(--color-warning-bg)",
+  color: "var(--color-warning-text)",
 };
 
 // ---------------------------------------------------------------------------
@@ -138,10 +140,10 @@ function ConfigStepCard({ step }: { step: ConfigStepStatus }) {
         {badge}
       </div>
       {step.kind !== "" && (
-        <div style={{ fontSize: 11, color: "#555" }}>kind: {step.kind}</div>
+        <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>kind: {step.kind}</div>
       )}
       {step.completedAt !== null && (
-        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
+        <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>
           {step.completedAt}
         </div>
       )}
@@ -163,9 +165,15 @@ export interface InspectorProps {
    * are visually unchanged.
    */
   contextLabel?: string;
+  /**
+   * Theme mode driving React Flow's built-in `colorMode` prop (issue #94).
+   * Defaults to "system" so standalone usage (e.g. tests/storybook) still
+   * renders a sensible canvas palette without a parent-supplied theme.
+   */
+  themeMode?: ThemeMode;
 }
 
-export function Inspector({ view, contextLabel }: InspectorProps) {
+export function Inspector({ view, contextLabel, themeMode = "system" }: InspectorProps) {
   const { nodes, edges } = useMemo(
     () => deploymentViewToFlow(view),
     [view],
@@ -188,6 +196,7 @@ export function Inspector({ view, contextLabel }: InspectorProps) {
           nodeTypes={INSPECTOR_NODE_TYPES}
           nodesDraggable={false}
           nodesConnectable={false}
+          colorMode={themeMode}
           fitView
         >
           <Background />
@@ -199,7 +208,7 @@ export function Inspector({ view, contextLabel }: InspectorProps) {
       <div style={panelStyle} data-testid="inspector-config-panel">
         <div style={sectionTitleStyle}>Config Steps</div>
         {view.configSteps.length === 0 ? (
-          <p style={{ fontSize: 11, color: "#888" }}>No config steps.</p>
+          <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No config steps.</p>
         ) : (
           view.configSteps.map((step) => (
             <ConfigStepCard key={step.id} step={step} />
@@ -207,7 +216,7 @@ export function Inspector({ view, contextLabel }: InspectorProps) {
         )}
         {view.warnings.length > 0 && (
           <div style={{ marginTop: 16 }}>
-            <div style={{ ...sectionTitleStyle, color: "#856404" }}>
+            <div style={{ ...sectionTitleStyle, color: "var(--color-warning-text)" }}>
               Warnings
             </div>
             {view.warnings.map((w, i) => (
@@ -215,9 +224,9 @@ export function Inspector({ view, contextLabel }: InspectorProps) {
                 key={i}
                 style={{
                   fontSize: 11,
-                  color: "#856404",
+                  color: "var(--color-warning-text)",
                   marginBottom: 4,
-                  background: "#fff3cd",
+                  background: "var(--color-warning-bg)",
                   padding: "3px 6px",
                   borderRadius: 3,
                 }}

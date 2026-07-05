@@ -404,8 +404,8 @@ describe("App — Deploy (real) error field/node highlighting (issue #83)", () =
     });
 
     const nodeEl = document.querySelector('[data-testid^="contract-node-"]') as HTMLElement;
-    // jsdom normalizes the inline hex color (#d93025) to rgb(217, 48, 37).
-    expect(nodeEl.style.border).toContain("rgb(217, 48, 37)");
+    // Error border is the shared "danger" design token (issue #94).
+    expect(nodeEl.style.border).toContain("var(--color-danger)");
 
     const deployIdInput = screen.getByLabelText("deploy-id") as HTMLInputElement;
     expect(deployIdInput.getAttribute("aria-invalid")).toBeNull();

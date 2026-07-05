@@ -57,12 +57,12 @@ export interface AddConfigCallMenuProps {
 const defaultMenuStyle: React.CSSProperties = {
   position: "absolute",
   zIndex: 20,
-  background: "#fff",
-  border: "1px solid #ccc",
+  background: "var(--color-bg-elevated)",
+  border: "1px solid var(--color-border-strong)",
   borderRadius: 3,
   marginTop: 2,
   minWidth: 110,
-  boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+  boxShadow: "var(--shadow-lg)",
 };
 
 const defaultItemStyle: React.CSSProperties = {
@@ -73,13 +73,14 @@ const defaultItemStyle: React.CSSProperties = {
   fontSize: 11,
   border: "none",
   background: "none",
+  color: "var(--color-text)",
   cursor: "pointer",
 };
 
 const emptyStateStyle: React.CSSProperties = {
   ...defaultItemStyle,
   cursor: "default",
-  color: "#999",
+  color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
 

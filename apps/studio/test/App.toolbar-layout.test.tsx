@@ -129,12 +129,14 @@ describe("App toolbar layout — containers are separate and non-overlapping", (
 // ---------------------------------------------------------------------------
 
 describe("App toolbar layout — deploy button style", () => {
-  it("deploy-simulate-button has green background in idle state", () => {
+  it("deploy-simulate-button has the success token background in idle state", () => {
     const { container } = render(<App />);
     const btn = within(container).getByTestId("deploy-simulate-button") as HTMLButtonElement;
 
-    // idle green background (#34a853)
-    expect(btn.style.background).toBe("rgb(52, 168, 83)");
+    // idle background is the shared "success" design token (issue #94 dark
+    // mode migration replaced the hard-coded #34a853 with var(--color-success)
+    // so the button also themes correctly in dark mode).
+    expect(btn.style.background).toBe("var(--color-success)");
     expect(btn.style.cursor).toBe("pointer");
   });
 });

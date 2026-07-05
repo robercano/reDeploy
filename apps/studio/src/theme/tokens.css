@@ -1,0 +1,191 @@
+/**
+ * tokens.css
+ *
+ * Design tokens (CSS custom properties) for the reDeploy studio's app chrome
+ * (toolbars, panels, modals, nodes, badges, buttons, inputs...). Two themes
+ * are defined here: light (default / `:root`) and dark (`[data-theme="dark"]`).
+ *
+ * The active theme is switched by writing `data-theme="light" | "dark"` onto
+ * `document.documentElement` — see `./useTheme.ts`. This file is imported
+ * exactly once, in `src/main.tsx`.
+ *
+ * React Flow's own canvas palette (background, minimap, controls, edges) is
+ * driven separately via its built-in `colorMode` prop (see App.tsx /
+ * Inspector.tsx) and is NOT covered by these tokens.
+ *
+ * Naming convention: `--color-<role>[-<variant>]`. Dark values are
+ * hand-picked for contrast/legibility, not a blanket inversion of light.
+ */
+
+:root,
+[data-theme="light"] {
+  /* Surfaces */
+  --color-bg: #ffffff;
+  --color-bg-panel: #f8f9fa;
+  --color-bg-elevated: #ffffff;
+  --color-bg-subtle: #f5f5f5;
+  --color-bg-hover: #f0f7ff;
+
+  /* Borders */
+  --color-border: #dee2e6;
+  --color-border-strong: #cccccc;
+  --color-border-subtle: #e2e8f0;
+  --color-border-faint: #e0e0e0;
+
+  /* Text */
+  --color-text: #1a1a1a;
+  --color-text-secondary: #555555;
+  --color-text-muted: #888888;
+  --color-text-faint: #a0aec0;
+  --color-text-on-accent: #ffffff;
+
+  /* Accent / primary (links, selection, primary buttons) */
+  --color-primary: #1a73e8;
+  --color-primary-border: #1a73e8;
+  --color-primary-bg-subtle: #e8f0fe;
+  --color-primary-text: #1a73e8;
+
+  /* Purple accent (Templates button) */
+  --color-purple: #6f42c1;
+
+  /* Success (green) */
+  --color-success: #34a853;
+  --color-success-border: #2d8f47;
+  --color-success-bg: #e6f4ea;
+  --color-success-bg-strong: #d4edda;
+  --color-success-bg-soft: #f0fff4;
+  --color-success-border-soft: #c6f6d5;
+  --color-success-text: #137333;
+  --color-success-text-strong: #155724;
+  --color-success-text-soft: #276749;
+
+  /* Danger (red) */
+  --color-danger: #d93025;
+  --color-danger-border: #a50e0e;
+  --color-danger-bg: #fce8e6;
+  --color-danger-bg-soft: #fff5f5;
+  --color-danger-border-soft: #fed7d7;
+  --color-danger-text: #c5221f;
+  --color-danger-text-soft: #c53030;
+  --color-danger-border-faint: #f28b82;
+  --color-danger-simple: #dc3545;
+  --color-danger-strong: #e53e3e;
+
+  /* Warning (amber) */
+  --color-warning-bg: #fff3cd;
+  --color-warning-text: #856404;
+  --color-warning-border: #ffcc02;
+  --color-warning-bg-soft: #fff8e1;
+  --color-warning-text-strong: #e65100;
+
+  /* Contract nodes / handles */
+  --color-node-bg: #ffffff;
+  --color-node-border: #999999;
+  --color-node-readonly-bg: #f5f5f5;
+  --color-node-readonly-text: #444444;
+  --color-handle: #555555;
+  --color-handle-output: #e8711a;
+  --color-inspector-node-bg: #f0f4ff;
+  --color-inspector-node-border: #5b8dee;
+
+  /* Overlay / elevation */
+  --color-overlay: rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.15);
+  --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.3);
+
+  /* Disabled */
+  --color-disabled-bg: #a0aec0;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  /* Surfaces */
+  --color-bg: #1a1b1e;
+  --color-bg-panel: #232427;
+  --color-bg-elevated: #2a2b2f;
+  --color-bg-subtle: #303136;
+  --color-bg-hover: #2d3b52;
+
+  /* Borders */
+  --color-border: #3a3b40;
+  --color-border-strong: #4a4b52;
+  --color-border-subtle: #3a3b40;
+  --color-border-faint: #35363b;
+
+  /* Text */
+  --color-text: #e8e8e8;
+  --color-text-secondary: #b8bac0;
+  --color-text-muted: #8b8d94;
+  --color-text-faint: #8b8d94;
+  --color-text-on-accent: #ffffff;
+
+  /* Accent / primary */
+  --color-primary: #8ab4f8;
+  --color-primary-border: #8ab4f8;
+  --color-primary-bg-subtle: #26344d;
+  --color-primary-text: #8ab4f8;
+
+  /* Purple accent (Templates button) */
+  --color-purple: #a78bda;
+
+  /* Success (green) */
+  --color-success: #4caf6d;
+  --color-success-border: #3d8f58;
+  --color-success-bg: #1c3326;
+  --color-success-bg-strong: #204d32;
+  --color-success-bg-soft: #16281d;
+  --color-success-border-soft: #2f5c3f;
+  --color-success-text: #7be8a8;
+  --color-success-text-strong: #7be8a8;
+  --color-success-text-soft: #7be8a8;
+
+  /* Danger (red) */
+  --color-danger: #f2685c;
+  --color-danger-border: #c94a3f;
+  --color-danger-bg: #3a2020;
+  --color-danger-bg-soft: #331b1b;
+  --color-danger-border-soft: #5c3232;
+  --color-danger-text: #ff8a80;
+  --color-danger-text-soft: #ff8a80;
+  --color-danger-border-faint: #6b3a37;
+  --color-danger-simple: #ff6b6b;
+  --color-danger-strong: #ff6b6b;
+
+  /* Warning (amber) */
+  --color-warning-bg: #3a341a;
+  --color-warning-text: #e0c25c;
+  --color-warning-border: #6b5d24;
+  --color-warning-bg-soft: #332d15;
+  --color-warning-text-strong: #f0a860;
+
+  /* Contract nodes / handles */
+  --color-node-bg: #232427;
+  --color-node-border: #55575e;
+  --color-node-readonly-bg: #303136;
+  --color-node-readonly-text: #b8bac0;
+  --color-handle: #9a9ca3;
+  --color-handle-output: #f0954a;
+  --color-inspector-node-bg: #1e2733;
+  --color-inspector-node-border: #6f9cf0;
+
+  /* Overlay / elevation */
+  --color-overlay: rgba(0, 0, 0, 0.65);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.6);
+
+  /* Disabled */
+  --color-disabled-bg: #4a4b52;
+
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
