@@ -54,6 +54,8 @@ import { SpecExporter } from "./components/SpecExporter.js";
 import { TemplateGallery } from "./components/TemplateGallery.js";
 import { SaveTemplateModal } from "./components/SaveTemplateModal.js";
 import { Inspector } from "./components/Inspector.js";
+import { SnapshotViewer } from "./components/SnapshotViewer.js";
+import { parseSnapshot } from "./inspector/snapshot-view.js";
 import { OrderedConfigPanelToggle } from "./components/OrderedConfigPanel.js";
 import type { OrderedPanelDeployTarget } from "./components/OrderedConfigPanel.js";
 import { useGraph } from "./hooks/useGraph.js";
@@ -71,7 +73,7 @@ import { runSimulate } from "./deploy/simulate-client.js";
 import { runDeploy } from "./deploy/deploy-client.js";
 import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
 import type { NodeFieldErrors } from "./deploy/field-errors.js";
-import type { DeploymentView } from "@redeploy/reader";
+import type { DeploymentView, DeploymentSnapshot } from "@redeploy/reader";
 import { contractManifest } from "./manifest/index.js";
 import type { ContractManifest } from "./manifest/types.js";
 import { ThemeToggle } from "./components/ThemeToggle.js";
@@ -447,6 +449,14 @@ export function App() {
   // discards the entire authoring graph (and its localStorage autosave).
   const [showNewCanvasModal, setShowNewCanvasModal] = useState(false);
 
+  // Deployment snapshot viewer (issue #105): a persisted DeploymentSnapshot
+  // (from @redeploy/reader's buildSnapshot()) loaded from a local file and
+  // rendered read-only in inspector mode, INSTEAD of the default Inspector,
+  // while a snapshot is loaded. Purely additive — does not touch the
+  // authoring/simulate/deploy flows above.
+  const [loadedSnapshot, setLoadedSnapshot] = useState<DeploymentSnapshot | null>(null);
+  const [snapshotLoadError, setSnapshotLoadError] = useState<string | null>(null);
+
   // Per-node field/node-level validation error highlighting (issue #83).
   // Shared by BOTH the simulate and the real-deploy flow: whichever run fails
   // last populates this map (keyed by canvas node id); a fresh run of either
@@ -571,6 +581,18 @@ export function App() {
   // Keep selectedNodeId in scope for any downstream usage (e.g. future panel targeting)
   void selectedNodeId;
 
+  // Mode toggle (issue #105 cleanup): switching mode also clears any loaded
+  // snapshot + its load error, so the error banner never lingers after
+  // leaving inspector mode and a stale snapshot never silently reappears on
+  // returning to it. handleSimulate/handleDeploy intentionally bypass this
+  // (they set mode via setMode directly) since they populate liveView, not
+  // loadedSnapshot.
+  const onSwitchMode = useCallback((next: AppMode) => {
+    setMode(next);
+    setLoadedSnapshot(null);
+    setSnapshotLoadError(null);
+  }, []);
+
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
   const onToggleViewMode = useCallback(
     () => setViewMode((v) => (v === "detailed" ? "overview" : "detailed")),
@@ -587,6 +609,45 @@ export function App() {
     setSelectedNodeId(null);
     setViewMode("detailed");
   }, [resetGraph, setSelectedNodeId]);
+
+  // Deployment snapshot viewer (issue #105): load a JSON file, validate it as
+  // a DeploymentSnapshot via parseSnapshot(), and render it read-only via
+  // <SnapshotViewer> instead of the default <Inspector>. Never mutates
+  // authoring/deploy state; only inspector-mode display state.
+  //
+  // Uses FileReader (not File.text()) — jsdom's File/Blob polyfill does not
+  // implement .text() in every version, so FileReader is the more portable
+  // choice for both real browsers and the test environment.
+  const onLoadSnapshotFile = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Reset the input value so re-selecting the same file re-triggers onChange.
+      event.target.value = "";
+      if (file === undefined) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const text = typeof reader.result === "string" ? reader.result : "";
+          const parsed: unknown = JSON.parse(text);
+          const snapshot = parseSnapshot(parsed);
+          setLoadedSnapshot(snapshot);
+          setSnapshotLoadError(null);
+        } catch (err) {
+          setLoadedSnapshot(null);
+          setSnapshotLoadError(
+            err instanceof Error ? err.message : "Failed to load snapshot file",
+          );
+        }
+      };
+      reader.onerror = () => {
+        setLoadedSnapshot(null);
+        setSnapshotLoadError("Failed to read snapshot file");
+      };
+      reader.readAsText(file);
+    },
+    [],
+  );
 
   const handleSaveTemplate = useCallback(
     (name: string, description: string, params: ParamSelection[]) => {
@@ -814,18 +875,30 @@ export function App() {
       <div style={toolbarStyle}>
         <button
           style={mode === "authoring" ? activeBtnStyle : btnStyle}
-          onClick={() => setMode("authoring")}
+          onClick={() => onSwitchMode("authoring")}
           data-testid="mode-authoring"
         >
           Authoring
         </button>
         <button
           style={mode === "inspector" ? activeBtnStyle : btnStyle}
-          onClick={() => setMode("inspector")}
+          onClick={() => onSwitchMode("inspector")}
           data-testid="mode-inspector"
         >
           Inspector
         </button>
+        {mode === "inspector" && (
+          <label style={{ ...btnStyle, display: "inline-flex", alignItems: "center" }}>
+            Load snapshot
+            <input
+              type="file"
+              accept="application/json,.json"
+              onChange={onLoadSnapshotFile}
+              data-testid="load-snapshot-input"
+              style={{ display: "none" }}
+            />
+          </label>
+        )}
         <button
           style={deployBtnStyle}
           onClick={() => { void handleSimulate(); }}
@@ -951,6 +1024,14 @@ export function App() {
         </div>
       )}
 
+      {/* Snapshot load error (issue #105) — non-blocking; the normal inspector
+          stays visible when a loaded file fails to parse as a DeploymentSnapshot. */}
+      {snapshotLoadError !== null && (
+        <div style={errorBannerStyle} data-testid="snapshot-load-error">
+          {snapshotLoadError}
+        </div>
+      )}
+
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
@@ -985,7 +1066,11 @@ export function App() {
         </ReactFlowProvider>
       )}
 
-      {mode === "inspector" && (
+      {mode === "inspector" && loadedSnapshot !== null && (
+        <SnapshotViewer snapshot={loadedSnapshot} themeMode={themeMode} />
+      )}
+
+      {mode === "inspector" && loadedSnapshot === null && (
         <Inspector
           view={liveView ?? SAMPLE_DEPLOYMENT_VIEW}
           contextLabel={
