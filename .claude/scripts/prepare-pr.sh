@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # prepare-pr.sh [--phone] <pr-number>
+# prepare-pr.sh --serve <pr-number>
+# prepare-pr.sh --reset | --serve-main
 # Prepare a ready-to-run local checkout of an OPEN pull request so a human can
 # manually test it, WITHOUT touching the main working tree. Idempotent.
 #
@@ -24,13 +26,25 @@
 # printed at the end (humanTest.launchPhone instead of humanTest.launch) and
 # prints a caveat block, because launchPhone exposes the dev studio (and its
 # /api proxy) publicly over a cloudflared quick tunnel.
+#
+# --serve <pr-number>: runs the full default flow above (prepare the PR
+# worktree), then repoints the always-on studio's ~/.local/share/redeploy/active
+# symlink at that worktree and restarts the redeploy-app systemd --user service,
+# so the always-on tunnel (docs/ALWAYS-ON-TUNNEL.md) starts serving the PR.
+# --reset / --serve-main: repoints `active` back at this repo's main checkout
+# and restarts redeploy-app. Does NOT require a PR number.
+# If both --serve and --phone are given, --serve wins (see below).
 set -uo pipefail
 
 phone=0
+serve=0
+reset=0
 rest=()
 for arg in "$@"; do
   case "$arg" in
     --phone) phone=1 ;;
+    --serve) serve=1 ;;
+    --reset|--serve-main) reset=1 ;;
     *) rest+=("$arg") ;;
   esac
 done
@@ -38,14 +52,56 @@ if [ -n "${PHONE:-}" ] && [ "$PHONE" != "0" ]; then
   phone=1
 fi
 
-pr="${rest[0]:?usage: prepare-pr.sh [--phone] <pr-number>}"
-case "$pr" in
-  ''|*[!0-9]*) echo "prepare-pr: PR number must be numeric (got '$pr')" >&2; exit 2 ;;
-esac
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$script_dir/../.." && pwd)"
 cd "$root"
+
+# Stable symlink the always-on redeploy-app systemd --user service points its
+# WorkingDirectory at (see docs/ALWAYS-ON-TUNNEL.md). --serve/--reset repoint it.
+ACTIVE_LINK="$HOME/.local/share/redeploy/active"
+
+# Restart the always-on app service, if one is configured on this machine.
+# Guards failures instead of hard-failing: this script also runs in
+# environments (CI, sandboxes) with no systemd user session at all.
+restart_app_service() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "⚠️  systemctl not found — restart redeploy-app manually: systemctl --user restart redeploy-app" >&2
+    return 0
+  fi
+  if ! systemctl --user restart redeploy-app 2>/dev/null; then
+    echo "⚠️  could not restart redeploy-app via 'systemctl --user restart redeploy-app' — restart it manually." >&2
+    return 0
+  fi
+  echo "▶ restarted redeploy-app"
+}
+
+# Print the hostname to open, if the operator has told us what it is.
+print_hostname() {
+  if [ -n "${REDEPLOY_STUDIO_HOSTNAME:-}" ]; then
+    echo "Open: https://$REDEPLOY_STUDIO_HOSTNAME"
+  else
+    echo "(serving at your configured <STUDIO_HOSTNAME> — set REDEPLOY_STUDIO_HOSTNAME to have the"
+    echo " full URL printed here. See docs/ALWAYS-ON-TUNNEL.md.)"
+  fi
+}
+
+# --reset / --serve-main: point the always-on studio back at the main checkout.
+# Short-circuits BEFORE the PR-number requirement below — no PR number needed.
+if [ "$reset" = "1" ]; then
+  mkdir -p "$(dirname "$ACTIVE_LINK")"
+  ln -sfn "$root" "$ACTIVE_LINK"
+  echo "▶ active -> $root (main checkout)"
+  restart_app_service
+  echo ""
+  echo "✅ Always-on studio now serving the main checkout."
+  print_hostname
+  exit 0
+fi
+
+pr="${rest[0]:?usage: prepare-pr.sh [--phone] <pr-number> | --serve <pr-number> | --reset}"
+case "$pr" in
+  ''|*[!0-9]*) echo "prepare-pr: PR number must be numeric (got '$pr')" >&2; exit 2 ;;
+esac
 
 gates="$root/.claude/gates.json"
 read_gate() {
@@ -88,6 +144,22 @@ if [ -n "$prepare_cmd" ]; then
   ( cd "$wt" && eval "$prepare_cmd" ) || { echo "prepare-pr: humanTest.prepare failed" >&2; exit 1; }
 else
   echo "▶ humanTest.prepare not configured in gates.json — skipping deps/build"
+fi
+
+# --serve wins over --phone: they are different modes, and serving through the
+# always-on tunnel supersedes printing a local/quick-tunnel launch command.
+if [ "$serve" = "1" ]; then
+  mkdir -p "$(dirname "$ACTIVE_LINK")"
+  ln -sfn "$wt" "$ACTIVE_LINK"
+  echo "▶ active -> $wt (PR #$pr)"
+  restart_app_service
+  echo ""
+  echo "✅ Always-on studio now serving PR #$pr ($sha)."
+  print_hostname
+  echo ""
+  echo "(The systemd redeploy-app service serves this now — no need to run humanTest.launch"
+  echo " yourself. To go back to the main checkout: bash $script_dir/prepare-pr.sh --reset)"
+  exit 0
 fi
 
 echo ""

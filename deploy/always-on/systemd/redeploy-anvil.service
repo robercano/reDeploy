@@ -1,0 +1,12 @@
+[Unit]
+Description=Anvil local chain for reDeploy always-on studio
+After=network.target
+
+[Service]
+# Local-only chain; NOT exposed through the tunnel (only :5173 is, via redeploy-app).
+ExecStart=%h/.foundry/bin/anvil --host 127.0.0.1 --port 8545
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

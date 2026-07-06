@@ -1,0 +1,38 @@
+[Unit]
+Description=reDeploy studio + deploy-server (always-on)
+After=network.target redeploy-anvil.service
+Wants=redeploy-anvil.service
+
+[Service]
+# Stable symlink, NOT a hardcoded repo path — this lets prepare-pr.sh --serve <n>
+# repoint the service at a PR worktree, and --reset point it back at the main
+# checkout, without editing this unit. See docs/ALWAYS-ON-TUNNEL.md.
+WorkingDirectory=%h/.local/share/redeploy/active
+
+# nvm-managed node/pnpm + foundry are NOT on the default systemd user-service PATH;
+# pin them explicitly. Replace <NODE_BIN_DIR> with the output of:
+#   dirname "$(which node)"
+# If you switch node versions via nvm later, update this path too.
+Environment=PATH=<NODE_BIN_DIR>:%h/.local/share/pnpm:%h/.foundry/bin:/usr/local/bin:/usr/bin:/bin
+
+# Fixed, shared, Anvil-only env — outside the repo checkout so it survives
+# `active` being repointed across PR worktrees. NEVER put real keys here.
+EnvironmentFile=%h/.config/redeploy/env.anvil
+
+# ExecStartPre/ExecStart MUST mirror .claude/gates.json → humanTest.prepare / humanTest.launch.
+# Build the libs + deploy-server dist before serving (deploy-server dev runs dist/index.js).
+ExecStartPre=/bin/bash -c 'pnpm install --prefer-offline && pnpm -F @redeploy/core -F @redeploy/config -F @redeploy/reader -F @redeploy/deploy-server build'
+# studio (:5173, proxies /api -> :8787) + deploy-server (:8787).
+ExecStart=/bin/bash -c 'pnpm -r --parallel --filter @redeploy/deploy-server --filter @redeploy/studio dev'
+Restart=always
+RestartSec=5
+
+# The ExecStartPre install+build above can take well over systemd's 90s default
+# TimeoutStartSec on a cold checkout or crash recovery (empty pnpm store, no dist/
+# yet), which would otherwise get the unit SIGTERM'd mid-build and eventually
+# left failed (StartLimitBurst). Disable the start timeout so slow first-time /
+# cold-start builds always get to finish. See docs/ALWAYS-ON-TUNNEL.md section 10.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,6 @@
 ---
 description: Prepare an open PR for local human testing — checks out its branch into an isolated, ready-to-run worktree (deps built) and hands you the launch command.
-argument-hint: <pr-number> [--phone]
+argument-hint: <pr-number> [--phone] | --serve <pr-number> | --reset
 ---
 
 You are preparing an OPEN pull request for the user to manually test locally, WITHOUT disturbing their main
@@ -58,3 +58,29 @@ Notes:
 - The prepare/launch/launchPhone/worktree-dir commands are read from `.claude/gates.json` → `humanTest`, so this
   command is project-agnostic. If `humanTest` is absent, the script still makes the worktree and tells the user
   to build/run manually.
+
+## Serving a PR through the always-on studio: `--serve` / `--reset`
+
+If you've set up the always-on, Cloudflare-tunneled studio described in `docs/ALWAYS-ON-TUNNEL.md` (a
+`systemd --user` service serving `https://<STUDIO_HOSTNAME>` continuously, reachable from a phone anywhere), two
+extra modes point that persistent service at a specific PR instead of a one-off local/quick-tunnel launch:
+
+- **`/test-pr --serve <pr-number>`** (equivalently `bash .claude/scripts/prepare-pr.sh --serve <pr-number>`): runs
+  the exact same prepare flow as `/test-pr <pr-number>` above (resolve branch, fetch, create/refresh the detached
+  worktree, run `humanTest.prepare`), then repoints the always-on studio's `active` symlink at that PR's worktree
+  and restarts the `redeploy-app` systemd user service. `https://<STUDIO_HOSTNAME>` then serves that PR — no
+  terminal needs to stay open, and it's immediately reachable from a phone.
+- **`/test-pr --reset`** (alias: `--serve-main`; equivalently `bash .claude/scripts/prepare-pr.sh --reset`): points
+  the always-on studio's `active` symlink back at the main checkout and restarts `redeploy-app`. Takes no PR
+  number.
+
+Both print `Open: https://$REDEPLOY_STUDIO_HOSTNAME` if that environment variable is set, otherwise a reminder to
+set it. If no systemd user session / `redeploy-app` service exists on this machine (e.g. this sandbox, or CI),
+both print a warning to restart it manually rather than failing.
+
+**Existing behavior is unchanged**: plain `/test-pr <pr-number>` and `/test-pr <pr-number> --phone` behave exactly
+as documented above — `--serve`/`--reset` are new, additive modes. If both `--serve` and `--phone` are passed,
+`--serve` wins (the always-on tunnel supersedes the ephemeral quick-tunnel launch command).
+
+See `docs/ALWAYS-ON-TUNNEL.md` for the full always-on setup (dedicated named tunnel, systemd units, Cloudflare
+Access, the `active` symlink model) — this command only documents the `prepare-pr.sh` integration point.
