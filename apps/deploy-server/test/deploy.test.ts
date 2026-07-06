@@ -18,6 +18,9 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi, beforeEach, afterEach } from "vitest";
 import { Server, request as httpRequest } from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createServer } from "../src/server.js";
 import type { DeploymentView } from "@redeploy/reader";
 
@@ -40,11 +43,15 @@ vi.mock("@redeploy/core", async (importActual) => {
 });
 
 // Mock @redeploy/reader
+// buildSnapshot is stubbed as a vi.fn() *wrapping* the real implementation
+// (call-through) so tests can assert on call args/count while still exercising
+// the real, pure snapshot-building logic (no filesystem access inside it).
 vi.mock("@redeploy/reader", async (importActual) => {
   const actual = await importActual<typeof import("@redeploy/reader")>();
   return {
     ...actual,
     readDeployment: vi.fn(),
+    buildSnapshot: vi.fn(actual.buildSnapshot),
   };
 });
 
@@ -185,10 +192,12 @@ afterAll(
 
 let savedPrivateKey: string | undefined;
 let savedRpcUrl: string | undefined;
+let savedDeploymentDir: string | undefined;
 
 beforeEach(async () => {
   savedPrivateKey = process.env["DEPLOYER_PRIVATE_KEY"];
   savedRpcUrl = process.env["RPC_URL"];
+  savedDeploymentDir = process.env["DEPLOYMENT_DIR"];
 
   // Set up default mock implementations
   const coreMod = vi.mocked(await import("@redeploy/core"));
@@ -202,13 +211,22 @@ beforeEach(async () => {
       if (args.method === "eth_accounts" || args.method === "eth_requestAccounts") {
         return Promise.resolve(["0xDeployer0000000000000000000000000000000001"]);
       }
+      if (args.method === "eth_chainId") {
+        return Promise.resolve("0x1");
+      }
       return Promise.resolve(null);
     }),
   });
   coreMod.foundryArtifactResolver.mockReturnValue({});
 
+  const readerActual = await vi.importActual<typeof import("@redeploy/reader")>(
+    "@redeploy/reader",
+  );
   const readerMod = vi.mocked(await import("@redeploy/reader"));
   readerMod.readDeployment.mockReturnValue(FAKE_DEPLOYMENT_VIEW);
+  // Re-wire the call-through implementation each test — vi.resetAllMocks()
+  // (afterEach) clears it after every test.
+  readerMod.buildSnapshot.mockImplementation(readerActual.buildSnapshot);
 });
 
 afterEach(() => {
@@ -222,6 +240,11 @@ afterEach(() => {
     delete process.env["RPC_URL"];
   } else {
     process.env["RPC_URL"] = savedRpcUrl;
+  }
+  if (savedDeploymentDir === undefined) {
+    delete process.env["DEPLOYMENT_DIR"];
+  } else {
+    process.env["DEPLOYMENT_DIR"] = savedDeploymentDir;
   }
   // Mock implementations are reset by beforeEach on the next test.
   vi.resetAllMocks();
@@ -691,6 +714,233 @@ describe("POST /api/deploy — readDeployment failure after success", () => {
     expect(done["success"]).toBe(true);
     expect(done["deployment"]).toBeNull();
     expect(typeof done["warning"]).toBe("string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deployment snapshot persistence (issue #104)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — snapshot persistence on success", () => {
+  const SENTINEL_KEY =
+    "0xcafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe";
+  const SENTINEL_RPC = "http://secret-rpc.snapshot-test.example.com";
+
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-snapshot-test-"));
+    process.env["DEPLOYMENT_DIR"] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes a snapshot file under <deploymentDir>/snapshots/*.json and calls buildSnapshot with the expected inputs", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(true);
+    // No snapshot warning expected on the happy path.
+    expect(done["warning"]).toBeUndefined();
+
+    // buildSnapshot must be called with the reused DeploymentView, chainId
+    // (derived from eth_chainId, mocked to "0x1" => 1), a toolVersion string,
+    // and the request body as the spec.
+    expect(readerMod.buildSnapshot).toHaveBeenCalledTimes(1);
+    expect(readerMod.buildSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deployment: FAKE_DEPLOYMENT_VIEW,
+        chainId: 1,
+        toolVersion: expect.any(String),
+        spec: { spec: VALID_SPEC },
+      }),
+    );
+
+    // A snapshot file must exist under <deploymentDir>/snapshots/*.json
+    const snapshotsDir = path.join(tmpDir, "snapshots");
+    expect(fs.existsSync(snapshotsDir)).toBe(true);
+    const files = fs.readdirSync(snapshotsDir);
+    expect(files.length).toBe(1);
+    expect(files[0]).toMatch(/\.json$/);
+
+    // Its parsed content must match what buildSnapshot actually returned.
+    const returnedSnapshot = readerMod.buildSnapshot.mock.results[0]!.value as unknown;
+    const fileContent = JSON.parse(
+      fs.readFileSync(path.join(snapshotsDir, files[0]!), "utf8"),
+    ) as unknown;
+    expect(fileContent).toEqual(returnedSnapshot);
+  });
+
+  it("SECURITY: persisted snapshot file and SSE output do not contain the private key or RPC URL", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
+    process.env["RPC_URL"] = SENTINEL_RPC;
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(SENTINEL_KEY);
+    expect(res.body).not.toContain(SENTINEL_RPC);
+
+    const snapshotsDir = path.join(tmpDir, "snapshots");
+    const files = fs.readdirSync(snapshotsDir);
+    expect(files.length).toBe(1);
+    const rawFileContent = fs.readFileSync(path.join(snapshotsDir, files[0]!), "utf8");
+    expect(rawFileContent).not.toContain(SENTINEL_KEY);
+    expect(rawFileContent).not.toContain(SENTINEL_RPC);
+  });
+});
+
+describe("POST /api/deploy — snapshot skipped on failure", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-snapshot-test-"));
+    process.env["DEPLOYMENT_DIR"] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not call buildSnapshot or write a snapshot file when deploy() resolves with success:false", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+    coreMod.deploy.mockResolvedValueOnce({
+      success: false,
+      deployedAddresses: {},
+      ignitionResult: { type: "FAILED_DEPLOYMENT", contracts: {} } as unknown as import("@nomicfoundation/ignition-core").DeploymentResult,
+    });
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+
+    expect(readerMod.buildSnapshot).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, "snapshots"))).toBe(false);
+  });
+
+  it("does not call buildSnapshot or write a snapshot file when deploy() throws DeployError", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const { DeployError } = await import("@redeploy/core");
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+    coreMod.deploy.mockRejectedValueOnce(new DeployError("COMPILE_ERROR", "Compilation failed"));
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+
+    expect(readerMod.buildSnapshot).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, "snapshots"))).toBe(false);
+  });
+
+  it("does not call buildSnapshot or write a snapshot file when readDeployment fails (no DeploymentView to snapshot)", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const { ReadError } = await import("@redeploy/reader");
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+    readerMod.readDeployment.mockImplementationOnce(() => {
+      throw new ReadError("DEPLOYMENT_DIR_NOT_FOUND", "dir not found");
+    });
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(true);
+    expect(done["deployment"]).toBeNull();
+
+    expect(readerMod.buildSnapshot).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, "snapshots"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Snapshot persistence failure — success:true deploy but snapshot step throws
+// (issue #104: a snapshot RPC/build/write failure must degrade to a warning,
+// mirroring the "readDeployment failure after success" suite above, and must
+// NOT turn a successful deploy into a hard failure).
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — snapshot failure degrades to warning", () => {
+  const SENTINEL_KEY =
+    "0xcafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe";
+  const SENTINEL_RPC = "http://secret-rpc.snapshot-failure-test.example.com";
+
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-snapshot-failure-test-"));
+    process.env["DEPLOYMENT_DIR"] = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("emits done{success:true, deployment, warning:'could not persist deployment snapshot'} when buildSnapshot throws, with HTTP 200 and no snapshot file written", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
+    process.env["RPC_URL"] = SENTINEL_RPC;
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+    // Force the snapshot step to throw — a failure here (whether from the
+    // eth_chainId RPC call, buildSnapshot itself, or the fs write) must
+    // degrade gracefully rather than fail the whole deploy.
+    readerMod.buildSnapshot.mockImplementationOnce(() => {
+      throw new Error(`buildSnapshot boom: ${SENTINEL_RPC}`);
+    });
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+
+    const done = doneEvent!.data as Record<string, unknown>;
+    // Successful deploy must not become a hard failure.
+    expect(done["success"]).toBe(true);
+    expect(done["warning"]).toBe("could not persist deployment snapshot");
+    // The deployment view (read before the snapshot step) must still be present.
+    expect(done["deployment"]).not.toBeNull();
+    expect(done["deployment"]).toEqual(FAKE_DEPLOYMENT_VIEW);
+
+    // No snapshot file was written since the snapshot step failed.
+    expect(fs.existsSync(path.join(tmpDir, "snapshots"))).toBe(false);
+
+    // SECURITY: the caught error (embedding the RPC sentinel) must never be
+    // forwarded to the client, and the private key must never leak either.
+    expect(res.body).not.toContain(SENTINEL_RPC);
+    expect(res.body).not.toContain(SENTINEL_KEY);
   });
 });
 
