@@ -581,6 +581,18 @@ export function App() {
   // Keep selectedNodeId in scope for any downstream usage (e.g. future panel targeting)
   void selectedNodeId;
 
+  // Mode toggle (issue #105 cleanup): switching mode also clears any loaded
+  // snapshot + its load error, so the error banner never lingers after
+  // leaving inspector mode and a stale snapshot never silently reappears on
+  // returning to it. handleSimulate/handleDeploy intentionally bypass this
+  // (they set mode via setMode directly) since they populate liveView, not
+  // loadedSnapshot.
+  const onSwitchMode = useCallback((next: AppMode) => {
+    setMode(next);
+    setLoadedSnapshot(null);
+    setSnapshotLoadError(null);
+  }, []);
+
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
   const onToggleViewMode = useCallback(
     () => setViewMode((v) => (v === "detailed" ? "overview" : "detailed")),
@@ -863,14 +875,14 @@ export function App() {
       <div style={toolbarStyle}>
         <button
           style={mode === "authoring" ? activeBtnStyle : btnStyle}
-          onClick={() => setMode("authoring")}
+          onClick={() => onSwitchMode("authoring")}
           data-testid="mode-authoring"
         >
           Authoring
         </button>
         <button
           style={mode === "inspector" ? activeBtnStyle : btnStyle}
-          onClick={() => setMode("inspector")}
+          onClick={() => onSwitchMode("inspector")}
           data-testid="mode-inspector"
         >
           Inspector

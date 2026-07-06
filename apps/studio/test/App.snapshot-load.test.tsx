@@ -95,4 +95,49 @@ describe("App — Load snapshot (issue #105)", () => {
     });
     expect(screen.getByTestId("inspector-config-panel")).not.toBeNull();
   });
+
+  it("clears a stale load error and loaded snapshot when switching mode away and back", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("mode-inspector"));
+
+    // Trigger a load error in inspector mode.
+    const input = screen.getByTestId("load-snapshot-input") as HTMLInputElement;
+    const badFile = new File(["not valid json{{"], "bad.json", { type: "application/json" });
+    fireEvent.change(input, { target: { files: [badFile] } });
+    await waitFor(() => {
+      expect(screen.getByTestId("snapshot-load-error")).not.toBeNull();
+    });
+
+    // Switching to authoring mode must clear the error banner immediately —
+    // it must not linger outside inspector mode.
+    fireEvent.click(screen.getByTestId("mode-authoring"));
+    expect(screen.queryByTestId("snapshot-load-error")).toBeNull();
+
+    // Switching back to inspector mode must not resurrect the stale error or
+    // any previously loaded snapshot — it should show the normal inspector.
+    fireEvent.click(screen.getByTestId("mode-inspector"));
+    expect(screen.queryByTestId("snapshot-load-error")).toBeNull();
+    expect(screen.queryByTestId("snapshot-meta-panel")).toBeNull();
+    expect(screen.getByTestId("inspector-config-panel")).not.toBeNull();
+  });
+
+  it("clears a loaded snapshot when leaving and returning to inspector mode", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId("mode-inspector"));
+
+    const input = screen.getByTestId("load-snapshot-input") as HTMLInputElement;
+    const file = jsonFile(SAMPLE_SNAPSHOT);
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => {
+      expect(screen.getByTestId("snapshot-meta-panel")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByTestId("mode-authoring"));
+    fireEvent.click(screen.getByTestId("mode-inspector"));
+
+    // The previously loaded snapshot must not reappear; the default inspector
+    // (sample deployment view) should render instead.
+    expect(screen.queryByTestId("snapshot-meta-panel")).toBeNull();
+    expect(screen.getByTestId("inspector-config-panel")).not.toBeNull();
+  });
 });

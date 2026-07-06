@@ -23,6 +23,7 @@
  * `buildSnapshot` value imports — so this stays safe to bundle in the browser.
  */
 
+import { memo, useMemo } from "react";
 import type { ArgValue, BigIntValue, DeploymentSnapshot } from "@redeploy/reader";
 import { Inspector } from "./Inspector.js";
 import { snapshotToDeploymentView } from "../inspector/snapshot-view.js";
@@ -148,8 +149,13 @@ export interface SnapshotViewerProps {
   themeMode?: ThemeMode;
 }
 
-export function SnapshotViewer({ snapshot, themeMode = "system" }: SnapshotViewerProps) {
-  const view = snapshotToDeploymentView(snapshot);
+function SnapshotViewerImpl({ snapshot, themeMode = "system" }: SnapshotViewerProps) {
+  // Memoize on `snapshot` identity so `view` is stable across unrelated parent
+  // re-renders — Inspector's own useMemo(() => deploymentViewToFlow(view), [view])
+  // (Inspector.tsx) otherwise sees a new object every render and re-runs the
+  // full React Flow layout for no reason. Mirrors the stable-identity view
+  // passed at the App.tsx call site.
+  const view = useMemo(() => snapshotToDeploymentView(snapshot), [snapshot]);
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
@@ -253,5 +259,10 @@ export function SnapshotViewer({ snapshot, themeMode = "system" }: SnapshotViewe
     </div>
   );
 }
+
+// Wrapped in React.memo: this renders static snapshot data inside the large
+// <App> component, so it has no reason to re-render on unrelated App state
+// changes as long as its own props (snapshot, themeMode) are unchanged.
+export const SnapshotViewer = memo(SnapshotViewerImpl);
 
 export default SnapshotViewer;
