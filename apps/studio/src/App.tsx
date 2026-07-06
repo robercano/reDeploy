@@ -84,6 +84,39 @@ import type { ThemeMode } from "./theme/useTheme.js";
 // Cast to NodeTypes to satisfy the `Record<string, unknown>` data constraint.
 const NODE_TYPES: NodeTypes = { contractNode: ContractNode } as unknown as NodeTypes;
 
+// Issue #110 — narrow/portrait viewport overflow.
+//
+// Both fixed toolbar rows below are `position: fixed` with a fixed `left`
+// offset. On narrow viewports (~375–414px, e.g. a phone in portrait) the
+// combined width of all the buttons in a row can exceed the remaining
+// viewport width to the right of `left`, pushing later buttons off-screen
+// with no way to reach or tap them (fixed elements are not part of page
+// scroll, and there was no overflow/wrap handling at all).
+//
+// ## Approach: bounded width + horizontal scroll (not wrap)
+// We bound each row's width to the viewport (`maxWidth: calc(100vw - left -
+// rightMargin)`) and make it horizontally scrollable (`overflowX: "auto"`,
+// `flexWrap: "nowrap"`) rather than letting it wrap to multiple lines.
+//
+// Wrapping was considered and rejected: these rows are `position: fixed`, so
+// a wrapped row grows *downward* by an amount that depends on the current
+// viewport width (how many buttons fit per line) and even on browser locale
+// / font metrics (button label widths). The banners (ERROR_BANNER_TOP /
+// SUCCESS_BANNER_TOP) and the Contracts Browser panel (BROWSER_PANEL_TOP)
+// below are positioned using a handful of *fixed* pixel offsets derived from
+// each row's height — those constants would need to become dynamic (e.g.
+// measured via ResizeObserver) to avoid the two rows, banners, and the
+// browser panel colliding whenever a row wraps to 2+ lines. That is a much
+// larger change for no material benefit here: a horizontally-scrollable row
+// keeps every row's height constant (so all of the existing fixed offsets
+// above remain valid, unchanged, on every viewport width) while still making
+// every control reachable — the user just swipes/scrolls the row sideways.
+//
+// `TOOLBAR_ROW_RIGHT_MARGIN` is the breathing room kept between the row and
+// the right edge of the viewport so the row's own edge/scrollbar never
+// touches the viewport border.
+const TOOLBAR_ROW_RIGHT_MARGIN = 12;
+
 const toolbarStyle: React.CSSProperties = {
   position: "fixed",
   top: 12,
@@ -91,6 +124,9 @@ const toolbarStyle: React.CSSProperties = {
   zIndex: 10,
   display: "flex",
   gap: 8,
+  maxWidth: `calc(100vw - 12px - ${TOOLBAR_ROW_RIGHT_MARGIN}px)`,
+  overflowX: "auto",
+  flexWrap: "nowrap",
 };
 
 // The authoring toolbar sits on a second row (top: 52) so it never overlaps the
@@ -116,6 +152,13 @@ const authoringToolbarBaseStyle: React.CSSProperties = {
   zIndex: 10,
   display: "flex",
   gap: 8,
+  // See the "Issue #110" comment above toolbarStyle: bounded width +
+  // horizontal scroll (not wrap) keeps this row's height constant so
+  // ERROR_BANNER_TOP / SUCCESS_BANNER_TOP / BROWSER_PANEL_TOP below (all
+  // derived from a fixed row height) stay correct on every viewport width.
+  maxWidth: `calc(100vw - ${AUTHORING_TOOLBAR_LEFT}px - ${TOOLBAR_ROW_RIGHT_MARGIN}px)`,
+  overflowX: "auto",
+  flexWrap: "nowrap",
 };
 
 // Banners stack below the authoring toolbar row. Each banner is ~36px tall with

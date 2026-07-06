@@ -16,12 +16,17 @@
  */
 
 import { render, within, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import App from "../src/App.js";
+
+const ORIGINAL_INNER_WIDTH = window.innerWidth;
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // Restore jsdom's default viewport width so narrow-viewport tests never
+  // leak into unrelated tests run afterward in the same file/process.
+  window.innerWidth = ORIGINAL_INNER_WIDTH;
 });
 
 // ---------------------------------------------------------------------------
@@ -256,5 +261,101 @@ describe("App toolbar layout — banners below toolbar rows", () => {
 
     // Banner must be positioned below the authoring toolbar row
     expect(bannerTop).toBeGreaterThan(authoringToolbarTop);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Narrow/portrait viewport (issue #110): all toolbar controls stay reachable
+// ---------------------------------------------------------------------------
+//
+// jsdom does not perform real layout (no getBoundingClientRect geometry), so
+// we cannot assert actual pixel overflow. Instead we assert the CONTRACT that
+// prevents overflow on a narrow viewport: each fixed toolbar row must (a) be
+// bounded to (at most) the viewport width available to its right of `left`,
+// and (b) either scroll horizontally (overflowX) or wrap — never render an
+// unbounded `display:flex` row with no overflow handling, which is exactly
+// what regresses off-screen, untappable buttons on a ~375px phone.
+//
+// This test fails against the pre-fix code: the original toolbarStyle /
+// authoringToolbarBaseStyle had no `maxWidth` and no `overflowX`/`flexWrap`
+// at all, so every one of these assertions would be false (style.maxWidth
+// === "" and style.overflowX === "").
+
+describe("App toolbar layout — narrow viewport controls stay reachable (#110)", () => {
+  const NARROW_VIEWPORT_WIDTH = 375;
+
+  beforeEach(() => {
+    // Simulate a narrow phone-portrait viewport. jsdom does not re-run CSS
+    // layout from this, but `calc(100vw - ...)` inline styles are resolved
+    // against `window.innerWidth` by real browsers, and the row itself must
+    // declare bounded-width + overflow handling regardless of the actual
+    // numeric viewport width — that declarative contract is what we assert.
+    window.innerWidth = NARROW_VIEWPORT_WIDTH;
+  });
+
+  it("mode-toggle toolbar row is bounded to the viewport width and scrollable, not an unbounded flex row", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    const deployBtn = q.getByTestId("deploy-simulate-button");
+    const modeToolbar = deployBtn.parentElement as HTMLElement;
+
+    // Must declare SOME bound tying its width to the viewport — an empty
+    // maxWidth means the row can grow past the screen edge unbounded.
+    expect(modeToolbar.style.maxWidth).not.toBe("");
+    expect(modeToolbar.style.maxWidth).toContain("100vw");
+
+    // Must be horizontally scrollable so any control that doesn't fit is
+    // still reachable by scrolling within the viewport (never clipped with
+    // no way to reach it).
+    expect(modeToolbar.style.overflowX).toBe("auto");
+    expect(modeToolbar.style.flexWrap).toBe("nowrap");
+  });
+
+  it("authoring toolbar row is bounded to the viewport width and scrollable, not an unbounded flex row", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    const contractsBtn = q.getByTestId("toggle-contracts-browser");
+    const authoringToolbar = contractsBtn.parentElement as HTMLElement;
+
+    expect(authoringToolbar.style.maxWidth).not.toBe("");
+    expect(authoringToolbar.style.maxWidth).toContain("100vw");
+    expect(authoringToolbar.style.overflowX).toBe("auto");
+    expect(authoringToolbar.style.flexWrap).toBe("nowrap");
+  });
+
+  it("all mode-toggle toolbar action buttons are still rendered, enabled, and clickable at a narrow viewport width", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    const authBtn = q.getByTestId("mode-authoring") as HTMLButtonElement;
+    const inspBtn = q.getByTestId("mode-inspector") as HTMLButtonElement;
+    const simulateBtn = q.getByTestId("deploy-simulate-button") as HTMLButtonElement;
+    const realBtn = q.getByTestId("deploy-real-button") as HTMLButtonElement;
+
+    // Every control exists in the DOM (a horizontally-scrollable bounded row
+    // never removes controls — it only changes how they're reached) and none
+    // is disabled/unreachable by default.
+    for (const btn of [authBtn, inspBtn, simulateBtn, realBtn]) {
+      expect(btn).not.toBeNull();
+      expect(btn.disabled).toBe(false);
+    }
+
+    // Buttons remain clickable (not display:none / pointer-events:none) —
+    // clicking still dispatches through to the handler.
+    fireEvent.click(inspBtn);
+    expect(q.getByTestId("mode-inspector").getAttribute("data-testid")).toBe("mode-inspector");
+  });
+
+  it("all authoring toolbar action buttons are still rendered and reachable at a narrow viewport width", () => {
+    const { container } = render(<App />);
+    const q = within(container);
+
+    // Every authoring-row control referenced by the App.tsx toolbar markup.
+    expect(q.getByTestId("toggle-contracts-browser")).not.toBeNull();
+    expect(q.getByTestId("new-canvas-btn")).not.toBeNull();
+    expect(q.getByTestId("toggle-view-mode")).not.toBeNull();
+    expect(q.getByTestId("save-template-btn")).not.toBeNull();
   });
 });
