@@ -190,6 +190,38 @@ const activeBtnStyle: React.CSSProperties = {
   border: "1px solid var(--color-primary-border)",
 };
 
+// Result-view dismiss control (issue #111). The Simulate/Deploy result
+// (read-only Inspector, populated from liveView) fills the entire viewport
+// and previously had no reachable way back to the authoring canvas on
+// mobile portrait — the mode-toggle row lives at top-left and can scroll
+// out of reach on narrow viewports (see the horizontal-scroll note above
+// `toolbarStyle`). This button is deliberately independent of that row:
+// fixed at the top-right corner (opposite corner from the toolbar, so it
+// never competes for the same scroll region), with a z-index above every
+// other fixed element in this file (toolbar/banners/panels all use 10-20;
+// the deploy-confirm modal overlay — the only thing that should ever sit
+// above it — uses 100) so it is never clipped or hidden behind other
+// content, including on small screens.
+const resultDismissStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 12,
+  right: 12,
+  zIndex: 50,
+  width: 40,
+  height: 40,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: "50%",
+  border: "1px solid var(--color-border-strong)",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
+  boxShadow: "var(--shadow-md)",
+  fontSize: 18,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+
 type AppMode = "authoring" | "inspector";
 
 // Tap-to-add (issue #90) cascade-offset tuning: each successive tap shifts
@@ -635,6 +667,29 @@ export function App() {
     setLoadedSnapshot(null);
     setSnapshotLoadError(null);
   }, []);
+
+  // Is the live Simulate/Deploy result view (NOT the sample/loaded-snapshot
+  // inspector) currently shown? Drives both the dismiss button below and the
+  // Esc-to-dismiss handler right after it (issue #111). Deliberately does NOT
+  // clear liveView/viewKind on dismiss — dismissing just routes back through
+  // onSwitchMode("authoring"), the exact same call the "Authoring" toolbar
+  // button already makes, so re-opening "Inspector" from the toolbar still
+  // shows the last result (unchanged, pre-existing behavior).
+  const showingResultView = mode === "inspector" && liveView !== null && loadedSnapshot === null;
+
+  // Esc dismisses the live result view and returns to authoring, mirroring
+  // the dismiss button. Only listens while the result view is actually
+  // shown, and cleans up on unmount / whenever that stops being true.
+  useEffect(() => {
+    if (!showingResultView) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onSwitchMode("authoring");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showingResultView, onSwitchMode]);
 
   const onToggleBrowser = useCallback(() => setShowBrowser((v) => !v), []);
   const onToggleViewMode = useCallback(
@@ -1125,6 +1180,26 @@ export function App() {
           }
           themeMode={themeMode}
         />
+      )}
+
+      {/* Result-view dismiss control (issue #111) — a fixed, high-z-index ✕
+          reachable independent of the (horizontally-scrollable, top-left)
+          mode toggle row, so the Simulate/Deploy result never traps the user
+          on mobile portrait. Only shown for a LIVE result (liveView !== null);
+          the plain mode-toggle "Inspector" view (SAMPLE_DEPLOYMENT_VIEW) is
+          already reachable via the "Authoring" toggle button and is left
+          unaffected. Esc performs the same dismiss (see the useEffect above). */}
+      {showingResultView && (
+        <button
+          type="button"
+          style={resultDismissStyle}
+          onClick={() => onSwitchMode("authoring")}
+          data-testid="result-dismiss"
+          aria-label="Close result view"
+          title="Close result view (Esc)"
+        >
+          ✕
+        </button>
       )}
     </div>
   );
