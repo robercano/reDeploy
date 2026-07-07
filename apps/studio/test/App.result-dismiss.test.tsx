@@ -14,11 +14,42 @@
  * - Dismissing does NOT clear the live result — re-opening "Inspector" via
  *   the toolbar toggle still shows the last result (matches the existing
  *   "Authoring" toggle-button behavior, unchanged by this fix).
+ * - The control must NOT appear over the loaded-snapshot view: `liveView`
+ *   from a prior simulate is not cleared when a snapshot file is loaded
+ *   (see onLoadSnapshotFile in App.tsx), so `mode==="inspector" &&
+ *   liveView!==null && loadedSnapshot!==null` is a reachable state. The
+ *   `loadedSnapshot === null` clause in `showingResultView` gates exactly
+ *   this — covered explicitly below (mirrors the file-load pattern in
+ *   App.snapshot-load.test.tsx).
  */
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import App from "../src/App.js";
+import type { DeploymentSnapshot } from "@redeploy/reader";
+
+const SAMPLE_SNAPSHOT: DeploymentSnapshot = {
+  snapshotVersion: 1,
+  takenAt: "2026-07-05T12:00:00.000Z",
+  chainId: 1,
+  toolVersion: "0.3.1",
+  specHash: "abc123",
+  contracts: [
+    {
+      id: "registry",
+      contractName: "Registry",
+      address: "0x1111111111111111111111111111111111111111",
+      args: [],
+      links: { dependencies: [], libraries: {} },
+    },
+  ],
+  configSteps: [],
+  warnings: [],
+};
+
+function jsonFile(content: unknown, name = "snapshot.json"): File {
+  return new File([JSON.stringify(content)], name, { type: "application/json" });
+}
 
 function enc(text: string): Uint8Array {
   return new TextEncoder().encode(text);
@@ -138,5 +169,29 @@ describe("App — result-dismiss control (issue #111)", () => {
     expect(screen.queryByTestId("inspector-config-panel")).not.toBeNull();
     expect(screen.queryByTestId("inspector-context-badge")).not.toBeNull();
     expect(screen.queryByTestId("result-dismiss")).not.toBeNull();
+  });
+
+  it("is absent once a snapshot is loaded on top of a live result (loadedSnapshot wins)", async () => {
+    await runSuccessfulSimulate();
+    expect(screen.queryByTestId("result-dismiss")).not.toBeNull();
+
+    // Load a valid snapshot file. onLoadSnapshotFile sets loadedSnapshot but
+    // does NOT clear liveView, so this reaches mode==="inspector" &&
+    // liveView!==null && loadedSnapshot!==null — the SnapshotViewer must be
+    // shown, and the result-dismiss control must NOT render over it.
+    const input = screen.getByTestId("load-snapshot-input") as HTMLInputElement;
+    const file = jsonFile(SAMPLE_SNAPSHOT);
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("snapshot-meta-panel")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("result-dismiss")).toBeNull();
+
+    // Escape is a no-op here too — there's no dismiss handler to trigger
+    // while the snapshot viewer (not the live result view) is shown.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("snapshot-meta-panel")).not.toBeNull();
+    expect(screen.queryByTestId("result-dismiss")).toBeNull();
   });
 });
