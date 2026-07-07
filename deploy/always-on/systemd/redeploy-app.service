@@ -4,10 +4,15 @@ After=network.target redeploy-anvil.service
 Wants=redeploy-anvil.service
 
 [Service]
-# Stable symlink, NOT a hardcoded repo path — this lets prepare-pr.sh --serve <n>
+# Stable symlink, NOT a hardcoded PR checkout — this lets prepare-pr.sh --serve <n>
 # repoint the service at a PR worktree, and --reset point it back at the main
-# checkout, without editing this unit. See docs/ALWAYS-ON-TUNNEL.md.
-WorkingDirectory=%h/.local/share/redeploy/active
+# checkout, without editing this unit. The symlink itself lives INSIDE the repo
+# checkout (repo-local `.serve/active`), not under $HOME/.local/share, so that
+# prepare-pr.sh can flip it from inside the Claude Code sandbox (where $HOME is
+# read-only). Restarts are driven by redeploy-app.path watching `.serve/reload`
+# (see redeploy-app.path / redeploy-app-restart.service in this same directory)
+# rather than prepare-pr.sh calling systemctl directly. See docs/ALWAYS-ON-TUNNEL.md.
+WorkingDirectory=%h/Development/thesolidchain/reDeploy/.serve/active
 
 # nvm-managed node/pnpm + foundry are NOT on the default systemd user-service PATH;
 # pin them explicitly. Replace <NODE_BIN_DIR> with the output of:

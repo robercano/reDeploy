@@ -1,0 +1,20 @@
+[Unit]
+Description=Watch reDeploy's .serve/reload sentinel and restart redeploy-app
+# This path unit is the primary restart mechanism for the always-on studio.
+# `prepare-pr.sh --serve <n>` / `--reset` flip the repo-local `.serve/active`
+# symlink AND touch `.serve/reload` — both are plain repo-local file
+# operations, so they work from inside the Claude Code sandbox (where $HOME is
+# read-only EROFS and the systemd --user bus is unreachable). systemd itself,
+# however, runs OUTSIDE that sandbox as a normal host process, so IT always has
+# bus access. By watching the sentinel file instead of requiring the caller to
+# call `systemctl --user restart` directly, the restart happens on the host
+# side regardless of where/how the sentinel got touched.
+
+[Path]
+# PathModified= fires on content modification (not just existence), so a bare
+# `touch` on an already-existing file reliably re-triggers this unit.
+PathModified=%h/Development/thesolidchain/reDeploy/.serve/reload
+Unit=redeploy-app-restart.service
+
+[Install]
+WantedBy=default.target
