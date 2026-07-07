@@ -39,6 +39,31 @@ units_dst="$HOME/.config/systemd/user"
 echo "▶ repo root: $repo_root"
 echo "▶ systemd --user unit dir: $units_dst"
 
+# The systemd unit templates hardcode the literal path
+# %h/Development/thesolidchain/reDeploy/... for both redeploy-app.service's
+# WorkingDirectory and redeploy-app.path's PathModified sentinel (owner-agreed
+# design — see docs/ALWAYS-ON-TUNNEL.md — not something this script tries to
+# templatize). That only lines up if this checkout actually lives at
+# $HOME/Development/thesolidchain/reDeploy. Warn (never abort — the comparison
+# is guarded so it can't trip `set -e`) if it doesn't, since otherwise the app
+# service and the sentinel watch will silently point at the wrong (or
+# nonexistent) location.
+expected_repo_root="$HOME/Development/thesolidchain/reDeploy"
+if [ "$repo_root" != "$expected_repo_root" ]; then
+  {
+    echo "⚠️  WARNING: this checkout lives at $repo_root,"
+    echo "    but the systemd units hardcode %h/Development/thesolidchain/reDeploy/..."
+    echo "    (i.e. $expected_repo_root/...) for redeploy-app.service's WorkingDirectory"
+    echo "    and redeploy-app.path's PathModified sentinel. Those will NOT match this"
+    echo "    checkout, so the app service and the path-unit watch will point at the"
+    echo "    wrong (or nonexistent) location."
+    echo "    Before enabling redeploy-app / redeploy-app.path, edit the"
+    echo "    WorkingDirectory= line in $units_dst/redeploy-app.service and the"
+    echo "    PathModified= line in $units_dst/redeploy-app.path to point at your"
+    echo "    actual checkout ($repo_root)."
+  } >&2
+fi
+
 mkdir -p "$units_dst"
 
 # Idempotent copy: never overwrite an existing (possibly hand-edited) unit.

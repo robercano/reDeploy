@@ -272,6 +272,12 @@ serve the PR too, without you needing a terminal open at all:
 bash .claude/scripts/prepare-pr.sh --serve <n>
 ```
 
+> **Run `--serve`/`--reset` from your MAIN checkout, not a PR worktree.** The path unit's
+> `PathModified=` watch and `redeploy-app.service`'s `WorkingDirectory` are hardcoded to
+> `%h/Development/thesolidchain/reDeploy/.serve/...` (see section 6) — invoking `--serve`/`--reset`
+> from the copy of this script inside a PR worktree would flip a `.serve/active` symlink and touch a
+> `.serve/reload` sentinel that nothing is watching, a silent no-op.
+
 This runs the normal prepare flow (resolve branch, fetch, create/refresh the worktree, install/build)
 and then repoints the repo-local `.serve/active` symlink at the PR's worktree and touches the
 `.serve/reload` sentinel file, so `https://<STUDIO_HOSTNAME>` ends up serving that PR once
