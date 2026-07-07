@@ -609,3 +609,174 @@ describe("validateSpec — literal nesting depth safety", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// ParamArg — named parameters + per-network overrides (issue #98)
+// ---------------------------------------------------------------------------
+
+describe("validateSpec — ParamArg happy path", () => {
+  it("accepts a param arg whose name is declared in top-level parameters", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { initialOwner: "0x0000000000000000000000000000000000000001" },
+      contracts: [
+        {
+          id: "registry",
+          contract: "Registry",
+          args: [{ kind: "param", name: "initialOwner" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts multiple param args referencing distinct declared parameters", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { name: "My Token", symbol: "MTK" },
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            { kind: "param", name: "name" },
+            { kind: "param", name: "symbol" },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a mix of literal, ref, and param args in the same contract", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { threshold: 3 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "Vault Name" },
+            { kind: "param", name: "threshold" },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows declared parameters that are never referenced by any arg", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { unused: "value" },
+      contracts: [{ id: "registry", contract: "Registry" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — UNKNOWN_PARAM", () => {
+  it("rejects a param arg whose name is not declared anywhere (no parameters block)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "registry",
+          contract: "Registry",
+          args: [{ kind: "param", name: "initialOwner" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const err = result.errors.find((e) => e.code === "UNKNOWN_PARAM");
+      expect(err).toBeDefined();
+      expect(err!.path).toBe("contracts[0].args[0].name");
+      expect(err!.message).toContain("initialOwner");
+    }
+  });
+
+  it("rejects a param arg whose name is not among the declared parameters", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { owner: "0x1" },
+      contracts: [
+        {
+          id: "registry",
+          contract: "Registry",
+          args: [{ kind: "param", name: "typoedName" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const codes = result.errors.map((e) => e.code);
+      expect(codes).toContain("UNKNOWN_PARAM");
+    }
+  });
+
+  it("collects UNKNOWN_PARAM alongside other error kinds in the same result", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "token", contract: "Token" },
+        { id: "token", contract: "Token2" }, // duplicate id
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "param", name: "ghostParam" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const codes = result.errors.map((e) => e.code);
+      expect(codes).toContain("DUPLICATE_ID");
+      expect(codes).toContain("UNKNOWN_PARAM");
+    }
+  });
+});
+
+describe("validateSpec — parameters shape", () => {
+  it("accepts an empty parameters object", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: {},
+      contracts: [{ id: "registry", contract: "Registry" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts array and null literal values in parameters", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { list: [1, 2, 3], nothing: null },
+      contracts: [
+        {
+          id: "c",
+          contract: "C",
+          args: [
+            { kind: "param", name: "list" },
+            { kind: "param", name: "nothing" },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a parameters value that is not a valid LiteralValue (e.g. a nested object)", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { bad: { nested: "object" } },
+      contracts: [{ id: "registry", contract: "Registry" }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+});

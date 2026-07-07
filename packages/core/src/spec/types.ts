@@ -39,10 +39,34 @@ export type LiteralScalar = string | number | boolean | null;
 export type LiteralValue = LiteralScalar | LiteralValue[];
 
 /**
- * A constructor argument for a contract: either a ref to another contract or a
- * literal value.
+ * A reference to a named parameter declared in the top-level
+ * `DeploymentSpec.parameters` block.
+ *
+ * Parameters let the same spec be reused across environments/networks: the
+ * spec author writes `{ kind: "param", name: "owner" }` instead of a
+ * hard-coded literal. At compile time (compile/compile.ts) this is resolved
+ * via Ignition's `m.getParameter(name, defaultValue)`, using the spec's
+ * declared `parameters[name]` value (if any) as the default. This means the
+ * VALUE actually used at deploy time can still be overridden per network via
+ * `DeployOptions.deploymentParameters` (deploy/deploy.ts) without recompiling
+ * the module — Ignition's own parameter-precedence rules apply.
+ *
+ * @example
+ * ```ts
+ * { kind: "param", name: "initialOwner" }
+ * ```
  */
-export type ContractArg = RefArg | LiteralArg;
+export interface ParamArg {
+  readonly kind: "param";
+  /** The parameter name, as declared as a key in `DeploymentSpec.parameters`. */
+  readonly name: string;
+}
+
+/**
+ * A constructor argument for a contract: a ref to another contract, a literal
+ * value, or a named parameter.
+ */
+export type ContractArg = RefArg | LiteralArg | ParamArg;
 
 /**
  * A single contract entry in a deployment spec.
@@ -98,4 +122,20 @@ export interface DeploymentSpec {
   readonly version: 1;
   /** Ordered list of contract deployment entries. */
   readonly contracts: ContractEntry[];
+  /**
+   * Named parameter default values, keyed by parameter name, referenced from
+   * `ContractArg`s of kind `"param"`. Optional — specs with no `ParamArg`
+   * usage do not need this field (backward compatible with pre-parameter
+   * specs).
+   *
+   * Every parameter NAME referenced by a `{ kind: "param" }` arg anywhere in
+   * `contracts` must appear as a key here — `validateSpec` reports an
+   * `UNKNOWN_PARAM` error otherwise.
+   *
+   * These are DEFAULT values only. The effective value used for a given
+   * deployment can still be overridden per network/environment via
+   * `DeployOptions.deploymentParameters` (deploy/deploy.ts), without needing
+   * a different spec — see ParamArg's docs for the full resolution story.
+   */
+  readonly parameters?: Record<string, LiteralValue>;
 }

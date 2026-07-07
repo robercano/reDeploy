@@ -21,7 +21,8 @@ export type SpecErrorCode =
   | "DUPLICATE_ID"
   | "MISSING_REF"
   | "SELF_REFERENCE"
-  | "CYCLE";
+  | "CYCLE"
+  | "UNKNOWN_PARAM";
 
 /**
  * A single structured validation error.
@@ -88,7 +89,15 @@ function collectCrossFieldErrors(spec: DeploymentSpec): SpecError[] {
   // referenced — so we track all ids regardless of duplication.
   const allIds = new Set<string>(spec.contracts.map((c) => c.id));
 
-  // --- 2. Iterate entries for ref/after checks ------------------------------
+  // The set of declared parameter names — every `{ kind: "param" }` arg must
+  // reference a name in this set (see ParamArg's docs in spec/types.ts).
+  // Object.keys() over a Record<string, LiteralValue> is pollution-safe
+  // (spec.parameters was already parsed by zod, not raw JSON.parse'd).
+  const declaredParams = new Set<string>(
+    spec.parameters !== undefined ? Object.keys(spec.parameters) : [],
+  );
+
+  // --- 2. Iterate entries for ref/after/param checks ------------------------
   for (let i = 0; i < spec.contracts.length; i++) {
     const entry = spec.contracts[i];
     const basePath = `contracts[${i}]`;
@@ -114,6 +123,14 @@ function collectCrossFieldErrors(spec: DeploymentSpec): SpecError[] {
               message: `Contract "${entry.id}" args[${j}] references unknown id "${arg.contract}"`,
             });
           }
+        } else if (arg.kind === "param" && !declaredParams.has(arg.name)) {
+          // Unknown parameter — Set.has() is pollution-safe.
+          const argPath = `${basePath}.args[${j}].name`;
+          errors.push({
+            path: argPath,
+            code: "UNKNOWN_PARAM",
+            message: `Contract "${entry.id}" args[${j}] references undeclared parameter "${arg.name}" — add it to DeploymentSpec.parameters`,
+          });
         }
       }
     }

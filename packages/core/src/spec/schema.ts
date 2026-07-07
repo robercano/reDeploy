@@ -101,6 +101,12 @@ const literalArgSchema = z.object({
   value: literalValueSchema,
 });
 
+/** `{ kind: "param", name: "<non-empty parameter name>" }` */
+const paramArgSchema = z.object({
+  kind: z.literal("param"),
+  name: z.string().min(1, { message: "param.name must be a non-empty string" }),
+});
+
 /**
  * ContractArg discriminated union.
  * Unknown `kind` values produce a clear parse error.
@@ -108,6 +114,7 @@ const literalArgSchema = z.object({
 export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("kind", [
   refArgSchema,
   literalArgSchema,
+  paramArgSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -139,4 +146,5 @@ export const contractEntrySchema: z.ZodType<ContractEntry> = z.object({
 export const deploymentSpecSchema: z.ZodType<DeploymentSpec> = z.object({
   version: z.literal(1),
   contracts: z.array(contractEntrySchema),
+  parameters: z.record(z.string(), literalValueSchema).optional(),
 });

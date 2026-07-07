@@ -6,6 +6,7 @@
 export type {
   RefArg,
   LiteralArg,
+  ParamArg,
   LiteralScalar,
   LiteralValue,
   ContractArg,
