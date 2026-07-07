@@ -43,6 +43,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { decodeDeployData } from "viem";
 import type { ArtifactResolver, Artifact, EIP1193Provider } from "@nomicfoundation/ignition-core";
 import { deploy, DeployError } from "../src/index.js";
 import type { DeploymentSpec } from "../src/index.js";
@@ -96,6 +97,48 @@ function makeFakeArtifactResolver(argCounts: Record<string, number> = {}): Artif
   };
 }
 
+/**
+ * Fixed, deterministic non-zero bytecode reused across artifact fixtures so
+ * tests can decode the ABI-encoded constructor args appended after it in the
+ * eth_sendTransaction `data` field (see decodeDeployData usage below).
+ */
+const FAKE_BYTECODE =
+  "0x60806040526000805534801561001457600080fd5b50610100806100246000396000f3fe";
+
+/**
+ * Build a constructor ABI fragment with one input per entry in `types`
+ * (e.g. ["uint256", "address"]). Used by ParamArg/deploymentParameters tests
+ * that need to decode real ABI-typed values out of the sent transaction data
+ * — unlike `buildConstructorAbi` above, the type matters here (not just the
+ * count) because we assert on the *decoded value*, not just call counts.
+ */
+function buildTypedConstructorAbi(types: string[]): object[] {
+  const inputs = types.map((type, i) => ({ name: `arg${i}`, type, internalType: type }));
+  return [{ type: "constructor", inputs, stateMutability: "nonpayable" }];
+}
+
+/**
+ * A fake ArtifactResolver backed by a name → ABI map (rather than a name →
+ * argCount map like `makeFakeArtifactResolver`). Lets tests control the exact
+ * Solidity types Ignition encodes into the deploy transaction.
+ */
+function makeTypedArtifactResolver(abiByContract: Record<string, object[]>): ArtifactResolver {
+  return {
+    async loadArtifact(contractName: string): Promise<Artifact> {
+      return {
+        contractName,
+        sourceName: `contracts/${contractName}.sol`,
+        bytecode: FAKE_BYTECODE,
+        abi: abiByContract[contractName] ?? [],
+        linkReferences: {},
+      };
+    },
+    async getBuildInfo() {
+      return undefined;
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers — fake EIP-1193 provider
 // ---------------------------------------------------------------------------
@@ -112,6 +155,13 @@ interface ProviderState {
   txReceipts: Map<string, { blockNumber: number; contractAddress: string }>;
   /** sender (lowercased) → nonce */
   nonces: Map<string, number>;
+  /**
+   * The raw `data` field of every eth_sendTransaction call, in send order.
+   * Used by parameter-resolution tests to decode the ABI-encoded constructor
+   * args that Ignition actually sent on-chain (bytecode + encoded args),
+   * proving deploymentParameters values reached the real deploy transaction.
+   */
+  sentData: string[];
 }
 
 function makeProviderState(): ProviderState {
@@ -120,6 +170,7 @@ function makeProviderState(): ProviderState {
     blockNumber: 10, // start at block 10 so block-math in nonce sync never underflows
     txReceipts: new Map(),
     nonces: new Map(),
+    sentData: [],
   };
 }
 
@@ -189,6 +240,7 @@ function makeFakeProvider(state: ProviderState): EIP1193Provider {
         case "eth_sendTransaction": {
           state.sendTxCount += 1;
           const txParams = p[0] as Record<string, unknown>;
+          state.sentData.push((txParams["data"] as string | undefined) ?? "0x");
           const from = (
             (txParams["from"] as string | undefined) ??
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
@@ -816,3 +868,212 @@ describe("deploy() — on-chain execution failure returns success:false (not thr
 // that drives deploy() through the COMPILE_ERROR path is impossible without
 // casting/mocking, which would not provide meaningful coverage of the real
 // code path.
+
+// ---------------------------------------------------------------------------
+// ParamArg + DeployOptions.deploymentParameters — end-to-end (issue #98)
+// ---------------------------------------------------------------------------
+//
+// These tests decode the REAL ABI-encoded constructor args Ignition sent
+// on-chain (via the fake provider's captured eth_sendTransaction `data`),
+// proving the whole chain works: spec ParamArg -> compile.ts's
+// m.getParameter() -> Ignition -> DeployOptions.deploymentParameters ->
+// the actual deploy transaction. This is a genuine integration test, not a
+// unit test of compile.ts in isolation (see compile.test.ts for that).
+
+describe("deploy() — ParamArg resolution end-to-end", () => {
+  let tmpDir: string;
+  afterEach(() => {
+    if (tmpDir) rmTmpDir(tmpDir);
+  });
+
+  it("uses the spec's declared parameter value when no deploymentParameters override is supplied", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { threshold: 42 },
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "param", name: "threshold" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(state.sentData).toHaveLength(1);
+
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([42n]);
+  }, 30_000);
+
+  it("overrides the spec's declared default via DeployOptions.deploymentParameters (per-network override)", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { threshold: 42 }, // spec-declared default
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "param", name: "threshold" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      // Per-network override: keyed by the default moduleId ("Deployment"),
+      // overriding the spec's declared default of 42.
+      deploymentParameters: { Deployment: { threshold: 99 } },
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([99n]);
+  }, 30_000);
+
+  it("keys deploymentParameters by a custom moduleId", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { threshold: 1 },
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "param", name: "threshold" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      moduleId: "MyModule",
+      deploymentParameters: { MyModule: { threshold: 777 } },
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([777n]);
+  }, 30_000);
+
+  it("resolves multiple contracts with mixed literal, ref, and param args end-to-end", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { owner: "0x0000000000000000000000000000000000000042" },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "param", name: "owner" },
+          ],
+        },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Registry: [],
+        Vault: buildTypedConstructorAbi(["address", "address"]),
+      }),
+      deploymentParameters: { Deployment: { owner: "0x0000000000000000000000000000000000000099" } },
+    });
+
+    expect(result.success).toBe(true);
+    expect(Object.keys(result.deployedAddresses)).toHaveLength(2);
+
+    // vault is the second contract deployed (after registry, via the ref dependency)
+    const vaultData = state.sentData[1];
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["address", "address"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: vaultData as `0x${string}`,
+    });
+    // arg0 is the registry's deployed address (the ref); arg1 is the
+    // deploymentParameters-overridden owner value.
+    expect((decoded.args?.[0] as string).toLowerCase()).toBe(
+      result.deployedAddresses["registry"].toLowerCase(),
+    );
+    expect((decoded.args?.[1] as string).toLowerCase()).toBe(
+      "0x0000000000000000000000000000000000000099",
+    );
+  }, 30_000);
+
+  it("throws DeployError(INVALID_SPEC) for a param arg referencing an undeclared parameter", async () => {
+    tmpDir = makeTmpDir();
+    const badSpec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "param", name: "neverDeclared" }],
+        },
+      ],
+    };
+
+    await expect(
+      deploy({
+        spec: badSpec,
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({ Vault: buildTypedConstructorAbi(["uint256"]) }),
+      }),
+    ).rejects.toThrow(DeployError);
+
+    try {
+      await deploy({
+        spec: badSpec,
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({ Vault: buildTypedConstructorAbi(["uint256"]) }),
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("INVALID_SPEC");
+      expect(deployErr.specErrors?.some((e) => e.code === "UNKNOWN_PARAM")).toBe(true);
+    }
+  }, 30_000);
+});

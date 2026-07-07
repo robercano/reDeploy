@@ -44,6 +44,7 @@ import type {
   ArgumentType,
   IgnitionModule,
   IgnitionModuleResult,
+  ModuleParameterType,
   NamedArtifactContractDeploymentFuture,
 } from "@nomicfoundation/ignition-core";
 import type { DeploymentSpec, LiteralValue, ContractEntry } from "../spec/types.js";
@@ -276,6 +277,32 @@ export function compileSpec(
           // ContractFuture<string> is assignable to ArgumentType, so passing
           // the future here creates a real Ignition dependency edge.
           return refFuture;
+        }
+        if (arg.kind === "param") {
+          // Resolve via Ignition's m.getParameter(). This is the seam that
+          // lets the SAME compiled module receive different values per
+          // network/environment: the caller supplies the actual value at
+          // deploy time via DeployOptions.deploymentParameters (keyed by this
+          // module's id and this parameter's name; see deploy/deploy.ts). We
+          // do NOT bake a fixed value into the module here — that would
+          // defeat the whole point of per-network overrides.
+          //
+          // If the spec declares a value for this parameter under
+          // `spec.parameters[arg.name]`, we pass it as Ignition's
+          // `defaultValue` — used only when deploymentParameters does NOT
+          // supply an override for this name. validateSpec guarantees
+          // `arg.name` is a declared key of `spec.parameters` before compile
+          // is ever reached (SpecErrorCode "UNKNOWN_PARAM").
+          const declaredDefault = spec.parameters?.[arg.name];
+          const defaultValue =
+            declaredDefault !== undefined
+              ? // Ignition's ModuleParameterType (like ArgumentType) does not
+                // include `null` in its TypeScript union, but null passes
+                // through at runtime — same rationale as mapLiteralValue's
+                // null handling above.
+                (mapLiteralValue(declaredDefault, argPath) as unknown as ModuleParameterType)
+              : undefined;
+          return m.getParameter(arg.name, defaultValue);
         }
         // arg.kind === "literal"
         return mapLiteralValue(arg.value, argPath);

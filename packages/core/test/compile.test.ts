@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   FutureType,
+  RuntimeValueType,
+  type ModuleParameterRuntimeValue,
   type NamedArtifactContractDeploymentFuture,
 } from "@nomicfoundation/ignition-core";
 import { compileSpec, CompileError } from "../src/index.js";
@@ -19,6 +21,17 @@ function asContractFuture(
     throw new Error(`Expected NAMED_ARTIFACT_CONTRACT_DEPLOYMENT, got ${f.type}`);
   }
   return f;
+}
+
+/** Cast a constructorArg to the module-parameter runtime value shape for assertions. */
+function asModuleParameterRuntimeValue(
+  value: unknown,
+): ModuleParameterRuntimeValue<unknown> {
+  const v = value as ModuleParameterRuntimeValue<unknown>;
+  if (v.type !== RuntimeValueType.MODULE_PARAMETER) {
+    throw new Error(`Expected MODULE_PARAMETER runtime value, got ${String(v.type)}`);
+  }
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -625,5 +638,157 @@ describe("compileSpec — UNSUPPORTED_LITERAL error", () => {
       expect(err).toBeInstanceOf(CompileError);
       expect((err as CompileError).code).toBe("UNSUPPORTED_LITERAL");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. ParamArg — resolved via Ignition's m.getParameter() (issue #98)
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — param args resolve via m.getParameter()", () => {
+  it("maps a param arg to a MODULE_PARAMETER runtime value (not a plain value)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { initialOwner: "0x0000000000000000000000000000000000000001" },
+      contracts: [
+        {
+          id: "registry",
+          contract: "Registry",
+          args: [{ kind: "param", name: "initialOwner" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    const runtimeValue = asModuleParameterRuntimeValue(f.constructorArgs[0]);
+    expect(runtimeValue.name).toBe("initialOwner");
+  });
+
+  it("does NOT bake the spec's declared value directly as a literal constructorArg", () => {
+    // The whole point of using m.getParameter() is that the compiled module
+    // does not hard-code a fixed value — the argument must be a runtime value
+    // object, not the literal "My Token" string itself.
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { tokenName: "My Token" },
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "param", name: "tokenName" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).not.toBe("My Token");
+    expect(typeof f.constructorArgs[0]).toBe("object");
+  });
+
+  it("uses the spec's declared parameter value as Ignition's defaultValue", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { threshold: 3 },
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "param", name: "threshold" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    const runtimeValue = asModuleParameterRuntimeValue(f.constructorArgs[0]);
+    expect(runtimeValue.defaultValue).toBe(3);
+  });
+
+  it("leaves defaultValue undefined when the spec declares no value for the parameter", () => {
+    // Note: validateSpec would normally reject this (UNKNOWN_PARAM), but
+    // compileSpec's contract (like the rest of the compiler) assumes a
+    // pre-validated spec and does not re-validate. This test exercises the
+    // defensive branch directly.
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "param", name: "threshold" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    const runtimeValue = asModuleParameterRuntimeValue(f.constructorArgs[0]);
+    expect(runtimeValue.defaultValue).toBeUndefined();
+  });
+
+  it("supports null and array literal values as declared parameter defaults", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { nothing: null, list: [1, 2, 3] },
+      contracts: [
+        {
+          id: "c",
+          contract: "C",
+          args: [
+            { kind: "param", name: "nothing" },
+            { kind: "param", name: "list" },
+          ],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    const nothingRv = asModuleParameterRuntimeValue(f.constructorArgs[0]);
+    const listRv = asModuleParameterRuntimeValue(f.constructorArgs[1]);
+    expect(nothingRv.defaultValue).toBeNull();
+    expect(listRv.defaultValue).toEqual([1, 2, 3]);
+  });
+
+  it("handles multiple param args plus a literal and a ref arg together", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { owner: "0xabc", supply: 1000 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "My Token" },
+            { kind: "param", name: "owner" },
+            { kind: "param", name: "supply" },
+          ],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const tokenFuture = asContractFuture([...mod.futures].find((f) => f.id.includes("token")));
+    const registryFuture = [...mod.futures].find((f) => f.id.includes("registry"));
+
+    expect(tokenFuture.constructorArgs[0]).toBe(registryFuture);
+    expect(tokenFuture.constructorArgs[1]).toBe("My Token");
+    expect(asModuleParameterRuntimeValue(tokenFuture.constructorArgs[2]).name).toBe("owner");
+    expect(asModuleParameterRuntimeValue(tokenFuture.constructorArgs[3]).name).toBe("supply");
+  });
+
+  it("param args do not create dependency edges (they are not futures)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { owner: "0xabc" },
+      contracts: [
+        {
+          id: "registry",
+          contract: "Registry",
+          args: [{ kind: "param", name: "owner" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = [...mod.futures][0];
+    expect(f.dependencies.size).toBe(0);
   });
 });
