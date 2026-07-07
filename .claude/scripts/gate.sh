@@ -18,7 +18,10 @@ root="$(cd "$script_dir/../.." && pwd)"
 # viem) and TS builds fail with opaque "Cannot find module" errors that print to
 # STDOUT — leaving hooks to report an unhelpful "No stderr output". Surface the
 # real cause on STDERR and stop early so the fix ('pnpm install') is obvious.
-if [ -f "$root/pnpm-lock.yaml" ]; then
+# The 'install' gate is exempt: it IS 'pnpm install' — the step that resolves
+# staleness (and the first thing CI runs, before node_modules exists) — so
+# gating it on a fresh/stale node_modules would deadlock (chicken-and-egg).
+if [ "$key" != "install" ] && [ -f "$root/pnpm-lock.yaml" ]; then
   installed_lock="$root/node_modules/.pnpm/lock.yaml"
   if [ ! -e "$installed_lock" ] || ! cmp -s "$root/pnpm-lock.yaml" "$installed_lock"; then
     echo "gate.sh: node_modules is out of sync with pnpm-lock.yaml — run 'pnpm install' (gate '$key' skipped)." >&2
