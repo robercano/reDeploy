@@ -11,6 +11,8 @@
 export type CompileErrorCode =
   /** A literal value fell outside the supported LiteralValue shape at runtime. */
   | "UNSUPPORTED_LITERAL"
+  /** Expression evaluation failed (invalid syntax, unknown references, type errors). */
+  | "EXPRESSION_EVAL_ERROR"
   /**
    * An internal invariant was violated — e.g. a ref whose target id was not
    * registered as a future (which implies the caller bypassed validateSpec).

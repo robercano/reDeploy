@@ -48,6 +48,11 @@ import type {
   NamedArtifactContractDeploymentFuture,
 } from "@nomicfoundation/ignition-core";
 import type { DeploymentSpec, LiteralValue, ContractEntry } from "../spec/types.js";
+import {
+  evaluateExpression,
+  EvaluationError,
+  type EvaluationContext,
+} from "../spec/evaluator.js";
 import { CompileError } from "./errors.js";
 
 // Re-export for public API surface
@@ -112,13 +117,26 @@ export function buildCreationOrder(entries: readonly ContractEntry[]): ContractE
     inDegree.set(entry.id, 0);
   }
 
-  // Build edges: entry depends on every ref-target and every after-id
+  // Build edges: entry depends on every ref-target, every after-id, and
+  // every contract referenced in expressions.
   for (const entry of entries) {
     const deps = new Set<string>();
     // Ref args
     for (const arg of entry.args ?? []) {
       if (arg.kind === "ref") {
         deps.add(arg.contract);
+      } else if (arg.kind === "expr") {
+        // Extract contract references from expressions: ${contractId}
+        const contractRefRegex = /\$\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/g;
+        let match;
+        while ((match = contractRefRegex.exec(arg.expression)) !== null) {
+          const contractId = match[1];
+          // Only add if this contract id exists in the entry set
+          if (idToEntry.has(contractId)) {
+            deps.add(contractId);
+          }
+          // Otherwise, the validator will catch it as a missing reference
+        }
       }
     }
     // After constraints
@@ -261,7 +279,7 @@ export function compileSpec(
       const entryPath = `contracts[id=${entry.id}]`;
 
       // Map constructor arguments
-      const mappedArgs: ArgumentType[] = (entry.args ?? []).map((arg, argIdx) => {
+      const mappedArgs: ArgumentType[] = ((entry.args ?? []).map((arg, argIdx) => {
         const argPath = `${entryPath}.args[${argIdx}]`;
         if (arg.kind === "ref") {
           // Resolve the referenced future. Build-time ordering guarantees the
@@ -304,9 +322,80 @@ export function compileSpec(
               : undefined;
           return m.getParameter(arg.name, defaultValue);
         }
+        if (arg.kind === "expr") {
+          // Evaluate the expression with parameter values and contract references
+          try {
+            const context: EvaluationContext = {
+              params: {},
+              contractAddresses: {},
+            };
+
+            // Populate parameter values (convert LiteralValue to bigint for parameters)
+            if (spec.parameters) {
+              for (const [paramName, paramValue] of Object.entries(spec.parameters)) {
+                // For now, we only support bigint parameters in expressions
+                // Parse literal values as bigint if possible
+                if (typeof paramValue === "number" || typeof paramValue === "string") {
+                  try {
+                    context.params[paramName] = BigInt(paramValue);
+                  } catch {
+                    throw new CompileError(
+                      "EXPRESSION_EVAL_ERROR",
+                      `Parameter "${paramName}" value is not convertible to BigInt for expressions`,
+                      argPath,
+                    );
+                  }
+                } else if (paramValue === null) {
+                  context.params[paramName] = 0n;
+                } else {
+                  throw new CompileError(
+                    "EXPRESSION_EVAL_ERROR",
+                    `Parameter "${paramName}" has unsupported type for expressions: ${typeof paramValue}`,
+                    argPath,
+                  );
+                }
+              }
+            }
+
+            // Populate contract addresses/futures for ${contractId} references
+            for (const [contractId, future] of futureByEntryId) {
+              context.contractAddresses[contractId] = future;
+            }
+
+            const result = evaluateExpression(arg.expression, context);
+
+            // If the result is a Future (from a contract reference), return it directly
+            if (
+              typeof result === "object" &&
+              result !== null &&
+              "address" in result
+            ) {
+              // This is a Future-like object from Ignition
+              return result as ArgumentType;
+            }
+
+            // Otherwise, map the result as a literal value
+            // BigInt results are mapped as numbers (or strings for large values)
+            if (typeof result === "bigint") {
+              return result as unknown as ArgumentType;
+            }
+
+            // String results (hex hashes, addresses, etc.)
+            return result;
+          } catch (err) {
+            if (err instanceof EvaluationError) {
+              throw new CompileError(
+                "EXPRESSION_EVAL_ERROR",
+                `Expression evaluation failed: ${err.message}`,
+                argPath,
+              );
+            }
+            throw err;
+          }
+        }
         // arg.kind === "literal"
         return mapLiteralValue(arg.value, argPath);
-      });
+      }) as unknown[]) as ArgumentType[];
 
       // Map `after` constraints to futures
       const afterFutures = (entry.after ?? []).map((afterId, afterIdx) => {
