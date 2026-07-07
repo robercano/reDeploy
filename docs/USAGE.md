@@ -63,7 +63,9 @@ implementer ──done──▶ gates (build/lint/types/test/coverage via gate.s
 3. **PR** — created with `.claude/scripts/bot-gh.sh pr create …` so the PR author is the **bot machine
    account** (token in `.env` → `GH_BOT_TOKEN`), not the repo owner. GitHub hard-blocks PR authors
    from approving their own PRs — bot authorship is what makes a formal human Approve possible. Only PR
-   creation uses the bot; commits, pushes and everything else stay on the owner's account.
+   creation uses the bot; commits, pushes and everything else stay on the owner's account. `bot-gh.sh`
+   auto-assigns every new PR to the repo owner (`--assignee robercano`, override with `OWNER_LOGIN`) so
+   the owner gets a GitHub notification to review.
 4. **Review** — the owner reviews on GitHub. New review comments are picked up by the notification poll
    (below) or by asking *"address the comments on PR #N"*. Fixes go through the same
    implementer → reviewer loop on the same branch; pushing updates the PR in place.

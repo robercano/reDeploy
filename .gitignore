@@ -38,3 +38,10 @@ cache/
 # Foundry deps (fetched via forge install --no-git; re-fetch on fresh clones)
 contracts/lib/
 lib/
+
+# Human-test PR worktrees (/test-pr)
+.worktrees/
+open-test-pr-orchestrator.sh
+
+# Local writable clone of ai-project-orchestrator (cross-repo PRs)
+.orchestrator/
