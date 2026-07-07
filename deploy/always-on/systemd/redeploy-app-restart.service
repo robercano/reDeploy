@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart redeploy-app (triggered by redeploy-app.path watching .serve/reload)
+# Triggered by redeploy-app.path, NOT enabled/started directly. Runs as a
+# normal systemd --user unit — i.e. OUTSIDE the Claude Code sandbox — so it
+# always has systemd --user bus access, even when the process that touched
+# .serve/reload (prepare-pr.sh, possibly running inside the sandbox) did not.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user restart redeploy-app

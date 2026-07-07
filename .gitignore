@@ -43,5 +43,9 @@ lib/
 .worktrees/
 open-test-pr-orchestrator.sh
 
+# Repo-local active-symlink + restart sentinel for the always-on studio
+# (/test-pr --serve, see docs/ALWAYS-ON-TUNNEL.md) — sandbox-drivable, not source.
+.serve/
+
 # Local writable clone of ai-project-orchestrator (cross-repo PRs)
 .orchestrator/

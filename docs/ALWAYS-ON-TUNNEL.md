@@ -7,8 +7,9 @@ Cloudflare Access login page, with the app pointed at a **local Anvil** chain (n
 possible).
 
 This is built from three `systemd --user` services (Anvil, the studio + deploy-server, and a named
-`cloudflared` tunnel) plus a Cloudflare Access application in front of the hostname. Nothing here
-requires `sudo` — everything runs as your own user via `systemd --user`.
+`cloudflared` tunnel), a `systemd --user` path unit + oneshot restart service (the sentinel-driven
+restart mechanism, see section 6/9), plus a Cloudflare Access application in front of the hostname.
+Nothing here requires `sudo` — everything runs as your own user via `systemd --user`.
 
 Throughout this doc, substitute:
 
@@ -141,7 +142,7 @@ Rules:
   ignores `.env*` patterns for the in-repo `.env` used by normal local dev — this file is a separate,
   deliberately-outside-the-repo copy used only by the always-on service.)
 
-## 6. The three systemd user units
+## 6. The systemd user units
 
 Templates: [`deploy/always-on/systemd/`](../deploy/always-on/systemd/)
 
@@ -149,29 +150,50 @@ Templates: [`deploy/always-on/systemd/`](../deploy/always-on/systemd/)
   through the tunnel.
 - **`redeploy-app.service`** — runs the studio dev server (`:5173`, proxies `/api` to the
   deploy-server) and the deploy-server (`:8787`) in parallel. This is the tunnel's only published
-  origin.
+  origin. Its `WorkingDirectory` is the repo-local `.serve/active` symlink (see "The active symlink
+  model" below).
+- **`redeploy-app.path`** — a path unit that watches the repo-local `.serve/reload` sentinel file
+  (`PathModified=`) and triggers `redeploy-app-restart.service` whenever it changes.
+- **`redeploy-app-restart.service`** — a `Type=oneshot` unit, triggered only by `redeploy-app.path`,
+  whose `ExecStart` runs `systemctl --user restart redeploy-app`.
 - **`cloudflared-redeploy.service`** — runs the named tunnel from step 3/4 via an explicit `--config`.
 
-Install:
+The easiest way to install these is the provided script:
+
+```
+bash deploy/always-on/install.sh
+```
+
+It copies the unit templates into `~/.config/systemd/user/` (without overwriting any copy you've
+already edited), creates the repo-local `.serve/` dir + `.serve/active` symlink (pointed at this
+checkout) if missing, runs `daemon-reload`, and enables + starts `redeploy-app.path` (the sentinel
+watcher — harmless to enable early, since it does nothing until the sentinel is touched). It then
+prints the remaining manual steps below. Safe to re-run any time.
+
+Equivalent manual steps, if you'd rather do it by hand (or to fill in the placeholders `install.sh`
+leaves for you):
 
 ```
 mkdir -p ~/.config/systemd/user
-cp deploy/always-on/systemd/redeploy-anvil.service       ~/.config/systemd/user/
-cp deploy/always-on/systemd/redeploy-app.service         ~/.config/systemd/user/
-cp deploy/always-on/systemd/cloudflared-redeploy.service ~/.config/systemd/user/
+cp deploy/always-on/systemd/redeploy-anvil.service         ~/.config/systemd/user/
+cp deploy/always-on/systemd/redeploy-app.service           ~/.config/systemd/user/
+cp deploy/always-on/systemd/redeploy-app.path              ~/.config/systemd/user/
+cp deploy/always-on/systemd/redeploy-app-restart.service   ~/.config/systemd/user/
+cp deploy/always-on/systemd/cloudflared-redeploy.service   ~/.config/systemd/user/
 # Edit the copies to substitute <STUDIO_HOSTNAME> / <NODE_BIN_DIR> placeholders.
 $EDITOR ~/.config/systemd/user/redeploy-app.service
 $EDITOR ~/.config/systemd/user/cloudflared-redeploy.service
 
-# redeploy-app.service's WorkingDirectory is %h/.local/share/redeploy/active — a
-# stable symlink, not a hardcoded repo path (see "The active symlink model" below).
-# It MUST exist before the app service is enabled/started, or the service will
-# fail to find its WorkingDirectory.
-mkdir -p ~/.local/share/redeploy
-ln -sfn <path-to-your-main-checkout> ~/.local/share/redeploy/active
+# redeploy-app.service's WorkingDirectory is
+# %h/Development/thesolidchain/reDeploy/.serve/active — a stable symlink LIVING
+# INSIDE the repo checkout, not a hardcoded repo path (see "The active symlink
+# model" below). It MUST exist before the app service is enabled/started, or the
+# service will fail to find its WorkingDirectory.
+mkdir -p <path-to-your-repo-checkout>/.serve
+ln -sfn <path-to-your-repo-checkout> <path-to-your-repo-checkout>/.serve/active
 
 systemctl --user daemon-reload
-systemctl --user enable --now redeploy-anvil redeploy-app cloudflared-redeploy
+systemctl --user enable --now redeploy-anvil redeploy-app redeploy-app.path cloudflared-redeploy
 loginctl enable-linger "$USER"
 ```
 
@@ -193,9 +215,9 @@ moment your last login session ends).
 > If you later switch node versions via nvm, update this path — the old version's `bin` directory
 > stops existing and the service will fail to start.
 
-> **The `active` symlink model.** `redeploy-app.service` sets:
+> **The `active` symlink + `.serve/reload` sentinel model.** `redeploy-app.service` sets:
 > ```
-> WorkingDirectory=%h/.local/share/redeploy/active
+> WorkingDirectory=%h/Development/thesolidchain/reDeploy/.serve/active
 > EnvironmentFile=%h/.config/redeploy/env.anvil
 > ```
 > `active` is a **stable symlink**, not a hardcoded repo path — the service always serves whatever
@@ -204,8 +226,24 @@ moment your last login session ends).
 > the unit file. `env.anvil` (section 5) is a fixed, shared file outside any checkout, so it keeps
 > working no matter what `active` points at.
 >
-> The symlink must exist **before** `redeploy-app` is enabled/started — see the `ln -sfn` step in the
-> Install block above.
+> Unlike the original design, `active` lives **inside the repo checkout** (`.serve/active`, gitignored)
+> rather than under `~/.local/share/redeploy/`. This is deliberate: it makes the whole flip-and-restart
+> flow drivable from inside the Claude Code sandbox, which mounts `$HOME` read-only and can't reach the
+> systemd --user bus at all. Both control points `/test-pr --serve`/`--reset` touch —
+> `.serve/active` (a symlink flip) and `.serve/reload` (a sentinel file touch) — are ordinary
+> repo-local filesystem writes, so they work from the sandbox even though `systemctl` doesn't.
+>
+> The restart itself is delegated to systemd: `redeploy-app.path` (installed on the host, outside the
+> sandbox) watches `.serve/reload` with `PathModified=` and triggers `redeploy-app-restart.service`
+> (a oneshot `systemctl --user restart redeploy-app`) whenever the sentinel changes. Since systemd runs
+> as a normal host process, it always has bus access — even when the process that touched the sentinel
+> didn't. `prepare-pr.sh` still attempts a direct `systemctl --user restart redeploy-app` too, as a
+> best-effort immediate fallback for anyone running it from a normal terminal, but that attempt is no
+> longer required to succeed.
+>
+> The `.serve/active` symlink must exist **before** `redeploy-app` is enabled/started — see the
+> `ln -sfn` step in the Install block above (or just run `deploy/always-on/install.sh`, which creates
+> it for you).
 
 ## 7. Cloudflare Access (the login page)
 
@@ -235,8 +273,16 @@ bash .claude/scripts/prepare-pr.sh --serve <n>
 ```
 
 This runs the normal prepare flow (resolve branch, fetch, create/refresh the worktree, install/build)
-and then repoints the `active` symlink at the PR's worktree and restarts `redeploy-app`, so
-`https://<STUDIO_HOSTNAME>` now serves that PR.
+and then repoints the repo-local `.serve/active` symlink at the PR's worktree and touches the
+`.serve/reload` sentinel file, so `https://<STUDIO_HOSTNAME>` ends up serving that PR once
+`redeploy-app.path` (watching the sentinel) triggers `redeploy-app-restart.service` to restart
+`redeploy-app`. Both the symlink flip and the sentinel touch are plain repo-local file writes — no
+`$HOME` writes, no systemd --user bus calls required from the script itself — which is what makes
+`--serve`/`--reset` **drivable from inside the Claude Code sandbox** (where `$HOME` is read-only
+EROFS and the systemd --user bus is unreachable). The script also attempts a direct
+`systemctl --user restart redeploy-app` as a best-effort immediate fallback (useful when run from a
+normal terminal with bus access), but that attempt failing is expected and harmless in the sandbox —
+the sentinel-driven restart via `redeploy-app.path` still happens.
 
 To point it back at your main checkout:
 
@@ -255,22 +301,32 @@ See also `.claude/commands/test-pr.md` for the `/test-pr` command reference.
 ## 10. Operations
 
 - **Pull + restart** (main checkout): `cd <checkout> && git pull && systemctl --user restart redeploy-app`
-- **Restarts are not instant.** Every `systemctl --user restart redeploy-app` — and therefore every
-  `/test-pr --serve`/`--reset` (section 9), which restarts the service after repointing `active` — re-runs
-  the full `ExecStartPre` (`pnpm install` + the core/config/reader/deploy-server build) before the app
-  comes back up. Expect tens of seconds to a couple of minutes, not an instant restart. This rebuild is
-  intentional, not a bug: it guarantees there's never a stale `dist/` when `active` switches checkouts —
-  whatever checkout `active` now points at is always compiled before it starts serving. `redeploy-app.service`
-  sets `TimeoutStartSec=0` (see `deploy/always-on/systemd/redeploy-app.service`) specifically so this slower
-  cold/PR-switch rebuild is never killed for taking "too long" to start.
-- **Stop everything**: `systemctl --user stop cloudflared-redeploy redeploy-app redeploy-anvil`
+  (or `touch .serve/reload` to trigger the same restart via the path unit).
+- **Restarts are not instant.** Every restart of `redeploy-app` — whether via a direct
+  `systemctl --user restart redeploy-app`, the sentinel-driven path (`touch .serve/reload` →
+  `redeploy-app.path` → `redeploy-app-restart.service`), or `/test-pr --serve`/`--reset` (section 9,
+  which does both) — re-runs the full `ExecStartPre` (`pnpm install` + the core/config/reader/deploy-server
+  build) before the app comes back up. Expect tens of seconds to a couple of minutes, not an instant
+  restart. This rebuild is intentional, not a bug: it guarantees there's never a stale `dist/` when
+  `active` switches checkouts — whatever checkout `active` now points at is always compiled before it
+  starts serving. `redeploy-app.service` sets `TimeoutStartSec=0` (see
+  `deploy/always-on/systemd/redeploy-app.service`) specifically so this slower cold/PR-switch rebuild is
+  never killed for taking "too long" to start.
+- **The path unit is the restart mechanism now, not just a convenience.** `/test-pr --serve`/`--reset`
+  no longer depend on a working systemd --user bus connection from wherever they're invoked; they only
+  need to flip `.serve/active` and touch `.serve/reload`. `redeploy-app.path` (running on the host)
+  notices the sentinel change and does the actual restart via `redeploy-app-restart.service`. A direct
+  `systemctl --user restart redeploy-app` still works fine from a normal terminal and remains the
+  fastest single command for a manual restart.
+- **Stop everything**: `systemctl --user stop cloudflared-redeploy redeploy-app redeploy-app.path redeploy-anvil`
 - **Disable at boot**:
   ```
-  systemctl --user disable cloudflared-redeploy redeploy-app redeploy-anvil
+  systemctl --user disable cloudflared-redeploy redeploy-app redeploy-app.path redeploy-anvil
   loginctl disable-linger "$USER"
   ```
 - **Logs**: `journalctl --user -u <service> -e` (last entries) or `-f` (follow), e.g.
-  `journalctl --user -u redeploy-app -f`.
+  `journalctl --user -u redeploy-app -f` or `journalctl --user -u redeploy-app-restart -e` (to confirm
+  the sentinel-triggered restart actually ran).
 
 ## 11. Safety recap
 
