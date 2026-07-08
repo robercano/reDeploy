@@ -44,7 +44,12 @@ const modalStyle: React.CSSProperties = {
   color: "var(--color-text)",
   borderRadius: 8,
   padding: 24,
-  width: 560,
+  // Issue #114: a fixed `width: 560` overflows narrow/mobile viewports
+  // (~375-414px portrait) since there is no viewport bound. `min(560px,
+  // 90vw)` caps the modal at 90% of the viewport width on narrow screens
+  // while still using the full 560px on wide/desktop screens. Mirrors the
+  // #110 toolbar fix's viewport-bounded-width approach.
+  width: "min(560px, 90vw)",
   maxHeight: "80vh",
   overflowY: "auto",
   boxShadow: "var(--shadow-xl)",
