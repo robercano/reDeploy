@@ -55,7 +55,10 @@ import { TemplateGallery } from "./components/TemplateGallery.js";
 import { SaveTemplateModal } from "./components/SaveTemplateModal.js";
 import { Inspector } from "./components/Inspector.js";
 import { SnapshotViewer } from "./components/SnapshotViewer.js";
-import { parseSnapshot } from "./inspector/snapshot-view.js";
+import { PlanView } from "./components/PlanView.js";
+import { parseSnapshot, snapshotToDeploymentView } from "./inspector/snapshot-view.js";
+import { computePlan } from "./spec/plan-diff.js";
+import type { DeploymentPlan } from "./spec/plan-diff.js";
 import { OrderedConfigPanelToggle } from "./components/OrderedConfigPanel.js";
 import type { OrderedPanelDeployTarget } from "./components/OrderedConfigPanel.js";
 import { useGraph } from "./hooks/useGraph.js";
@@ -510,15 +513,36 @@ export function App() {
   const [simulateSuccess, setSimulateSuccess] = useState<string | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Real-deploy state. `viewKind` discriminates whether the current liveView came
-  // from a dry-run simulate or a real deploy, so the Inspector badge reflects the
-  // truth. The confirm modal gates the (irreversible) POST behind an explicit
-  // confirmation click.
-  const [viewKind, setViewKind] = useState<"simulate" | "deploy" | null>(null);
+  // Real-deploy state. `viewKind` discriminates whether the current inspector
+  // content came from a dry-run simulate, a real deploy, or a dry-run
+  // plan/diff (issue #101), so the Inspector badge / which component renders
+  // reflects the truth. The confirm modal gates the (irreversible) POST
+  // behind an explicit confirmation click.
+  const [viewKind, setViewKind] = useState<"simulate" | "deploy" | "plan" | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
+
+  // Provenance of `liveView`, tracked SEPARATELY from `viewKind` (bugfix,
+  // issue #101 review). `viewKind` is the RENDER discriminator — it changes
+  // to "plan" as soon as the user clicks Plan, even though `liveView` itself
+  // (and what produced it) hasn't changed. If `bestKnownCurrentView` below
+  // keyed off `viewKind === "deploy"`, then after Plan #1 (which correctly
+  // diffs against a real deploy's liveView) `viewKind` becomes "plan" and
+  // every SUBSEQUENT Plan click / deploy-modal summary would see
+  // `bestKnownCurrentView === null` and wrongly show everything as "create"
+  // — even though a real deploy's result is still sitting in `liveView`.
+  // `lastResultKind` instead reflects ONLY "what kind of network result is
+  // `liveView`" and is updated exclusively by handleSimulate/handleDeploy,
+  // never by handleShowPlan, so it survives any number of subsequent Plan
+  // clicks.
+  const [lastResultKind, setLastResultKind] = useState<"simulate" | "deploy" | null>(null);
+
+  // Dry-run plan/diff (issue #101): the last computed DeploymentPlan, shown
+  // by <PlanView> in inspector mode when viewKind === "plan". Computed
+  // synchronously (no network I/O) by handleShowPlan below.
+  const [plan, setPlan] = useState<DeploymentPlan | null>(null);
 
   // "New / Clear canvas" (issue #80) — gated behind a confirm modal since it
   // discards the entire authoring graph (and its localStorage autosave).
@@ -619,6 +643,26 @@ export function App() {
   // Keep ref in sync so the simulate callback is never stale-closed.
   deploymentRef.current = deployment;
 
+  // Dry-run plan/diff (issue #101): the best "current state" the studio has
+  // in memory to diff the desired spec against. v1 deliberately does NOT
+  // fetch on-chain/journal state on demand (that would require a new
+  // deploy-server endpoint, out of this module's boundary) — it reuses
+  // whichever of these the studio already holds, in priority order:
+  //   1. A loaded deployment snapshot (SnapshotViewer / issue #105) — the
+  //      user explicitly opted into diffing against this state.
+  //   2. The `done` view from the most recent REAL deploy (`lastResultKind
+  //      === "deploy"` — see its doc comment above for why this is NOT
+  //      `viewKind`) — a simulate's view is intentionally excluded here
+  //      since it always has address: null and is not "current state", it's
+  //      a previous dry run.
+  //   3. Otherwise null — no known current state; computePlan treats that as
+  //      "everything is create" and PlanView renders an explanatory note.
+  const bestKnownCurrentView = useMemo<DeploymentView | null>(() => {
+    if (loadedSnapshot !== null) return snapshotToDeploymentView(loadedSnapshot);
+    if (lastResultKind === "deploy" && liveView !== null) return liveView;
+    return null;
+  }, [loadedSnapshot, lastResultKind, liveView]);
+
   // Clean up the success banner auto-dismiss timer on unmount.
   useEffect(() => {
     return () => {
@@ -668,14 +712,26 @@ export function App() {
     setSnapshotLoadError(null);
   }, []);
 
-  // Is the live Simulate/Deploy result view (NOT the sample/loaded-snapshot
+  // Is a live Simulate/Deploy/Plan result view (NOT the sample/loaded-snapshot
   // inspector) currently shown? Drives both the dismiss button below and the
-  // Esc-to-dismiss handler right after it (issue #111). Deliberately does NOT
-  // clear liveView/viewKind on dismiss — dismissing just routes back through
+  // Esc-to-dismiss handler right after it (issue #111; extended for the
+  // dry-run plan view in issue #101). Deliberately does NOT clear
+  // liveView/viewKind/plan on dismiss — dismissing just routes back through
   // onSwitchMode("authoring"), the exact same call the "Authoring" toolbar
   // button already makes, so re-opening "Inspector" from the toolbar still
   // shows the last result (unchanged, pre-existing behavior).
-  const showingResultView = mode === "inspector" && liveView !== null && loadedSnapshot === null;
+  //
+  // Bugfix (issue #101 review): this no longer excludes `viewKind === "plan"`
+  // when `loadedSnapshot !== null`. PlanView is now allowed to render (see
+  // its render block below) whenever `viewKind === "plan"`, REGARDLESS of
+  // whether a snapshot is still loaded — a plan computed against a loaded
+  // snapshot's state must actually be shown, not silently shadowed by the
+  // (now stale, already-diffed) SnapshotViewer. `onLoadSnapshotFile` resets
+  // `viewKind` on every successful NEW snapshot load specifically so a
+  // freshly loaded snapshot is never itself shadowed by an old plan.
+  const showingPlanView = mode === "inspector" && viewKind === "plan" && plan !== null;
+  const showingResultView =
+    (mode === "inspector" && liveView !== null && loadedSnapshot === null) || showingPlanView;
 
   // Esc dismisses the live result view and returns to authoring, mirroring
   // the dismiss button. Only listens while the result view is actually
@@ -731,6 +787,14 @@ export function App() {
           const snapshot = parseSnapshot(parsed);
           setLoadedSnapshot(snapshot);
           setSnapshotLoadError(null);
+          // Bugfix (issue #101 review): a fresh, successfully loaded snapshot
+          // must always be visible immediately. Reset viewKind away from
+          // "plan" so a stale PlanView (from an earlier Plan click, possibly
+          // against a DIFFERENT previously loaded snapshot) never shadows the
+          // SnapshotViewer for this newly loaded file — see showingPlanView's
+          // doc comment above and the PlanView/SnapshotViewer render block
+          // below for how viewKind === "plan" now takes precedence.
+          setViewKind(null);
         } catch (err) {
           setLoadedSnapshot(null);
           setSnapshotLoadError(
@@ -792,6 +856,7 @@ export function App() {
     if (result.ok) {
       setLiveView(result.view);
       setViewKind("simulate");
+      setLastResultKind("simulate");
       setMode("inspector");
       const n = result.view.contracts.length;
       const msg = `Simulation complete — ${n} planned step(s). No contracts deployed (dry run).`;
@@ -815,6 +880,20 @@ export function App() {
 
     setSimulating(false);
   }, [simulating]);
+
+  // "Plan" (issue #101) — a synchronous, local dry-run create/skip/change
+  // preview. Unlike Simulate/Deploy this never touches the network: it
+  // diffs the desired spec (deployment + config, already computed above via
+  // graphToSpec) against `bestKnownCurrentView` (see its doc comment) using
+  // the pure computePlan() from spec/plan-diff.ts.
+  const handleShowPlan = useCallback(() => {
+    const spec = deploymentRef.current;
+    if (spec === null) return;
+    const computed = computePlan(spec, config, bestKnownCurrentView);
+    setPlan(computed);
+    setViewKind("plan");
+    setMode("inspector");
+  }, [config, bestKnownCurrentView]);
 
   // "Deploy (real)" opens a confirmation modal — it never POSTs directly.
   const onOpenDeployModal = useCallback(() => {
@@ -857,6 +936,7 @@ export function App() {
       if (result.ok) {
         setLiveView(result.view);
         setViewKind("deploy");
+        setLastResultKind("deploy");
         setMode("inspector");
         const n = result.view.contracts.length;
         setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
@@ -916,6 +996,17 @@ export function App() {
     if (name !== null) return `deployment "${name}" (${contracts} contract(s))`;
     return `${contracts} contract(s) in the current graph`;
   }, [deployment]);
+
+  // Compact plan preview for the "Deploy (real)" confirm modal (issue #101):
+  // a non-blocking, best-effort create/skip/change summary of the desired
+  // spec against `bestKnownCurrentView` (a loaded snapshot or the last real
+  // deploy's result — null if the studio has no known current state yet, in
+  // which case computePlan reports everything as "create"). This never
+  // blocks the Deploy button — it's a preview only.
+  const deployModalPlanSummary = useMemo(
+    () => computePlan(deployment, config, bestKnownCurrentView).summary,
+    [deployment, config, bestKnownCurrentView],
+  );
 
   const errorBannerStyle: React.CSSProperties = {
     position: "fixed",
@@ -1006,6 +1097,14 @@ export function App() {
           {simulating ? "Simulating…" : "Deploy (simulate)"}
         </button>
         <button
+          style={btnStyle}
+          onClick={handleShowPlan}
+          data-testid="deploy-plan-button"
+          title="Preview a create/skip/change plan for the current graph (no network call)"
+        >
+          Plan
+        </button>
+        <button
           style={deployRealBtnStyle}
           onClick={onOpenDeployModal}
           disabled={deploying}
@@ -1033,6 +1132,28 @@ export function App() {
               <br />
               <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
                 Network / RPC is resolved server-side from its environment.
+              </span>
+            </p>
+            {/* Compact plan preview (issue #101) — non-blocking, best-effort */}
+            <p
+              style={{ margin: "0 0 16px", fontSize: 12, lineHeight: 1.5 }}
+              data-testid="deploy-real-plan-summary"
+            >
+              Plan preview: {deployModalPlanSummary.toCreate} to create,{" "}
+              {deployModalPlanSummary.toSkip} unchanged,{" "}
+              {deployModalPlanSummary.toChange} to change
+              {(deployModalPlanSummary.configToCreate > 0 ||
+                deployModalPlanSummary.configToSkip > 0) && (
+                <>
+                  {" "}
+                  ({deployModalPlanSummary.configToCreate} config step(s) to run,{" "}
+                  {deployModalPlanSummary.configToSkip} already done)
+                </>
+              )}
+              .{" "}
+              <span style={{ color: "var(--color-text-secondary)" }}>
+                Based on the last known state (loaded snapshot or last real
+                deploy) — not a live on-chain check.
               </span>
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1164,23 +1285,41 @@ export function App() {
         </ReactFlowProvider>
       )}
 
-      {mode === "inspector" && loadedSnapshot !== null && (
-        <SnapshotViewer snapshot={loadedSnapshot} themeMode={themeMode} />
+      {/* Dry-run plan/diff view (issue #101) — takes precedence over BOTH the
+          SnapshotViewer and the default Inspector whenever the most recent
+          inspector-mode action was "Plan" (bugfix, issue #101 review): this
+          previously required `loadedSnapshot === null`, which meant a plan
+          computed against a loaded snapshot's state (bestKnownCurrentView's
+          priority-1 source) was a silent no-op — the plan was computed but
+          the SnapshotViewer kept winning and nothing changed on screen. See
+          showingPlanView's doc comment above for why loading a NEW snapshot
+          (onLoadSnapshotFile) resets viewKind so a stale plan never shadows
+          it in turn. */}
+      {mode === "inspector" && viewKind === "plan" && plan !== null && (
+        <PlanView plan={plan} />
       )}
 
-      {mode === "inspector" && loadedSnapshot === null && (
-        <Inspector
-          view={liveView ?? SAMPLE_DEPLOYMENT_VIEW}
-          contextLabel={
-            liveView !== null && viewKind !== null
-              ? viewKind === "deploy"
-                ? "Real deployment (broadcast on-chain)"
-                : "Simulated plan (dry run)"
-              : undefined
-          }
-          themeMode={themeMode}
-        />
-      )}
+      {mode === "inspector" &&
+        loadedSnapshot !== null &&
+        !(viewKind === "plan" && plan !== null) && (
+          <SnapshotViewer snapshot={loadedSnapshot} themeMode={themeMode} />
+        )}
+
+      {mode === "inspector" &&
+        loadedSnapshot === null &&
+        !(viewKind === "plan" && plan !== null) && (
+          <Inspector
+            view={liveView ?? SAMPLE_DEPLOYMENT_VIEW}
+            contextLabel={
+              liveView !== null && viewKind !== null && viewKind !== "plan"
+                ? viewKind === "deploy"
+                  ? "Real deployment (broadcast on-chain)"
+                  : "Simulated plan (dry run)"
+                : undefined
+            }
+            themeMode={themeMode}
+          />
+        )}
 
       {/* Result-view dismiss control (issue #111) — a fixed, high-z-index ✕
           reachable independent of the (horizontally-scrollable, top-left)
