@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest";
 import { computePlan } from "../src/spec/plan-diff";
 import type { DeploymentSpec } from "@redeploy/core/spec";
 import type { ConfigSpec } from "@redeploy/config/steps";
-import type { DeploymentView } from "@redeploy/reader";
+import type { ArgValue, DeploymentView } from "@redeploy/reader";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -424,6 +424,141 @@ describe("computePlan — argument diff details", () => {
 // ---------------------------------------------------------------------------
 // Orphans — present in current but absent from desired
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Argument comparison — branch-coverage gaps (issue #101 review)
+// ---------------------------------------------------------------------------
+
+describe("computePlan — literalEqualsArgValue mismatched array shape", () => {
+  it("flags a change when desired is an array but current is a scalar", () => {
+    const desired = spec([
+      {
+        id: "token",
+        contract: "Token",
+        args: [{ kind: "literal", value: [1, 2] }],
+      },
+    ]);
+    const current = view({
+      contracts: [
+        {
+          id: "token",
+          contractName: "Token",
+          address: "0xabc",
+          // current[0] is a bare scalar, not an array.
+          args: [5],
+          links: { dependencies: [], libraries: {} },
+        },
+      ],
+    });
+
+    const plan = computePlan(desired, emptyConfig(), current);
+    expect(plan.contracts[0].action).toBe("change");
+    expect(plan.contracts[0].changes).toEqual(["args[0] changed"]);
+  });
+
+  it("flags a change when desired and current are both arrays but of different lengths", () => {
+    const desired = spec([
+      {
+        id: "token",
+        contract: "Token",
+        args: [{ kind: "literal", value: [1, 2, 3] }],
+      },
+    ]);
+    const current = view({
+      contracts: [
+        {
+          id: "token",
+          contractName: "Token",
+          address: "0xabc",
+          args: [[1, 2]],
+          links: { dependencies: [], libraries: {} },
+        },
+      ],
+    });
+
+    const plan = computePlan(desired, emptyConfig(), current);
+    expect(plan.contracts[0].action).toBe("change");
+    expect(plan.contracts[0].changes).toEqual(["args[0] changed"]);
+  });
+
+  it("flags a change when desired is a scalar but current is an array", () => {
+    const desired = spec([
+      {
+        id: "token",
+        contract: "Token",
+        args: [{ kind: "literal", value: 5 }],
+      },
+    ]);
+    const current = view({
+      contracts: [
+        {
+          id: "token",
+          contractName: "Token",
+          address: "0xabc",
+          // current[0] is an array, not a scalar.
+          args: [[1, 2]],
+          links: { dependencies: [], libraries: {} },
+        },
+      ],
+    });
+
+    const plan = computePlan(desired, emptyConfig(), current);
+    expect(plan.contracts[0].action).toBe("change");
+    expect(plan.contracts[0].changes).toEqual(["args[0] changed"]);
+  });
+});
+
+describe("computePlan — literal desired vs. arbitrary non-bigint object current", () => {
+  it("flags a change when current is a plain object with no $bigint tag", () => {
+    const desired = spec([
+      {
+        id: "vault",
+        contract: "Vault",
+        args: [{ kind: "literal", value: "0xabc" }],
+      },
+    ]);
+    const current = view({
+      contracts: [
+        {
+          id: "vault",
+          contractName: "Vault",
+          address: "0xabc",
+          // An arbitrary Record<string, ArgValue> shape (e.g. a struct-like
+          // resolved arg) — has no LiteralValue counterpart, so it must never
+          // be treated as equal, even though it isn't a bigint or an array.
+          args: [{ some: "struct-like-value" } as unknown as ArgValue],
+          links: { dependencies: [], libraries: {} },
+        },
+      ],
+    });
+
+    const plan = computePlan(desired, emptyConfig(), current);
+    expect(plan.contracts[0].action).toBe("change");
+    expect(plan.contracts[0].changes).toEqual(["args[0] changed"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// config.orderedSteps undefined — `?? []` fallback (issue #101 review)
+// ---------------------------------------------------------------------------
+
+describe("computePlan — config.orderedSteps undefined", () => {
+  it("falls back to an empty array instead of throwing when orderedSteps is absent", () => {
+    // Simulates a caller/deserialized ConfigSpec that doesn't strictly honor
+    // the (non-optional) `orderedSteps` field — e.g. hand-built or
+    // JSON-parsed data that omits it. The `?? []` fallback in computePlan
+    // must handle this gracefully rather than throwing on an undefined spread.
+    const configMissingOrderedSteps = {
+      version: 1,
+      steps: [{ kind: "setX", id: "set-fee", target: "vault", function: "setFee" }],
+    } as unknown as ConfigSpec;
+
+    const plan = computePlan(spec([]), configMissingOrderedSteps, null);
+
+    expect(plan.configSteps).toEqual([{ id: "set-fee", kind: "setX", action: "create" }]);
+    expect(plan.summary.configToCreate).toBe(1);
+  });
+});
 
 describe("computePlan — orphans (present in current, absent from desired)", () => {
   it("surfaces an orphan contract informationally, not as an action", () => {

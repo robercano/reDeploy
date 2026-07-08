@@ -524,6 +524,21 @@ export function App() {
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
 
+  // Provenance of `liveView`, tracked SEPARATELY from `viewKind` (bugfix,
+  // issue #101 review). `viewKind` is the RENDER discriminator — it changes
+  // to "plan" as soon as the user clicks Plan, even though `liveView` itself
+  // (and what produced it) hasn't changed. If `bestKnownCurrentView` below
+  // keyed off `viewKind === "deploy"`, then after Plan #1 (which correctly
+  // diffs against a real deploy's liveView) `viewKind` becomes "plan" and
+  // every SUBSEQUENT Plan click / deploy-modal summary would see
+  // `bestKnownCurrentView === null` and wrongly show everything as "create"
+  // — even though a real deploy's result is still sitting in `liveView`.
+  // `lastResultKind` instead reflects ONLY "what kind of network result is
+  // `liveView`" and is updated exclusively by handleSimulate/handleDeploy,
+  // never by handleShowPlan, so it survives any number of subsequent Plan
+  // clicks.
+  const [lastResultKind, setLastResultKind] = useState<"simulate" | "deploy" | null>(null);
+
   // Dry-run plan/diff (issue #101): the last computed DeploymentPlan, shown
   // by <PlanView> in inspector mode when viewKind === "plan". Computed
   // synchronously (no network I/O) by handleShowPlan below.
@@ -635,17 +650,18 @@ export function App() {
   // whichever of these the studio already holds, in priority order:
   //   1. A loaded deployment snapshot (SnapshotViewer / issue #105) — the
   //      user explicitly opted into diffing against this state.
-  //   2. The `done` view from the most recent REAL deploy (viewKind ===
-  //      "deploy") — a simulate's view is intentionally excluded here since
-  //      it always has address: null and is not "current state", it's a
-  //      previous dry run.
+  //   2. The `done` view from the most recent REAL deploy (`lastResultKind
+  //      === "deploy"` — see its doc comment above for why this is NOT
+  //      `viewKind`) — a simulate's view is intentionally excluded here
+  //      since it always has address: null and is not "current state", it's
+  //      a previous dry run.
   //   3. Otherwise null — no known current state; computePlan treats that as
   //      "everything is create" and PlanView renders an explanatory note.
   const bestKnownCurrentView = useMemo<DeploymentView | null>(() => {
     if (loadedSnapshot !== null) return snapshotToDeploymentView(loadedSnapshot);
-    if (viewKind === "deploy" && liveView !== null) return liveView;
+    if (lastResultKind === "deploy" && liveView !== null) return liveView;
     return null;
-  }, [loadedSnapshot, viewKind, liveView]);
+  }, [loadedSnapshot, lastResultKind, liveView]);
 
   // Clean up the success banner auto-dismiss timer on unmount.
   useEffect(() => {
@@ -704,8 +720,16 @@ export function App() {
   // onSwitchMode("authoring"), the exact same call the "Authoring" toolbar
   // button already makes, so re-opening "Inspector" from the toolbar still
   // shows the last result (unchanged, pre-existing behavior).
-  const showingPlanView =
-    mode === "inspector" && loadedSnapshot === null && viewKind === "plan" && plan !== null;
+  //
+  // Bugfix (issue #101 review): this no longer excludes `viewKind === "plan"`
+  // when `loadedSnapshot !== null`. PlanView is now allowed to render (see
+  // its render block below) whenever `viewKind === "plan"`, REGARDLESS of
+  // whether a snapshot is still loaded — a plan computed against a loaded
+  // snapshot's state must actually be shown, not silently shadowed by the
+  // (now stale, already-diffed) SnapshotViewer. `onLoadSnapshotFile` resets
+  // `viewKind` on every successful NEW snapshot load specifically so a
+  // freshly loaded snapshot is never itself shadowed by an old plan.
+  const showingPlanView = mode === "inspector" && viewKind === "plan" && plan !== null;
   const showingResultView =
     (mode === "inspector" && liveView !== null && loadedSnapshot === null) || showingPlanView;
 
@@ -763,6 +787,14 @@ export function App() {
           const snapshot = parseSnapshot(parsed);
           setLoadedSnapshot(snapshot);
           setSnapshotLoadError(null);
+          // Bugfix (issue #101 review): a fresh, successfully loaded snapshot
+          // must always be visible immediately. Reset viewKind away from
+          // "plan" so a stale PlanView (from an earlier Plan click, possibly
+          // against a DIFFERENT previously loaded snapshot) never shadows the
+          // SnapshotViewer for this newly loaded file — see showingPlanView's
+          // doc comment above and the PlanView/SnapshotViewer render block
+          // below for how viewKind === "plan" now takes precedence.
+          setViewKind(null);
         } catch (err) {
           setLoadedSnapshot(null);
           setSnapshotLoadError(
@@ -824,6 +856,7 @@ export function App() {
     if (result.ok) {
       setLiveView(result.view);
       setViewKind("simulate");
+      setLastResultKind("simulate");
       setMode("inspector");
       const n = result.view.contracts.length;
       const msg = `Simulation complete — ${n} planned step(s). No contracts deployed (dry run).`;
@@ -903,6 +936,7 @@ export function App() {
       if (result.ok) {
         setLiveView(result.view);
         setViewKind("deploy");
+        setLastResultKind("deploy");
         setMode("inspector");
         const n = result.view.contracts.length;
         setDeploySuccess(`Deployment complete — ${n} contract(s) deployed.`);
@@ -1251,15 +1285,25 @@ export function App() {
         </ReactFlowProvider>
       )}
 
-      {mode === "inspector" && loadedSnapshot !== null && (
-        <SnapshotViewer snapshot={loadedSnapshot} themeMode={themeMode} />
-      )}
-
-      {/* Dry-run plan/diff view (issue #101) — replaces the default Inspector
-          whenever the most recent inspector-mode action was "Plan". */}
-      {mode === "inspector" && loadedSnapshot === null && viewKind === "plan" && plan !== null && (
+      {/* Dry-run plan/diff view (issue #101) — takes precedence over BOTH the
+          SnapshotViewer and the default Inspector whenever the most recent
+          inspector-mode action was "Plan" (bugfix, issue #101 review): this
+          previously required `loadedSnapshot === null`, which meant a plan
+          computed against a loaded snapshot's state (bestKnownCurrentView's
+          priority-1 source) was a silent no-op — the plan was computed but
+          the SnapshotViewer kept winning and nothing changed on screen. See
+          showingPlanView's doc comment above for why loading a NEW snapshot
+          (onLoadSnapshotFile) resets viewKind so a stale plan never shadows
+          it in turn. */}
+      {mode === "inspector" && viewKind === "plan" && plan !== null && (
         <PlanView plan={plan} />
       )}
+
+      {mode === "inspector" &&
+        loadedSnapshot !== null &&
+        !(viewKind === "plan" && plan !== null) && (
+          <SnapshotViewer snapshot={loadedSnapshot} themeMode={themeMode} />
+        )}
 
       {mode === "inspector" &&
         loadedSnapshot === null &&
