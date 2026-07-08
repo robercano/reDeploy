@@ -238,10 +238,17 @@ function mapLiteralValue(value: LiteralValue, path: string): ArgumentType {
   if (Array.isArray(value)) {
     return value.map((item, i) => mapLiteralValue(item, `${path}[${i}]`));
   }
-  // Should be unreachable for valid LiteralValue; guards runtime surprises
+  // Should be unreachable for valid LiteralValue; guards runtime surprises.
+  // Use a bigint-safe replacer: a resolver (resolve/resolveSpec.ts) or other
+  // direct caller could hand us a runtime value (e.g. a bigint) outside the
+  // LiteralValue shape, and plain JSON.stringify throws a raw TypeError on
+  // bigint ("Do not know how to serialize a BigInt") instead of letting this
+  // function fail closed with a typed CompileError.
   throw new CompileError(
     "UNSUPPORTED_LITERAL",
-    `Unsupported literal value at ${path}: ${JSON.stringify(value)}`,
+    `Unsupported literal value at ${path}: ${JSON.stringify(value, (_key, v) =>
+      typeof v === "bigint" ? v.toString() : v,
+    )}`,
     path,
   );
 }

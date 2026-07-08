@@ -1488,6 +1488,86 @@ describe("deploy() — ResolverArg resolution end-to-end", () => {
     expect(state.sendTxCount).toBe(0);
   }, 30_000);
 
+  // -------------------------------------------------------------------------
+  // Prototype-pollution guard (issue #100 review fix): a resolver name that
+  // collides with an inherited Object.prototype member (e.g. "toString",
+  // "constructor", "hasOwnProperty", "valueOf") MUST fail closed with
+  // DeployError("UNKNOWN_RESOLVER") when it is NOT an own key of
+  // DeployOptions.resolvers — not silently resolve to the inherited built-in
+  // and let its return value sail through as a real constructor arg. Mirrors
+  // the "ghost" UNKNOWN_RESOLVER + zero-tx tests above, one per built-in name.
+  // -------------------------------------------------------------------------
+
+  it.each(["toString", "constructor", "hasOwnProperty", "valueOf"])(
+    "throws DeployError(UNKNOWN_RESOLVER) with ZERO tx sent for resolver name %j absent from DeployOptions.resolvers",
+    async (name) => {
+      tmpDir = makeTmpDir();
+      const state = makeProviderState();
+
+      const spec: DeploymentSpec = {
+        version: 1,
+        contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name }] }],
+      };
+
+      try {
+        await deploy({
+          spec,
+          provider: makeFakeProvider(state),
+          accounts: ACCOUNTS,
+          deploymentDir: tmpDir,
+          artifactResolver: makeTypedArtifactResolver({
+            Vault: buildTypedConstructorAbi(["uint256"]),
+          }),
+          // no `resolvers` option at all — registry is effectively {}
+        });
+        expect.fail(`should have thrown for resolver name ${name}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(DeployError);
+        const deployErr = err as DeployError;
+        expect(deployErr.code).toBe("UNKNOWN_RESOLVER");
+        expect(deployErr.message).toContain(name);
+      }
+
+      expect(state.sendTxCount).toBe(0);
+    },
+    30_000,
+  );
+
+  it('resolves a resolver LEGITIMATELY registered under the own key "toString" and deploys with its value', async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const resolvers: ResolverRegistry = {
+      toString: () => 99,
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "toString" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      resolvers,
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([99n]);
+  }, 30_000);
+
   it("does not require DeployOptions.resolvers for specs with no resolver args (backward compatible)", async () => {
     tmpDir = makeTmpDir();
     const state = makeProviderState();

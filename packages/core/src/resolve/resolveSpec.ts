@@ -118,14 +118,22 @@ export async function resolveSpecResolverArgs(
         continue;
       }
 
-      const resolver = options.registry[arg.name];
-      if (resolver === undefined) {
+      // Guard against prototype pollution: only OWN, enumerable keys of the
+      // injected registry may be looked up. A bare `options.registry[name]`
+      // would fall through to inherited Object.prototype members (e.g.
+      // "toString", "constructor", "hasOwnProperty", "valueOf") for names
+      // that are not actually registered, silently substituting a built-in
+      // function/behavior instead of failing closed on unknown resolver
+      // names. Mirrors the Map-based prototype-pollution guard already used
+      // in compile/compile.ts for future-id lookups.
+      if (!Object.hasOwn(options.registry, arg.name)) {
         throw new ResolveError(
           "UNKNOWN_RESOLVER",
           `Contract "${entry.id}" args[${i}] references unknown resolver "${arg.name}" — ` +
             `no resolver with this name is registered in DeployOptions.resolvers`,
         );
       }
+      const resolver = options.registry[arg.name];
 
       let value: LiteralValue;
       try {

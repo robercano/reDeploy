@@ -8,6 +8,8 @@ import {
 import { ResolveError } from "../src/resolve/errors.js";
 import type { Resolver, ResolverRegistry } from "../src/resolve/registry.js";
 import type { DeploymentSpec } from "../src/spec/types.js";
+import { compileSpec } from "../src/compile/compile.js";
+import { CompileError } from "../src/compile/errors.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -425,6 +427,156 @@ describe("resolveSpecResolverArgs — errors", () => {
       expect((err as ResolveError).message).toContain("raw string throw");
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSpecResolverArgs — prototype-pollution guard (fail-closed on
+// Object.prototype member names, issue #100 review fix)
+// ---------------------------------------------------------------------------
+//
+// A bare `options.registry[arg.name]` lookup on a plain object falls through
+// to inherited Object.prototype members for names that are NOT own keys of
+// the registry (e.g. "toString" resolves to Object.prototype.toString,
+// "hasOwnProperty" resolves to Object.prototype.hasOwnProperty, etc). This
+// silently substitutes a built-in function/value instead of failing closed
+// with UNKNOWN_RESOLVER, and — for functions like toString/valueOf that
+// don't throw — can invoke the inherited member and let its return value sail
+// through as a real constructor arg. The guard must reject these regardless
+// of whether the registry is empty or non-empty, as long as the name is NOT
+// an own key.
+
+describe("resolveSpecResolverArgs — prototype-pollution guard", () => {
+  it.each(["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"])(
+    "throws ResolveError(UNKNOWN_RESOLVER) for resolver name %j when absent from an EMPTY registry (fails closed, does not invoke the inherited Object.prototype member)",
+    async (name) => {
+      const spec: DeploymentSpec = {
+        version: 1,
+        contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver", name }] }],
+      };
+      try {
+        await resolveSpecResolverArgs(spec, {
+          registry: {},
+          params: {},
+          resolvedAddresses: {},
+          provider: makeStubProvider(),
+        });
+        expect.fail(`should have thrown for resolver name ${name}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ResolveError);
+        const resolveErr = err as ResolveError;
+        expect(resolveErr.code).toBe("UNKNOWN_RESOLVER");
+        expect(resolveErr.message).toContain(name);
+      }
+    },
+  );
+
+  it.each(["toString", "constructor", "hasOwnProperty", "valueOf"])(
+    "throws ResolveError(UNKNOWN_RESOLVER) for resolver name %j when absent from a NON-EMPTY registry",
+    async (name) => {
+      const registry: ResolverRegistry = { legit: () => "ok" };
+      const spec: DeploymentSpec = {
+        version: 1,
+        contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver", name }] }],
+      };
+      try {
+        await resolveSpecResolverArgs(spec, {
+          registry,
+          params: {},
+          resolvedAddresses: {},
+          provider: makeStubProvider(),
+        });
+        expect.fail(`should have thrown for resolver name ${name}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ResolveError);
+        expect((err as ResolveError).code).toBe("UNKNOWN_RESOLVER");
+      }
+    },
+  );
+
+  it("still invokes a resolver LEGITIMATELY registered under an own key that shares a built-in name (e.g. \"toString\")", async () => {
+    const resolverFn: Resolver = vi.fn(() => "0xLEGIT");
+    const registry: ResolverRegistry = { toString: resolverFn };
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver", name: "toString" }] }],
+    };
+    const result = await resolveSpecResolverArgs(spec, {
+      registry,
+      params: {},
+      resolvedAddresses: {},
+      provider: makeStubProvider(),
+    });
+    expect(resolverFn).toHaveBeenCalledOnce();
+    expect(result.contracts[0].args).toEqual([{ kind: "literal", value: "0xLEGIT" }]);
+  });
+
+  it("still invokes a resolver LEGITIMATELY registered under the own key \"hasOwnProperty\"", async () => {
+    const registry: ResolverRegistry = { hasOwnProperty: () => 123 };
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "resolver", name: "hasOwnProperty" }] },
+      ],
+    };
+    const result = await resolveSpecResolverArgs(spec, {
+      registry,
+      params: {},
+      resolvedAddresses: {},
+      provider: makeStubProvider(),
+    });
+    expect(result.contracts[0].args).toEqual([{ kind: "literal", value: 123 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSpecResolverArgs — unsupported resolver return type
+// ---------------------------------------------------------------------------
+//
+// Resolvers are typed to return `LiteralValue` (spec/types.ts), but since
+// they are ordinary trusted TypeScript code, nothing prevents a resolver
+// implementation from returning a value outside that shape at runtime (e.g.
+// via an `as Resolver` cast, or an untyped/JS caller). resolveSpecResolverArgs
+// itself performs no return-value validation — the value is substituted
+// as-is into a `{ kind: "literal" }` arg — so the currently-observable
+// fail-closed outcome surfaces one step later, at compileSpec() time, as
+// CompileError("UNSUPPORTED_LITERAL"). This documents/locks in that behavior.
+
+describe("resolveSpecResolverArgs — unsupported resolver return type", () => {
+  it.each([
+    ["bigint", 123n],
+    ["plain object", {}],
+    ["undefined", undefined],
+  ] as const)(
+    "a resolver returning an unsupported %s value fails closed at compileSpec() with UNSUPPORTED_LITERAL",
+    async (_label, value) => {
+      const registry: ResolverRegistry = {
+        // Cast needed: the runtime value is intentionally outside the
+        // LiteralValue type Resolver is declared to return, to exercise the
+        // fail-closed path for a resolver that violates its own contract.
+        r: (() => value) as unknown as Resolver,
+      };
+      const spec: DeploymentSpec = {
+        version: 1,
+        contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver", name: "r" }] }],
+      };
+
+      const resolved = await resolveSpecResolverArgs(spec, {
+        registry,
+        params: {},
+        resolvedAddresses: {},
+        provider: makeStubProvider(),
+      });
+
+      expect(() => compileSpec(resolved)).toThrow(CompileError);
+      try {
+        compileSpec(resolved);
+        expect.fail("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(CompileError);
+        expect((err as CompileError).code).toBe("UNSUPPORTED_LITERAL");
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
