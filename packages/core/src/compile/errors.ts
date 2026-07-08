@@ -14,6 +14,15 @@ export type CompileErrorCode =
   /** Expression evaluation failed (invalid syntax, unknown references, type errors). */
   | "EXPRESSION_EVAL_ERROR"
   /**
+   * A `{ kind: "resolver" }` arg reached compileSpec() unresolved. Resolver
+   * args must be pre-resolved to concrete literals BEFORE compileSpec() is
+   * called — deploy() does this automatically via its async pre-resolution
+   * pass (resolve/resolveSpec.ts). compileSpec() itself never invokes
+   * resolvers (that would require async I/O inside a synchronous builder
+   * callback) — see resolve/registry.ts for the full design.
+   */
+  | "UNRESOLVED_RESOLVER_ARG"
+  /**
    * An internal invariant was violated — e.g. a ref whose target id was not
    * registered as a future (which implies the caller bypassed validateSpec).
    */

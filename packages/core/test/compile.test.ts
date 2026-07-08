@@ -5,7 +5,7 @@ import {
   type ModuleParameterRuntimeValue,
   type NamedArtifactContractDeploymentFuture,
 } from "@nomicfoundation/ignition-core";
-import { compileSpec, CompileError } from "../src/index.js";
+import { compileSpec, CompileError, buildCreationOrder } from "../src/index.js";
 import type { DeploymentSpec } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -995,5 +995,85 @@ describe("compileSpec — expression args (ExprArg)", () => {
     expect(tokenFuture.constructorArgs[0]).toBe(registryFuture);
     expect(tokenFuture.constructorArgs[1]).toBe("My Token");
     expect(tokenFuture.constructorArgs[2]).toBe(2000n);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. ResolverArg — unresolved resolver args at compile time (issue #100, Layer 2)
+// ---------------------------------------------------------------------------
+//
+// compileSpec() is called by deploy() only AFTER its async pre-resolution
+// pass (resolve/resolveSpec.ts) has already replaced every `{ kind:
+// "resolver" }` arg with a concrete `{ kind: "literal" }` arg — so compileSpec()
+// itself should never see a resolver arg in the normal deploy() pipeline.
+// These tests exercise compileSpec()'s defensive behavior for direct callers
+// who pass a spec that still contains unresolved resolver args (mirrors the
+// "handles dependencies declared after dependents" style of defensive test
+// already used for ref/param args above).
+
+describe("compileSpec — UNRESOLVED_RESOLVER_ARG error (unresolved ResolverArg)", () => {
+  it("throws CompileError(UNRESOLVED_RESOLVER_ARG) for an unresolved resolver arg", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "resolver", name: "readDecimals" }],
+        },
+      ],
+    };
+    expect(() => compileSpec(spec)).toThrowError(CompileError);
+    try {
+      compileSpec(spec);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("UNRESOLVED_RESOLVER_ARG");
+      expect((err as CompileError).message).toContain("readDecimals");
+      expect((err as CompileError).path).toBe("contracts[id=token].args[0]");
+    }
+  });
+
+  it("compiles successfully once the resolver arg has been pre-substituted with a literal", () => {
+    // Simulates what deploy()'s pre-resolution pass does: replace the
+    // resolver arg with a concrete literal BEFORE calling compileSpec().
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "literal", value: 18 }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe(18);
+  });
+
+  it("resolver args contribute no build-order dependency edges (buildCreationOrder)", () => {
+    // A resolver arg referencing another contract id textually (in `args`)
+    // must NOT create a build-time dependency edge — v1 resolvers cannot
+    // depend on sibling contracts deploying in this same run (see
+    // resolve/registry.ts's scope boundary). Order here is declared with the
+    // "dependent" contract FIRST specifically to prove no edge was created:
+    // if buildCreationOrder had (incorrectly) added an edge, this ordering
+    // would either throw or silently reorder the entries.
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "resolver", name: "r", args: ["registry"] }],
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    };
+    const ordered = buildCreationOrder(spec.contracts);
+    // Declaration order is preserved exactly (no reordering forced by a
+    // phantom dependency edge).
+    expect(ordered.map((e) => e.id)).toEqual(["vault", "registry"]);
   });
 });

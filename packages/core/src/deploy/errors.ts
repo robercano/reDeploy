@@ -21,7 +21,21 @@ export type DeployErrorCode =
    * An internal invariant was violated during spec compilation
    * (propagated from CompileError). Should not happen for pre-validated specs.
    */
-  | "COMPILE_ERROR";
+  | "COMPILE_ERROR"
+  /**
+   * A `{ kind: "resolver" }` arg named a resolver that is not a key of the
+   * injected `DeployOptions.resolvers` registry. NOT caught by validateSpec
+   * — validateSpec has no visibility into the injected registry. See
+   * resolve/registry.ts for the full Resolver/ResolverRegistry contract.
+   */
+  | "UNKNOWN_RESOLVER"
+  /**
+   * A resolver function threw (or its returned Promise rejected) during
+   * deploy()'s async pre-resolution pass, or a spec parameter could not be
+   * coerced into the bigint shape ResolverContext.params requires. See
+   * resolve/resolveSpec.ts.
+   */
+  | "RESOLVER_ERROR";
 
 /**
  * Thrown by deploy() when the DeploymentSpec is invalid or cannot be compiled.

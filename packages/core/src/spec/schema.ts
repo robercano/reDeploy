@@ -114,6 +114,20 @@ const exprArgSchema = z.object({
 });
 
 /**
+ * `{ kind: "resolver", name: "<non-empty resolver name>", args?: <LiteralValue[]> }`
+ *
+ * Shape validation only — whether `name` is actually registered in the
+ * injected `ResolverRegistry` is NOT checked here (validateSpec has no
+ * visibility into the registry; see deploy/deploy.ts's pre-resolution pass
+ * and resolve/errors.ts's UNKNOWN_RESOLVER error for that check).
+ */
+export const resolverArgSchema = z.object({
+  kind: z.literal("resolver"),
+  name: z.string().min(1, { message: "resolver.name must be a non-empty string" }),
+  args: z.array(literalValueSchema).optional(),
+});
+
+/**
  * ContractArg discriminated union.
  * Unknown `kind` values produce a clear parse error.
  */
@@ -122,6 +136,7 @@ export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("k
   literalArgSchema,
   paramArgSchema,
   exprArgSchema,
+  resolverArgSchema,
 ]);
 
 // ---------------------------------------------------------------------------
