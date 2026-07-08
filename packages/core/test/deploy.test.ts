@@ -46,7 +46,7 @@ import * as path from "node:path";
 import { decodeDeployData } from "viem";
 import type { ArtifactResolver, Artifact, EIP1193Provider } from "@nomicfoundation/ignition-core";
 import { deploy, DeployError } from "../src/index.js";
-import type { DeploymentSpec } from "../src/index.js";
+import type { DeploymentSpec, ResolverRegistry } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — fake artifacts
@@ -1075,5 +1075,432 @@ describe("deploy() — ParamArg resolution end-to-end", () => {
       expect(deployErr.code).toBe("INVALID_SPEC");
       expect(deployErr.specErrors?.some((e) => e.code === "UNKNOWN_PARAM")).toBe(true);
     }
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// ResolverArg + DeployOptions.resolvers — typed resolver escape-hatch,
+// end-to-end (issue #100, Layer 2)
+// ---------------------------------------------------------------------------
+//
+// These tests exercise deploy()'s async pre-resolution pass end-to-end: a
+// resolver arg in the spec is invoked against the injected registry BEFORE
+// compileSpec() runs, and its return value is decoded out of the REAL
+// ABI-encoded constructor args Ignition sent on-chain — the same style as
+// the ParamArg end-to-end tests above.
+
+describe("deploy() — ResolverArg resolution end-to-end", () => {
+  let tmpDir: string;
+  afterEach(() => {
+    if (tmpDir) rmTmpDir(tmpDir);
+  });
+
+  it("resolves a resolver arg and passes its return value into the real deploy transaction", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const resolvers: ResolverRegistry = {
+      constThreshold: () => 42,
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "constThreshold" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      resolvers,
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([42n]);
+  }, 30_000);
+
+  it("resolves an async resolver arg", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const resolvers: ResolverRegistry = {
+      asyncThreshold: async () => {
+        await new Promise((r) => setTimeout(r, 1));
+        return 7;
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "asyncThreshold" }] },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      resolvers,
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([7n]);
+  }, 30_000);
+
+  it("passes ResolverArg.args and ctx.params (from spec.parameters) through to the resolver", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    let observedArgs: readonly unknown[] | undefined;
+    let observedParams: Record<string, bigint> | undefined;
+
+    const resolvers: ResolverRegistry = {
+      addMultiplier: (ctx, args) => {
+        observedArgs = args;
+        observedParams = ctx.params;
+        return Number(ctx.params["base"]) + Number(args[0]);
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { base: 100 },
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "resolver", name: "addMultiplier", args: [5] }],
+        },
+      ],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      resolvers,
+    });
+
+    expect(result.success).toBe(true);
+    expect(observedArgs).toEqual([5]);
+    expect(observedParams).toEqual({ base: 100n });
+
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["uint256"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    expect(decoded.args).toEqual([105n]);
+  }, 30_000);
+
+  it("ctx.params reflects DeployOptions.deploymentParameters overrides, not just the spec default", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    let observedParams: Record<string, bigint> | undefined;
+    const resolvers: ResolverRegistry = {
+      echoBase: (ctx) => {
+        observedParams = ctx.params;
+        return Number(ctx.params["base"]);
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { base: 1 }, // spec-declared default
+      contracts: [
+        { id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "echoBase" }] },
+      ],
+    };
+
+    await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["uint256"]),
+      }),
+      resolvers,
+      deploymentParameters: { Deployment: { base: 999 } },
+    });
+
+    expect(observedParams).toEqual({ base: 999n });
+  }, 30_000);
+
+  it("gives the resolver a live provider (ctx.provider) that can perform real on-chain reads", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const resolvers: ResolverRegistry = {
+      readCode: async (ctx) => {
+        const code = (await ctx.provider.request({
+          method: "eth_getCode",
+          params: ["0x0000000000000000000000000000000000000000", "latest"],
+        })) as string;
+        return code;
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "readCode" }] }],
+    };
+
+    const result = await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["bytes"]),
+      }),
+      resolvers,
+    });
+
+    expect(result.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["bytes"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: state.sentData[0] as `0x${string}`,
+    });
+    // The fake provider's eth_getCode handler always returns "0x6001".
+    expect(decoded.args).toEqual(["0x6001"]);
+  }, 30_000);
+
+  it("ctx.resolvedAddresses is empty for a fresh deployment (no prior journal)", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    let observedResolvedAddresses: Record<string, string> | undefined;
+    const resolvers: ResolverRegistry = {
+      echo: (ctx) => {
+        observedResolvedAddresses = ctx.resolvedAddresses;
+        return "ok";
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "echo" }] }],
+    };
+
+    await deploy({
+      spec,
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["string"]),
+      }),
+      resolvers,
+    });
+
+    expect(observedResolvedAddresses).toEqual({});
+  }, 30_000);
+
+  it("ctx.resolvedAddresses is populated from a PREVIOUS run's journal on a resumed deploy", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+    const provider = makeFakeProvider(state);
+
+    // Run 1: deploy just "registry" (no resolvers involved).
+    const firstResult = await deploy({
+      spec: { version: 1, contracts: [{ id: "registry", contract: "Registry" }] },
+      provider,
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({ Registry: [] }),
+    });
+    expect(firstResult.success).toBe(true);
+    const registryAddr = firstResult.deployedAddresses["registry"];
+    expect(registryAddr).toMatch(/^0x/);
+
+    // Run 2: SAME deploymentDir + default moduleId. The spec now also
+    // declares "vault" with a resolver arg that reads
+    // ctx.resolvedAddresses.registry — populated from run 1's journal by
+    // deploy()'s pre-resolution pass (resolve/resolveSpec.ts + this file's
+    // loadResolvedAddressesFromJournal helper).
+    let observedResolvedAddresses: Record<string, string> | undefined;
+    const resolvers: ResolverRegistry = {
+      echoRegistryAddr: (ctx) => {
+        observedResolvedAddresses = ctx.resolvedAddresses;
+        return ctx.resolvedAddresses["registry"] ?? "0x0";
+      },
+    };
+
+    const secondResult = await deploy({
+      spec: {
+        version: 1,
+        contracts: [
+          { id: "registry", contract: "Registry" },
+          {
+            id: "vault",
+            contract: "Vault",
+            args: [{ kind: "resolver", name: "echoRegistryAddr" }],
+          },
+        ],
+      },
+      provider,
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Registry: [],
+        Vault: buildTypedConstructorAbi(["address"]),
+      }),
+      resolvers,
+    });
+
+    expect(secondResult.success).toBe(true);
+    expect(observedResolvedAddresses).toEqual({ registry: registryAddr });
+
+    // registry is skipped (already complete in the journal) — only vault
+    // sends a new transaction. Its constructor arg must be the registry
+    // address read from ctx.resolvedAddresses.
+    const vaultData = state.sentData[state.sentData.length - 1];
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["address"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: vaultData as `0x${string}`,
+    });
+    expect((decoded.args?.[0] as string).toLowerCase()).toBe(registryAddr.toLowerCase());
+  }, 30_000);
+
+  it("throws DeployError(UNKNOWN_RESOLVER) when the resolver name is not in DeployOptions.resolvers", async () => {
+    tmpDir = makeTmpDir();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "ghost" }] }],
+    };
+
+    await expect(
+      deploy({
+        spec,
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["uint256"]),
+        }),
+        // no `resolvers` option at all
+      }),
+    ).rejects.toThrow(DeployError);
+
+    try {
+      await deploy({
+        spec,
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["uint256"]),
+        }),
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("UNKNOWN_RESOLVER");
+      expect(deployErr.message).toContain("ghost");
+    }
+  }, 30_000);
+
+  it("throws DeployError(RESOLVER_ERROR) when the resolver function throws", async () => {
+    tmpDir = makeTmpDir();
+
+    const resolvers: ResolverRegistry = {
+      boom: () => {
+        throw new Error("resolver blew up");
+      },
+    };
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "boom" }] }],
+    };
+
+    try {
+      await deploy({
+        spec,
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["uint256"]),
+        }),
+        resolvers,
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("RESOLVER_ERROR");
+      expect(deployErr.message).toContain("resolver blew up");
+    }
+  }, 30_000);
+
+  it("sends NO on-chain transactions before the resolver error is thrown (fails before compile)", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "ghost" }] }],
+    };
+
+    await expect(
+      deploy({
+        spec,
+        provider: makeFakeProvider(state),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["uint256"]),
+        }),
+      }),
+    ).rejects.toThrow(DeployError);
+
+    expect(state.sendTxCount).toBe(0);
+  }, 30_000);
+
+  it("does not require DeployOptions.resolvers for specs with no resolver args (backward compatible)", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const result = await deploy({
+      spec: { version: 1, contracts: [{ id: "reg", contract: "Registry" }] },
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+      // no `resolvers` option — must not be required
+    });
+
+    expect(result.success).toBe(true);
   }, 30_000);
 });

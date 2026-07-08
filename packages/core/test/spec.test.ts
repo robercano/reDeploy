@@ -780,3 +780,132 @@ describe("validateSpec — parameters shape", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// ResolverArg — typed resolver escape-hatch (issue #100, Layer 2)
+// ---------------------------------------------------------------------------
+//
+// NOTE: whether a resolver arg's `name` is actually registered in an injected
+// ResolverRegistry is NOT checked by validateSpec — validateSpec has no
+// visibility into the registry (that's deploy()'s job; see
+// resolve/resolveSpec.ts and deploy/deploy.ts). Only shape validation is
+// exercised here.
+
+describe("validateSpec — ResolverArg happy path", () => {
+  it("accepts a resolver arg with no args", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "token", contract: "Token", args: [{ kind: "resolver", name: "readDecimals" }] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a resolver arg with an args array of literal values", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "resolver", name: "computeSalt", args: ["v1", 42, true, null, [1, 2]] }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a mix of literal, ref, param, expr, and resolver args in the same contract", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { threshold: 3 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "Vault Name" },
+            { kind: "param", name: "threshold" },
+            { kind: "expr", expression: "1n + 1n" },
+            { kind: "resolver", name: "readOracle" },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not require the resolver name to be declared anywhere in the spec", () => {
+    // Unlike ParamArg, ResolverArg has no top-level declaration block to
+    // cross-check against — the registry is injected at deploy() time only.
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "resolver", name: "notDeclaredAnywhere" }] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — ResolverArg shape rejection", () => {
+  it("rejects a resolver arg with an empty name", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver", name: "" }] }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a resolver arg missing the name field", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "resolver" }] }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a resolver arg whose args contains a non-literal value (nested object)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "a",
+          contract: "A",
+          args: [{ kind: "resolver", name: "r", args: [{ nested: "object" }] }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a resolver arg whose args field is not an array", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "resolver", name: "r", args: "not-an-array" }] },
+      ],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an unknown arg kind (discriminated union round-trip safety)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "bogus", name: "r" }] }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+});

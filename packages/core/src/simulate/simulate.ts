@@ -81,7 +81,12 @@ export interface PlannedStep {
   /**
    * Constructor arguments as declared in the spec (ContractEntry.args).
    * RefArg values are still { kind: "ref", contract: "<id>" } — no address
-   * substitution is performed because nothing is deployed.
+   * substitution is performed because nothing is deployed. Likewise,
+   * ResolverArg values are still { kind: "resolver", name: "..." } —
+   * simulate() is plan-only and NEVER invokes resolvers (that would require
+   * a live provider and async I/O, which simulate() deliberately avoids; see
+   * this file's module doc). Only deploy()'s pre-resolution pass
+   * (resolve/resolveSpec.ts) actually calls resolver functions.
    * Undefined when the spec entry has no args.
    */
   readonly args?: ContractArg[];

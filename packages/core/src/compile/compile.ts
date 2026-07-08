@@ -119,6 +119,17 @@ export function buildCreationOrder(entries: readonly ContractEntry[]): ContractE
 
   // Build edges: entry depends on every ref-target, every after-id, and
   // every contract referenced in expressions.
+  //
+  // NOTE: `resolver` args (ResolverArg, Layer 2) intentionally contribute NO
+  // dependency edges here. v1 resolvers run in a single async pass BEFORE any
+  // future in this deployment run is created (see deploy/deploy.ts and
+  // resolve/resolveSpec.ts) and cannot reference a sibling contract deploying
+  // in this same run — that is an explicit v1 scope boundary documented in
+  // resolve/registry.ts. By the time buildCreationOrder() runs (inside
+  // compileSpec(), called from deploy() AFTER the resolver pre-pass),
+  // resolver args have already been replaced by literal args, so this falls
+  // through to the same "no edge" behavior as `param` args below without any
+  // special-casing needed.
   for (const entry of entries) {
     const deps = new Set<string>();
     // Ref args
@@ -138,6 +149,7 @@ export function buildCreationOrder(entries: readonly ContractEntry[]): ContractE
           // Otherwise, the validator will catch it as a missing reference
         }
       }
+      // `param` and `resolver` args add no edges (see NOTE above).
     }
     // After constraints
     for (const afterId of entry.after ?? []) {
@@ -392,6 +404,23 @@ export function compileSpec(
             }
             throw err;
           }
+        }
+        if (arg.kind === "resolver") {
+          // compileSpec() never invokes resolvers itself — see
+          // resolve/registry.ts and this error code's doc comment
+          // (compile/errors.ts). deploy() always pre-resolves resolver args
+          // via resolve/resolveSpec.ts BEFORE calling compileSpec(), so this
+          // should be unreachable through the normal deploy() pipeline. It
+          // fires only if compileSpec() is called directly with a spec that
+          // still contains unresolved resolver args.
+          throw new CompileError(
+            "UNRESOLVED_RESOLVER_ARG",
+            `Resolver arg "${arg.name}" was not pre-resolved before compileSpec() was called. ` +
+              `Resolver args must be resolved to concrete literals first — deploy() does this ` +
+              `automatically via its pre-resolution pass (resolve/resolveSpec.ts). If you are ` +
+              `calling compileSpec() directly, call resolveSpecResolverArgs() on the spec first.`,
+            argPath,
+          );
         }
         // arg.kind === "literal"
         return mapLiteralValue(arg.value, argPath);

@@ -8,6 +8,7 @@ export type {
   LiteralArg,
   ParamArg,
   ExprArg,
+  ResolverArg,
   LiteralScalar,
   LiteralValue,
   ContractArg,
@@ -15,7 +16,12 @@ export type {
   DeploymentSpec,
 } from "./types.js";
 
-export { contractArgSchema, contractEntrySchema, deploymentSpecSchema } from "./schema.js";
+export {
+  contractArgSchema,
+  contractEntrySchema,
+  deploymentSpecSchema,
+  resolverArgSchema,
+} from "./schema.js";
 
 export type { SpecError, SpecErrorCode, ValidateResult } from "./validate.js";
 export { validateSpec } from "./validate.js";

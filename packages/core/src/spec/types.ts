@@ -90,10 +90,44 @@ export interface ExprArg {
 }
 
 /**
- * A constructor argument for a contract: a ref to another contract, a literal
- * value, a named parameter, or a computed expression.
+ * A typed resolver escape-hatch: a constructor argument value computed at
+ * deploy time by an injected TypeScript function (a "resolver") rather than
+ * evaluated by the safe expression language (ExprArg, Layer 1).
+ *
+ * Resolvers exist for values that Layer 1's expression language cannot
+ * produce because they require actual on-chain reads or arbitrary
+ * computation (e.g. reading a value from an already-deployed external
+ * contract, calling a library, hitting an oracle). A `ResolverArg` names a
+ * resolver function that must be present in the `ResolverRegistry` injected
+ * via `DeployOptions.resolvers` (see `resolve/registry.ts`); `deploy()` runs
+ * an async pre-resolution pass BEFORE compiling the spec that invokes the
+ * named resolver and substitutes its return value as a concrete literal.
+ *
+ * See `resolve/registry.ts` for the full `Resolver`/`ResolverContext`
+ * contract, the v1 scope boundary (no sibling-contract address reads), and
+ * the security/trust-boundary notes (resolvers are trusted, in-repo code —
+ * never loaded dynamically from untrusted input).
+ *
+ * @example
+ * ```ts
+ * { kind: "resolver", name: "readOracleDecimals" }
+ * { kind: "resolver", name: "computeSalt", args: ["v1", 42] }
+ * ```
  */
-export type ContractArg = RefArg | LiteralArg | ParamArg | ExprArg;
+export interface ResolverArg {
+  readonly kind: "resolver";
+  /** The resolver name — must be a key in the injected ResolverRegistry. */
+  readonly name: string;
+  /** Optional literal arguments passed positionally to the resolver function. */
+  readonly args?: readonly LiteralValue[];
+}
+
+/**
+ * A constructor argument for a contract: a ref to another contract, a literal
+ * value, a named parameter, a computed expression, or a typed resolver
+ * escape-hatch.
+ */
+export type ContractArg = RefArg | LiteralArg | ParamArg | ExprArg | ResolverArg;
 
 /**
  * A single contract entry in a deployment spec.

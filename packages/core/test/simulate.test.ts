@@ -514,3 +514,87 @@ describe("simulate — same artifact deployed multiple times", () => {
     expect(steps.every((s) => s.contract === "Token")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. ResolverArg — plan-only pass-through, never invoked (issue #100, Layer 2)
+// ---------------------------------------------------------------------------
+//
+// simulate() is validate + topo-sort only — it never touches a provider or
+// invokes a resolver (there is no `resolvers` registry parameter on simulate()
+// at all). A resolver arg must appear in the plan exactly as declared, same
+// as ref/param/expr args do today.
+
+describe("simulate — ResolverArg pass-through", () => {
+  it("includes a resolver arg unchanged (kind, name, args) in the planned step", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "resolver", name: "readOracle", args: ["v1", 42] }],
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    expect(steps[0].args).toEqual([{ kind: "resolver", name: "readOracle", args: ["v1", 42] }]);
+  });
+
+  it("does not add a dependency edge for a resolver arg (v1 resolvers have no sibling deps)", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "resolver", name: "readOracle" }],
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.dependsOn).toEqual([]);
+  });
+
+  it("never invokes the resolver — simulate() has no registry parameter and stays synchronous", () => {
+    // There is no way to pass a ResolverRegistry to simulate() at all — this
+    // test documents that fact via the type signature (simulate(spec) takes
+    // exactly one argument) and re-asserts the synchronous, side-effect-free
+    // contract already covered by "no chain / fs side effects" above.
+    expect(simulate.length).toBe(1);
+    const result = simulate({
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", args: [{ kind: "resolver", name: "anything" }] }],
+    });
+    expect(result).not.toBeInstanceOf(Promise);
+    expect(assertOk(result)).toHaveLength(1);
+  });
+
+  it("mixes a resolver arg with ref/literal/param/expr args in the same step's args list", () => {
+    const result = simulate({
+      version: 1,
+      parameters: { threshold: 1 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "Vault Name" },
+            { kind: "param", name: "threshold" },
+            { kind: "expr", expression: "1n + 1n" },
+            { kind: "resolver", name: "readOracle" },
+          ],
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.args).toHaveLength(5);
+    expect(vault.args?.[4]).toEqual({ kind: "resolver", name: "readOracle" });
+    // Only the ref contributes a dependency edge.
+    expect(vault.dependsOn).toEqual(["registry"]);
+  });
+});
