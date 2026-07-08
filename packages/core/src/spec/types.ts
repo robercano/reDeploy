@@ -63,10 +63,37 @@ export interface ParamArg {
 }
 
 /**
- * A constructor argument for a contract: a ref to another contract, a literal
- * value, or a named parameter.
+ * A computed expression that is evaluated at compile time to produce a
+ * constructor argument value.
+ *
+ * Expressions support:
+ * - BigInt arithmetic: +, -, *, /
+ * - Comparison operators: <, >, <=, >=, ==, !=
+ * - Functions: min(), max(), keccak256(), abi.encode(), concat(), CREATE2()
+ * - References: params.<name> for parameter values, ${<contractId>} for deployed addresses
+ * - Conditionals: if(condition, thenValue, elseValue)
+ *
+ * The expression is safe and deterministic — no arbitrary code execution,
+ * no external I/O, no chain access.
+ *
+ * @example
+ * ```ts
+ * { kind: "expr", expression: "params.initialSupply * 2n" }
+ * { kind: "expr", expression: "if(params.useMaxCap > 0n, params.maxCap, params.defaultCap)" }
+ * { kind: "expr", expression: "keccak256(concat(abi.encode(params.data), ${otherContract}))" }
+ * ```
  */
-export type ContractArg = RefArg | LiteralArg | ParamArg;
+export interface ExprArg {
+  readonly kind: "expr";
+  /** The expression text to be evaluated at compile time. */
+  readonly expression: string;
+}
+
+/**
+ * A constructor argument for a contract: a ref to another contract, a literal
+ * value, a named parameter, or a computed expression.
+ */
+export type ContractArg = RefArg | LiteralArg | ParamArg | ExprArg;
 
 /**
  * A single contract entry in a deployment spec.

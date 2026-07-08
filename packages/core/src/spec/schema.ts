@@ -107,6 +107,12 @@ const paramArgSchema = z.object({
   name: z.string().min(1, { message: "param.name must be a non-empty string" }),
 });
 
+/** `{ kind: "expr", expression: "<non-empty expression>" }` */
+const exprArgSchema = z.object({
+  kind: z.literal("expr"),
+  expression: z.string().min(1, { message: "expr.expression must be a non-empty string" }),
+});
+
 /**
  * ContractArg discriminated union.
  * Unknown `kind` values produce a clear parse error.
@@ -115,6 +121,7 @@ export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("k
   refArgSchema,
   literalArgSchema,
   paramArgSchema,
+  exprArgSchema,
 ]);
 
 // ---------------------------------------------------------------------------

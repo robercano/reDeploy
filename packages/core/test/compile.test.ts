@@ -792,3 +792,208 @@ describe("compileSpec — param args resolve via m.getParameter()", () => {
     expect(f.dependencies.size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 13. ExprArg — computed expressions (issue #99)
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — expression args (ExprArg)", () => {
+  it("compiles a simple arithmetic expression to a bigint constructor arg", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "expr", expression: "100n + 50n" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe(150n);
+  });
+
+  it("compiles an expression with parameter references", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { baseAmount: 100, multiplier: 2 },
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "expr", expression: "params.baseAmount + params.multiplier" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe(102n);
+  });
+
+  it("extracts contract references from expressions for build-time ordering", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        // token declared first, vault uses it in an expression
+        { id: "token", contract: "Token", args: [{ kind: "literal", value: "TKN" }] },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "expr", expression: "${token}" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const tokenFuture = [...mod.futures].find((f) => f.id.includes("token"));
+    const vaultFuture = [...mod.futures].find((f) => f.id.includes("vault"));
+
+    expect(tokenFuture).toBeDefined();
+    expect(vaultFuture).toBeDefined();
+    // vault should depend on token via the expression
+    expect(vaultFuture!.dependencies.has(tokenFuture!)).toBe(true);
+  });
+
+  it("handles reverse-declared expression dependencies via build-time sort", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { cap: 1000 },
+      contracts: [
+        // vault declared FIRST (uses parameter in expression)
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "expr", expression: "params.cap + 10n" }],
+        },
+        // token declared SECOND
+        { id: "token", contract: "Token" },
+      ],
+    };
+    const mod = compileSpec(spec);
+    expect(mod.futures.size).toBe(2);
+    // Both should be compiled without error; sort is build-time only
+  });
+
+  it("compiles expressions with conditionals", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { isInitial: 1 },
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            {
+              kind: "expr",
+              expression: "if(params.isInitial > 0n, 1000000n, 100n)",
+            },
+          ],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe(1000000n);
+  });
+
+  it("compiles expressions with function calls (min, max, keccak256, concat)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { val1: 100, val2: 50 },
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "expr", expression: "min(params.val1, params.val2)" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe(50n);
+  });
+
+  it("compiles keccak256 expressions returning hex strings", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "expr", expression: 'keccak256("test")' }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    const result = f.constructorArgs[0];
+    expect(typeof result).toBe("string");
+    expect((result as string).startsWith("0x")).toBe(true);
+  });
+
+  it("throws CompileError(EXPRESSION_EVAL_ERROR) for invalid expressions", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "expr", expression: "invalid_function(5n)" }],
+        },
+      ],
+    };
+    expect(() => compileSpec(spec)).toThrowError(CompileError);
+    try {
+      compileSpec(spec);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("EXPRESSION_EVAL_ERROR");
+    }
+  });
+
+  it("throws CompileError(EXPRESSION_EVAL_ERROR) for missing parameter references", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "token",
+          contract: "Token",
+          args: [{ kind: "expr", expression: "params.unknownParam" }],
+        },
+      ],
+    };
+    expect(() => compileSpec(spec)).toThrowError(CompileError);
+    try {
+      compileSpec(spec);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("EXPRESSION_EVAL_ERROR");
+    }
+  });
+
+  it("handles expressions mixed with ref and literal args", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      parameters: { baseSupply: 1000 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "token",
+          contract: "Token",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "My Token" },
+            { kind: "expr", expression: "params.baseSupply * 2n" },
+          ],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const tokenFuture = asContractFuture([...mod.futures].find((f) => f.id.includes("token")));
+    const registryFuture = [...mod.futures].find((f) => f.id.includes("registry"));
+
+    expect(tokenFuture.constructorArgs[0]).toBe(registryFuture);
+    expect(tokenFuture.constructorArgs[1]).toBe("My Token");
+    expect(tokenFuture.constructorArgs[2]).toBe(2000n);
+  });
+});
