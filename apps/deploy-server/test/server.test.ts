@@ -205,6 +205,36 @@ describe("@redeploy/deploy-server — handleRequest", () => {
 
       expect(mock.statusCode).toBe(404);
     });
+
+    // Regression test: legal-but-malformed HTTP request-targets (e.g. a raw
+    // request line "GET // HTTP/1.1") are passed through by Node as `req.url`
+    // values that `new URL(url, "http://localhost")` throws on
+    // (`TypeError: Invalid URL`). handleRequest must derive the pathname
+    // without a throwing parse so a single malformed request can never crash
+    // the whole server (no try/catch or uncaughtException handler wraps it).
+    it("does not throw and responds 404 for a malformed request target '//'", () => {
+      const req = makeMockReq("GET", "//");
+      const mock = makeMockRes();
+
+      expect(() => {
+        handleRequest(req, mock.res);
+      }).not.toThrow();
+
+      expect(mock.statusCode).toBe(404);
+      expect(JSON.parse(mock.body)).toEqual({ error: "Not Found" });
+    });
+
+    it("does not throw and responds 404 for a malformed request target '///'", () => {
+      const req = makeMockReq("GET", "///");
+      const mock = makeMockRes();
+
+      expect(() => {
+        handleRequest(req, mock.res);
+      }).not.toThrow();
+
+      expect(mock.statusCode).toBe(404);
+      expect(JSON.parse(mock.body)).toEqual({ error: "Not Found" });
+    });
   });
 });
 

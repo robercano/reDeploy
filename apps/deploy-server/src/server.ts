@@ -529,10 +529,14 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
 
   // Match on the URL pathname only, so a trailing query string (e.g.
-  // "/api/deployment?foo=1") still routes correctly. `url` here is
-  // request-target (path + optional query), never a full origin, so a base
-  // is only needed to satisfy the WHATWG URL constructor.
-  const pathname = url !== undefined ? new URL(url, "http://localhost").pathname : undefined;
+  // "/api/deployment?foo=1") still routes correctly. We deliberately avoid
+  // `new URL(...)` here: Node passes through legal-but-malformed
+  // request-targets (e.g. "//", "///") that make the WHATWG URL parser throw
+  // `TypeError: Invalid URL`, which would otherwise crash the whole process
+  // (no try/catch, no uncaughtException handler) on a single bad request. A
+  // plain split on "?"/"#" can never throw and is sufficient since `url` is
+  // always a request-target (path + optional query), never a full origin.
+  const pathname = url !== undefined ? url.split(/[?#]/)[0] : undefined;
 
   if (method === "GET" && url === "/health") {
     const body = JSON.stringify({ status: "ok" });
