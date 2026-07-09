@@ -1,6 +1,27 @@
 # Getting Started
 
-From a fresh repo created off this template to a working orchestrator, in 6 steps. Budget ~20 minutes.
+## reDeploy product
+
+Get a local Anvil deployment running end to end:
+
+1. **Install** — `pnpm install` (Node ≥ 20, pnpm workspaces).
+2. **Build contract artifacts** — `forge build` (from `contracts/`, or the repo's `build` gate) to produce
+   `contracts/out`, which the deploy-server resolves via `FOUNDRY_OUT`.
+3. **Build the libs** — `pnpm -F @redeploy/core -F @redeploy/config -F @redeploy/reader -F @redeploy/deploy-server build`.
+4. **Run the deploy-server + studio** — `pnpm -r --parallel --filter @redeploy/deploy-server --filter @redeploy/studio dev`
+   (deploy-server on `:8787`, studio on `:5173`; the studio's Vite dev server proxies `/api` to the
+   deploy-server, so both must run together).
+5. **Walk the flow** — in the studio, click `Deploy (simulate)` to preview a plan (no chain writes), then
+   `Deploy (real)` (confirm in the modal) to broadcast on-chain, and watch the read-only Inspector render
+   deployed addresses and config-step status.
+
+For the full step-by-step version — starting Anvil, configuring `.env`, and curling the SSE endpoints directly
+— see **[`RUNBOOK-anvil-deploy.md`](RUNBOOK-anvil-deploy.md)**.
+
+## Orchestrator harness (contributor tooling)
+
+This repo is developed using the orchestrated multi-agent Claude Code setup described below. From a fresh repo
+created off this template to a working orchestrator, in 6 steps. Budget ~20 minutes.
 
 ## Prerequisites
 - Claude Code installed and authenticated (`claude` runs).

@@ -1,5 +1,46 @@
 # Architecture
 
+## reDeploy product
+
+reDeploy is a resumable, idempotent deployment system built on Hardhat Ignition. The end-to-end pipeline is
+**simulate → deploy → inspect**:
+
+1. **Author** — a `DeploymentSpec` is authored either by hand or via the studio's drag-and-drop canvas.
+2. **Simulate** (plan-only, no chain writes) — `POST /api/simulate` on the deploy-server calls `@redeploy/core`'s
+   `simulate()` and streams back the planned steps (SSE), so a user can preview what would happen before
+   committing to a real deploy.
+3. **Deploy** (real, broadcasts on-chain) — `POST /api/deploy` calls `@redeploy/core`'s `deploy()`, which wraps
+   Hardhat Ignition's module engine/journal for idempotent, resumable execution, and streams progress + result
+   (SSE).
+4. **Inspect** — `GET /api/deployment` (and the studio's read-only Inspector) reads the on-disk Ignition journal
+   via `@redeploy/reader` and renders current deployment + config-step state.
+
+Where the deploy-server sits in the dependency graph:
+
+```
+  studio (apps/studio, :5173)
+       │  POST/GET /api  (Vite proxy → :8787)
+       ▼
+  deploy-server (apps/deploy-server, :8787)
+       │  simulate() / deploy() / readDeployment()
+       ▼
+  @redeploy/core  +  @redeploy/reader
+       │  wraps
+       ▼
+  Hardhat Ignition (module engine, journal, resume)
+       │  reads compiled artifacts (FOUNDRY_OUT)
+       ▼
+  contracts/ (Foundry project — `forge build` → contracts/out)
+```
+
+See the root [`README.md`](../README.md) for the full endpoint/env reference and
+[`RUNBOOK-anvil-deploy.md`](RUNBOOK-anvil-deploy.md) for a hands-on local walkthrough against Anvil.
+
+## Orchestrator harness (contributor tooling)
+
+This repo is built using the orchestrated multi-agent Claude Code setup described below — the harness that
+drives day-to-day development on reDeploy itself, distinct from the reDeploy product described above.
+
 ## The topology
 ```
         YOU  — plan approval (planning) · /workflows glance (standup) · PR review (demo)
