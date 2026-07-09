@@ -49,6 +49,12 @@
       "path": "apps/deploy-server",
       "description": "@redeploy/deploy-server — HTTP server exposing deployment simulation and execution as an API (node:http, no framework). GET /health now; POST /api/simulate (SSE) in a follow-up.",
       "owner": ""
+    },
+    {
+      "name": "website",
+      "path": "apps/website",
+      "description": "@redeploy/website — public marketing site (Vite static build): sells reDeploy's benefits and showcases features with Studio screenshots. No backend.",
+      "owner": ""
     }
   ],
 
