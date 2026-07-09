@@ -43,6 +43,18 @@ const PACKAGE_JSON_PATH = path.resolve(__dirname, "../package.json");
 const FALLBACK_TOOL_VERSION = "0.0.0";
 
 /**
+ * Resolve the deployment directory STRICTLY from server env — never from any
+ * client-supplied input (query param, header, body, etc.). This is shared by
+ * `handleDeploy` and `handleGetDeployment` so both stay in sync.
+ *
+ * SECURITY: keeping this env-only (no request-derived input) avoids
+ * path-traversal / arbitrary-file-read via a client-controlled directory.
+ */
+function resolveDeploymentDir(): string {
+  return process.env["DEPLOYMENT_DIR"] ?? path.join(os.tmpdir(), "redeploy-deployments", "default");
+}
+
+/**
  * Read this package's `version` field, for stamping into deployment
  * snapshots as `toolVersion`. Never throws — falls back to
  * `FALLBACK_TOOL_VERSION` on any read/parse error.
@@ -287,8 +299,7 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   // Default deploymentDir: an OS-temp-based stable directory.
   // We use "redeploy-default" as a stable-ish sub-path so repeated deploys
   // from the same server instance are resumable (same dir → journal replay).
-  const deploymentDir =
-    process.env["DEPLOYMENT_DIR"] ?? path.join(os.tmpdir(), "redeploy-deployments", "default");
+  const deploymentDir = resolveDeploymentDir();
 
   // Ensure deploymentDir exists before calling deploy() (Ignition expects it).
   try {
@@ -448,16 +459,84 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   res.end();
 }
 
+/** Empty DeploymentView returned for a fresh / never-deployed deploymentDir. */
+const EMPTY_DEPLOYMENT_VIEW: DeploymentView = { contracts: [], configSteps: [], warnings: [] };
+
+/**
+ * Handle `GET /api/deployment`.
+ *
+ * Reads the TRUE current on-chain/journal deployment state via
+ * `readDeployment()` and returns it as JSON. This is a read-only endpoint
+ * used by the studio to fetch live state on demand (e.g. to diff against a
+ * spec before deploying).
+ *
+ * The deployment directory is resolved STRICTLY from server env via
+ * `resolveDeploymentDir()` — no client-supplied input (query param, header,
+ * etc.) may influence which directory is read. This is a deliberate security
+ * boundary: accepting a client-controlled path would open a path-traversal /
+ * arbitrary-file-read hole.
+ *
+ * Responses:
+ *   - 200 { contracts, configSteps, warnings } — DeploymentView, on success.
+ *   - 200 { contracts: [], configSteps: [], warnings: [] } — when
+ *     readDeployment() throws ReadError("DEPLOYMENT_DIR_NOT_FOUND"): a fresh /
+ *     never-deployed directory is not an error, it's the empty state.
+ *   - 500 { error: "Failed to read deployment state" } — any other ReadError
+ *     (e.g. JOURNAL_READ_ERROR) or unexpected error. SECURITY: the response
+ *     body and stderr log never include the deployment directory path, the
+ *     raw error message, or any env value.
+ */
+function handleGetDeployment(_req: IncomingMessage, res: ServerResponse): void {
+  const deploymentDir = resolveDeploymentDir();
+
+  let deployment: DeploymentView;
+  try {
+    deployment = readDeployment({ deploymentDir });
+  } catch (err) {
+    if (err instanceof ReadError && err.code === "DEPLOYMENT_DIR_NOT_FOUND") {
+      deployment = EMPTY_DEPLOYMENT_VIEW;
+    } else {
+      const body = JSON.stringify({ error: "Failed to read deployment state" });
+      res.writeHead(500, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      });
+      res.end(body);
+      // Generic log line only — never the deployment dir path or raw error.
+      process.stderr.write("[deploy-server] failed to read deployment state\n");
+      return;
+    }
+  }
+
+  const body = JSON.stringify(deployment);
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
 /**
  * Dispatch an incoming request to the appropriate route handler.
  *
  * Routes:
- *   GET  /health        → 200 { status: "ok" }
- *   POST /api/simulate  → 200 SSE stream (planned steps or errors)
- *   POST /api/deploy    → 200 SSE stream (deploy progress + result)
+ *   GET  /health          → 200 { status: "ok" }
+ *   GET  /api/deployment  → 200 { contracts, configSteps, warnings } (or 500)
+ *   POST /api/simulate    → 200 SSE stream (planned steps or errors)
+ *   POST /api/deploy      → 200 SSE stream (deploy progress + result)
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
+
+  // Match on the URL pathname only, so a trailing query string (e.g.
+  // "/api/deployment?foo=1") still routes correctly. We deliberately avoid
+  // `new URL(...)` here: Node passes through legal-but-malformed
+  // request-targets (e.g. "//", "///") that make the WHATWG URL parser throw
+  // `TypeError: Invalid URL`, which would otherwise crash the whole process
+  // (no try/catch, no uncaughtException handler) on a single bad request. A
+  // plain split on "?"/"#" can never throw and is sufficient since `url` is
+  // always a request-target (path + optional query), never a full origin.
+  const pathname = url !== undefined ? url.split(/[?#]/)[0] : undefined;
 
   if (method === "GET" && url === "/health") {
     const body = JSON.stringify({ status: "ok" });
@@ -466,6 +545,11 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       "Content-Length": Buffer.byteLength(body),
     });
     res.end(body);
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/deployment") {
+    handleGetDeployment(req, res);
     return;
   }
 
