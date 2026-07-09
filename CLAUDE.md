@@ -29,6 +29,9 @@ verifiable deployments and a visual way to wire and inspect them.
     API to external systems.
   - `apps/studio/` — `@redeploy/studio`: visual tool (React + React Flow, added by its ticket) for drag-and-drop
     authoring of connections/config (emits spec files) and a deployment inspector.
+  - `apps/deploy-server/` — `@redeploy/deploy-server`: HTTP server (node:http, no framework) exposing
+    deployment **simulate** (plan-only) and **real deploy** over `@redeploy/core` (+ `@redeploy/reader`),
+    consumed by the studio.
   - `contracts/` — Foundry project: sample interconnected Solidity contracts used as deployment fixtures.
 
 ## Conventions
@@ -38,8 +41,8 @@ verifiable deployments and a visual way to wire and inspect them.
   build/test scripts) so worktree-isolated workers build and test their module in isolation.
 - Testing: vitest specs live in each package's `test/` dir; Solidity tests are `*.t.sol` under `contracts/test/`.
   Write/extend tests alongside every change.
-- Dependency direction: `core` is the base; `config` and `reader` build on `core`; `verify` and `studio` build
-  on those. Don't introduce cycles.
+- Dependency direction: `core` is the base; `config` and `reader` build on `core`; `verify`, `studio`, and
+  `deploy-server` build on those. Don't introduce cycles.
 - Definition of done: builds, typechecks, lints, tests pass, and coverage ≥ `coverage_threshold` (80) for the
   touched module; required review lenses approve.
 
