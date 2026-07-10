@@ -23,15 +23,19 @@ the sentinel change and does the actual restart. See
 ## Files
 
 - `systemd/redeploy-anvil.service` — local-only Anvil chain (127.0.0.1:8545), not exposed by the tunnel.
-- `systemd/redeploy-app.service` — studio (:5173) + deploy-server (:8787); the tunnel's only published
-  origin. `WorkingDirectory` is the repo-local `.serve/active` symlink.
+- `systemd/redeploy-app.service` — studio (:5173) + deploy-server (:8787); one of the tunnel's published
+  origins. `WorkingDirectory` is the repo-local `.serve/active` symlink.
+- `systemd/redeploy-website.service` — marketing website Vite dev server (:5180); the other published
+  tunnel origin. Rides the same `.serve/active` symlink as `redeploy-app.service`.
 - `systemd/redeploy-app.path` — watches `.serve/reload`; on change, triggers `redeploy-app-restart.service`.
   This is the restart mechanism `/test-pr --serve`/`--reset` relies on.
 - `systemd/redeploy-app-restart.service` — oneshot unit that runs `systemctl --user restart redeploy-app`;
   triggered by `redeploy-app.path`, not started/enabled directly.
 - `systemd/cloudflared-redeploy.service` — runs the named cloudflared tunnel with an explicit `--config`.
-- `redeploy-studio.yml.example` — the dedicated cloudflared config for that tunnel (ingress rules, credentials).
-- `install.sh` — idempotent installer: copies the unit templates into `~/.config/systemd/user/`
-  (skip-if-exists — never clobbers an edited copy), creates `.serve/` + `.serve/active` (pointed at the
-  repo's own checkout) if missing, and enables the `redeploy-app.path` sentinel watcher. Prints the
-  remaining manual steps (placeholder edits, enabling the other services). Safe to re-run.
+- `redeploy-studio.yml.example` — the dedicated cloudflared config for that tunnel: two ingress rules
+  (studio at `<STUDIO_HOSTNAME>` -> :5173, website at `<WEBSITE_HOSTNAME>` -> :5180) plus credentials.
+- `install.sh` — idempotent installer: copies the unit templates (including `redeploy-website.service`)
+  into `~/.config/systemd/user/` (skip-if-exists — never clobbers an edited copy), creates `.serve/` +
+  `.serve/active` (pointed at the repo's own checkout) if missing, and enables the `redeploy-app.path`
+  sentinel watcher. Prints the remaining manual steps (placeholder edits, enabling the other services).
+  Safe to re-run.
