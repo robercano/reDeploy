@@ -1,6 +1,11 @@
 [Unit]
 Description=reDeploy marketing website (always-on)
 After=network.target
+# Ordering only (NOT a Requires/Wants dependency): start after redeploy-app so
+# their ExecStartPre `pnpm install` runs don't race on the shared .serve/active
+# workspace node_modules on a cold boot. The website still starts fine on its own
+# if redeploy-app is stopped/failed — After= affects ordering, not requirement.
+After=redeploy-app.service
 
 [Service]
 # Rides the SAME repo-local `.serve/active` symlink as redeploy-app.service —

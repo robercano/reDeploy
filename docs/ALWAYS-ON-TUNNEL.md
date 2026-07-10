@@ -169,7 +169,10 @@ Templates: [`deploy/always-on/systemd/`](../deploy/always-on/systemd/)
   tunnel's other published origin. Its `WorkingDirectory` is the SAME repo-local `.serve/active`
   symlink `redeploy-app.service` uses, so `/test-pr --serve`/`--reset` repoint the served checkout for
   the website too (see section 9). Unlike `redeploy-app.service`, it has no `EnvironmentFile=` — the
-  website is a static marketing site with no backend, no RPC, no keys.
+  website is a static marketing site with no backend, no RPC, no keys. It is ordered `After=redeploy-app.service` (ordering only, not a hard
+  dependency) purely so the two units' cold-boot `pnpm install` runs don't race on the
+  shared `.serve/active` workspace; the website still starts on its own if `redeploy-app`
+  is stopped or failed.
 - **`redeploy-app.path`** — a path unit that watches the repo-local `.serve/reload` sentinel file
   (`PathModified=`) and triggers `redeploy-app-restart.service` whenever it changes.
 - **`redeploy-app-restart.service`** — a `Type=oneshot` unit, triggered only by `redeploy-app.path`,
