@@ -3,8 +3,13 @@ import react from "@vitejs/plugin-react";
 
 // Static marketing site: no backend, no proxy, no server-only deps to
 // externalize (unlike apps/studio, which imports @redeploy/core transitively).
+// Dev/preview ports are pinned to 5180 (strictPort) so `pnpm -F @redeploy/website dev`
+// never collides with the studio, which defaults to 5173.
 export default defineConfig({
   plugins: [react()],
+
+  server: { port: 5180, strictPort: true },
+  preview: { port: 5180, strictPort: true },
 
   build: {
     outDir: "dist",

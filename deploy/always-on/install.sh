@@ -10,7 +10,7 @@
 #   2. Copies this directory's unit templates into ~/.config/systemd/user/,
 #      WITHOUT overwriting any copy you've already edited (see "idempotent
 #      copy" below) — some of these templates still have placeholders
-#      (<NODE_BIN_DIR>, <STUDIO_HOSTNAME>, <TUNNEL_UUID>) that only you can
+#      (<NODE_BIN_DIR>, <STUDIO_HOSTNAME>, <WEBSITE_HOSTNAME>, <TUNNEL_UUID>) that only you can
 #      fill in, so silently clobbering an edited copy would lose that work.
 #   3. Creates the repo-local `.serve/` dir and points `.serve/active` at this
 #      repo's own checkout (the "main checkout" default target) if the
@@ -19,7 +19,7 @@
 #   5. Enables + starts ONLY `redeploy-app.path` (the sentinel-watcher — safe
 #      to enable unconditionally, it does nothing until the sentinel is
 #      touched). It deliberately does NOT enable/start redeploy-app,
-#      redeploy-anvil, or cloudflared-redeploy themselves, since those still
+#      redeploy-website, redeploy-anvil, or cloudflared-redeploy themselves, since those still
 #      need their placeholders filled in first; this script prints the
 #      remaining manual commands instead.
 #
@@ -95,6 +95,7 @@ copy_unit() {
 echo "▶ installing unit templates (skip-if-exists, .new alongside on conflict):"
 copy_unit redeploy-anvil.service
 copy_unit redeploy-app.service
+copy_unit redeploy-website.service
 copy_unit redeploy-app.path
 copy_unit redeploy-app-restart.service
 copy_unit cloudflared-redeploy.service
@@ -123,14 +124,15 @@ cat <<EOF
 
   1. Fill in placeholders in the installed unit files (if you haven't already):
        \$EDITOR $units_dst/redeploy-app.service         # <NODE_BIN_DIR>
-       \$EDITOR $units_dst/cloudflared-redeploy.service # <STUDIO_HOSTNAME> etc (see docs)
+       \$EDITOR $units_dst/redeploy-website.service     # <NODE_BIN_DIR>
+       \$EDITOR $units_dst/cloudflared-redeploy.service # <STUDIO_HOSTNAME> / <WEBSITE_HOSTNAME> etc (see docs)
      (redeploy-app.path / redeploy-app-restart.service / redeploy-anvil.service need no edits.)
 
   2. Create ~/.config/redeploy/env.anvil (see docs/ALWAYS-ON-TUNNEL.md section 5) if you
      haven't already.
 
   3. Enable + start the remaining services once placeholders are filled in:
-       systemctl --user enable --now redeploy-anvil redeploy-app cloudflared-redeploy
+       systemctl --user enable --now redeploy-anvil redeploy-app redeploy-website cloudflared-redeploy
 
   4. Keep services running after logout:
        loginctl enable-linger "\$USER"

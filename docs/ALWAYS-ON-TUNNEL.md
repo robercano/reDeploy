@@ -4,18 +4,20 @@
 
 Goal: `https://<STUDIO_HOSTNAME>` reachable from your phone anytime the PC + WSL2 are up, behind a
 Cloudflare Access login page, with the app pointed at a **local Anvil** chain (no real-money deploys
-possible).
+possible). The same named tunnel also publishes a second hostname, `https://<WEBSITE_HOSTNAME>`, which
+routes to the marketing website's Vite dev server on `:5180` — also gated by Cloudflare Access.
 
-This is built from three `systemd --user` services (Anvil, the studio + deploy-server, and a named
-`cloudflared` tunnel), a `systemd --user` path unit + oneshot restart service (the sentinel-driven
-restart mechanism, see section 6/9), plus a Cloudflare Access application in front of the hostname.
-Nothing here requires `sudo` — everything runs as your own user via `systemd --user`.
+This is built from four `systemd --user` services (Anvil, the studio + deploy-server, the marketing
+website, and a named `cloudflared` tunnel), a `systemd --user` path unit + oneshot restart service (the
+sentinel-driven restart mechanism, see section 6/9), plus a Cloudflare Access application in front of
+each hostname. Nothing here requires `sudo` — everything runs as your own user via `systemd --user`.
 
 Throughout this doc, substitute:
 
 | Placeholder | Meaning |
 |---|---|
-| `<STUDIO_HOSTNAME>` | The hostname you want to expose, e.g. `studio.example.com` |
+| `<STUDIO_HOSTNAME>` | The hostname you want to expose for the studio, e.g. `studio.example.com` |
+| `<WEBSITE_HOSTNAME>` | The hostname you want to expose for the marketing website, e.g. `www.example.com` |
 | `<TUNNEL_UUID>` | The UUID printed by `cloudflared tunnel create` (see step 3) |
 | `<NODE_BIN_DIR>` | The directory containing your `node` binary (see step 6) |
 | `redeploy-studio` | The tunnel name — a plain label; any name works, this doc uses this one throughout |
@@ -42,10 +44,13 @@ cloudflared tunnel create redeploy-studio
 This prints a `TUNNEL_UUID` and writes credentials to `~/.cloudflared/<TUNNEL_UUID>.json`. Note the
 UUID — you'll need it below.
 
-Map DNS for the hostname to this tunnel:
+Map DNS for the hostname to this tunnel. Since a single named tunnel can publish multiple hostnames
+(see the two ingress rules in step 4), run this once per hostname — both `<STUDIO_HOSTNAME>` and
+`<WEBSITE_HOSTNAME>` route to the same `<TUNNEL_UUID>`:
 
 ```
 cloudflared tunnel route dns --overwrite-dns <TUNNEL_UUID> <STUDIO_HOSTNAME>
+cloudflared tunnel route dns --overwrite-dns <TUNNEL_UUID> <WEBSITE_HOSTNAME>
 ```
 
 > **GOTCHA — always pass an explicit tunnel identity.**
@@ -85,6 +90,10 @@ ingress:
     service: http://localhost:5173
     originRequest:
       httpHostHeader: localhost
+  - hostname: <WEBSITE_HOSTNAME>
+    service: http://localhost:5180
+    originRequest:
+      httpHostHeader: localhost
   - service: http_status:404
 ```
 
@@ -98,8 +107,12 @@ Notes:
   used by the ad-hoc quick-tunnel flow (`cloudflared tunnel --url ... --http-host-header localhost`,
   see `humanTest.launchPhone` in `.claude/gates.json`) — just applied to a persistent named tunnel
   instead of a one-off quick tunnel.
+- The `<WEBSITE_HOSTNAME>` rule routes to `localhost:5180` — the marketing website's Vite dev server
+  (`redeploy-website.service`, see section 6). Same `httpHostHeader: localhost` trick applies, since
+  it's also a Vite dev server with the same `allowedHosts` guard.
 - The trailing catch-all `service: http_status:404` rejects any request for a hostname not explicitly
-  listed above (cloudflared config requires a final catch-all rule).
+  listed above (cloudflared config requires a final catch-all rule) — it must stay **last**; ingress
+  rules are matched top-to-bottom.
 
 Sanity-check the config before installing it as a service:
 
@@ -149,9 +162,17 @@ Templates: [`deploy/always-on/systemd/`](../deploy/always-on/systemd/)
 - **`redeploy-anvil.service`** — runs `anvil --host 127.0.0.1 --port 8545`. Local-only; never exposed
   through the tunnel.
 - **`redeploy-app.service`** — runs the studio dev server (`:5173`, proxies `/api` to the
-  deploy-server) and the deploy-server (`:8787`) in parallel. This is the tunnel's only published
-  origin. Its `WorkingDirectory` is the repo-local `.serve/active` symlink (see "The active symlink
+  deploy-server) and the deploy-server (`:8787`) in parallel. This is one of the tunnel's two published
+  origins. Its `WorkingDirectory` is the repo-local `.serve/active` symlink (see "The active symlink
   model" below).
+- **`redeploy-website.service`** — runs the marketing website's Vite dev server (`:5180`). This is the
+  tunnel's other published origin. Its `WorkingDirectory` is the SAME repo-local `.serve/active`
+  symlink `redeploy-app.service` uses, so `/test-pr --serve`/`--reset` repoint the served checkout for
+  the website too (see section 9). Unlike `redeploy-app.service`, it has no `EnvironmentFile=` — the
+  website is a static marketing site with no backend, no RPC, no keys. It is ordered `After=redeploy-app.service` (ordering only, not a hard
+  dependency) purely so the two units' cold-boot `pnpm install` runs don't race on the
+  shared `.serve/active` workspace; the website still starts on its own if `redeploy-app`
+  is stopped or failed.
 - **`redeploy-app.path`** — a path unit that watches the repo-local `.serve/reload` sentinel file
   (`PathModified=`) and triggers `redeploy-app-restart.service` whenever it changes.
 - **`redeploy-app-restart.service`** — a `Type=oneshot` unit, triggered only by `redeploy-app.path`,
@@ -177,11 +198,13 @@ leaves for you):
 mkdir -p ~/.config/systemd/user
 cp deploy/always-on/systemd/redeploy-anvil.service         ~/.config/systemd/user/
 cp deploy/always-on/systemd/redeploy-app.service           ~/.config/systemd/user/
+cp deploy/always-on/systemd/redeploy-website.service       ~/.config/systemd/user/
 cp deploy/always-on/systemd/redeploy-app.path              ~/.config/systemd/user/
 cp deploy/always-on/systemd/redeploy-app-restart.service   ~/.config/systemd/user/
 cp deploy/always-on/systemd/cloudflared-redeploy.service   ~/.config/systemd/user/
-# Edit the copies to substitute <STUDIO_HOSTNAME> / <NODE_BIN_DIR> placeholders.
+# Edit the copies to substitute <STUDIO_HOSTNAME> / <WEBSITE_HOSTNAME> / <NODE_BIN_DIR> placeholders.
 $EDITOR ~/.config/systemd/user/redeploy-app.service
+$EDITOR ~/.config/systemd/user/redeploy-website.service
 $EDITOR ~/.config/systemd/user/cloudflared-redeploy.service
 
 # redeploy-app.service's WorkingDirectory is
@@ -193,7 +216,7 @@ mkdir -p <path-to-your-repo-checkout>/.serve
 ln -sfn <path-to-your-repo-checkout> <path-to-your-repo-checkout>/.serve/active
 
 systemctl --user daemon-reload
-systemctl --user enable --now redeploy-anvil redeploy-app redeploy-app.path cloudflared-redeploy
+systemctl --user enable --now redeploy-anvil redeploy-app redeploy-website redeploy-app.path cloudflared-redeploy
 loginctl enable-linger "$USER"
 ```
 
@@ -204,7 +227,8 @@ moment your last login session ends).
 > **GOTCHA — nvm-managed node is not on the systemd user-service PATH.**
 > `systemd --user` services do not source your shell's `~/.bashrc`/`~/.zshrc`, so an nvm-managed
 > `node`/`pnpm` (or a Foundry install added to `PATH` only in your shell profile) is invisible to
-> them by default. `redeploy-app.service` pins a `PATH` explicitly:
+> them by default. `redeploy-app.service` (and `redeploy-website.service`, the same way) pins a `PATH`
+> explicitly:
 > ```
 > Environment=PATH=<NODE_BIN_DIR>:%h/.local/share/pnpm:%h/.foundry/bin:/usr/local/bin:/usr/bin:/bin
 > ```
@@ -220,6 +244,8 @@ moment your last login session ends).
 > WorkingDirectory=%h/Development/thesolidchain/reDeploy/.serve/active
 > EnvironmentFile=%h/.config/redeploy/env.anvil
 > ```
+> `redeploy-website.service` sets the same `WorkingDirectory=` (it has no `EnvironmentFile=`, since the
+> website needs no backend env).
 > `active` is a **stable symlink**, not a hardcoded repo path — the service always serves whatever
 > checkout `active` currently points at. This lets you point the always-on studio at your main
 > checkout normally, or temporarily at a PR worktree for review (see section 9), without ever editing
@@ -241,26 +267,30 @@ moment your last login session ends).
 > best-effort immediate fallback for anyone running it from a normal terminal, but that attempt is no
 > longer required to succeed.
 >
-> The `.serve/active` symlink must exist **before** `redeploy-app` is enabled/started — see the
-> `ln -sfn` step in the Install block above (or just run `deploy/always-on/install.sh`, which creates
-> it for you).
+> The `.serve/active` symlink must exist **before** `redeploy-app` or `redeploy-website` is
+> enabled/started — see the `ln -sfn` step in the Install block above (or just run
+> `deploy/always-on/install.sh`, which creates it for you).
 
 ## 7. Cloudflare Access (the login page)
 
 In the Cloudflare dashboard: **Zero Trust → Access → Applications → Add an application → Self-hosted**.
+Repeat this for **both** hostnames — `<STUDIO_HOSTNAME>` and `<WEBSITE_HOSTNAME>` — either as two
+separate Access applications, or as a single application whose domain list includes both, so that
+neither hostname is left ungated.
 
-- Application domain: `<STUDIO_HOSTNAME>`
+- Application domain: `<STUDIO_HOSTNAME>` (and, for the second application, `<WEBSITE_HOSTNAME>`)
 - Session duration: your choice (e.g. 24h)
 - Policy: **Allow**, Include → **Emails** → your email (one-time PIN), or wire up an identity
   provider (Google, GitHub, etc.)
 
-Save. Now hitting `<STUDIO_HOSTNAME>` prompts a Cloudflare Access login before any request reaches the
-tunnel/studio.
+Save. Now hitting `<STUDIO_HOSTNAME>` or `<WEBSITE_HOSTNAME>` prompts a Cloudflare Access login before
+any request reaches the tunnel/studio/website.
 
 ## 8. Use it
 
-Open `https://<STUDIO_HOSTNAME>` on your phone → Cloudflare Access login → studio. Nothing needs to
-stay open in a terminal; it all runs under `systemd --user` + linger.
+Open `https://<STUDIO_HOSTNAME>` on your phone → Cloudflare Access login → studio. `https://<WEBSITE_HOSTNAME>`
+works the same way for the marketing website. Nothing needs to stay open in a terminal; it all runs
+under `systemd --user` + linger.
 
 ## 9. Serving a PR through the always-on studio (`/test-pr --serve`)
 
@@ -304,6 +334,13 @@ shell profile to your `<STUDIO_HOSTNAME>` value if you want that convenience.
 
 See also `.claude/commands/test-pr.md` for the `/test-pr` command reference.
 
+> **The website rides the same symlink.** `redeploy-website.service`'s `WorkingDirectory` is the SAME
+> repo-local `.serve/active` symlink `redeploy-app.service` uses (see section 6), so `--serve`/`--reset`
+> switch the checkout the website is served from too, not just the studio's. Note, though, that the
+> sentinel-driven auto-restart (`redeploy-app.path` → `redeploy-app-restart.service`) only restarts
+> `redeploy-app`; if you need `redeploy-website` itself to pick up the newly-pointed checkout
+> immediately, restart it explicitly: `systemctl --user restart redeploy-website`.
+
 ## 10. Operations
 
 - **Pull + restart** (main checkout): `cd <checkout> && git pull && systemctl --user restart redeploy-app`
@@ -324,22 +361,24 @@ See also `.claude/commands/test-pr.md` for the `/test-pr` command reference.
   notices the sentinel change and does the actual restart via `redeploy-app-restart.service`. A direct
   `systemctl --user restart redeploy-app` still works fine from a normal terminal and remains the
   fastest single command for a manual restart.
-- **Stop everything**: `systemctl --user stop cloudflared-redeploy redeploy-app redeploy-app.path redeploy-anvil`
+- **Stop everything**: `systemctl --user stop cloudflared-redeploy redeploy-app redeploy-website redeploy-app.path redeploy-anvil`
 - **Disable at boot**:
   ```
-  systemctl --user disable cloudflared-redeploy redeploy-app redeploy-app.path redeploy-anvil
+  systemctl --user disable cloudflared-redeploy redeploy-app redeploy-website redeploy-app.path redeploy-anvil
   loginctl disable-linger "$USER"
   ```
 - **Logs**: `journalctl --user -u <service> -e` (last entries) or `-f` (follow), e.g.
-  `journalctl --user -u redeploy-app -f` or `journalctl --user -u redeploy-app-restart -e` (to confirm
-  the sentinel-triggered restart actually ran).
+  `journalctl --user -u redeploy-app -f`, `journalctl --user -u redeploy-website -f`, or
+  `journalctl --user -u redeploy-app-restart -e` (to confirm the sentinel-triggered restart actually ran).
 
 ## 11. Safety recap
 
-- Only `:5173` (the studio dev server) is published through the tunnel.
+- Only `:5173` (the studio dev server) and `:5180` (the marketing website dev server) are published
+  through the tunnel, as two separate ingress rules on the same named tunnel.
 - Anvil (`:8545`) and the deploy-server (`:8787`) are localhost-only — reachable only via the
   studio's `/api` proxy, never directly from the internet.
 - `env.anvil` keeps every deploy on a throwaway local Anvil chain, so even a compromised or
   accidentally-shared link can't spend real funds or touch a real network.
-- Cloudflare Access gates the entire hostname — no request reaches the tunnel without a passing
+- Cloudflare Access gates BOTH hostnames (`<STUDIO_HOSTNAME>` and `<WEBSITE_HOSTNAME>`) — no request
+  reaches the tunnel without a passing
   identity check first.
