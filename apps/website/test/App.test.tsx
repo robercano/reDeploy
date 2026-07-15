@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import App from "../src/App.js";
-import { HERO, BENEFITS, REPO_URL } from "../src/content.js";
+import { HERO, BENEFITS, FEATURES, REPO_URL } from "../src/content.js";
 
 describe("App", () => {
   it("renders the hero pitch and primary CTA", () => {
@@ -28,11 +28,16 @@ describe("App", () => {
     ]);
   });
 
-  it("renders a clearly-labeled placeholder for every feature screenshot", () => {
+  it("renders a real Studio screenshot for every feature, with a matching caption", () => {
     render(<App />);
 
-    const placeholders = screen.getAllByText("Placeholder — Studio screenshot");
-    expect(placeholders.length).toBeGreaterThan(0);
+    const images = screen.getAllByRole("img");
+    expect(images.length).toBe(FEATURES.length);
+
+    for (const feature of FEATURES) {
+      expect(screen.getByAltText(feature.screenshotCaption)).toBeInTheDocument();
+      expect(screen.getByText(feature.screenshotCaption)).toBeInTheDocument();
+    }
   });
 
   it("links to the GitHub repo in the footer", () => {
