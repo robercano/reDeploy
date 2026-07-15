@@ -34,10 +34,24 @@ describe("App", () => {
     const images = screen.getAllByRole("img");
     expect(images.length).toBe(FEATURES.length);
 
+    const srcStemById: Record<string, string> = {
+      canvas: "studio-canvas",
+      inspector: "studio-inspector",
+      templates: "studio-templates",
+      "deploy-flow": "studio-deploy-flow",
+    };
+
     for (const feature of FEATURES) {
-      expect(screen.getByAltText(feature.screenshotCaption)).toBeInTheDocument();
+      const img = screen.getByAltText(feature.screenshotCaption) as HTMLImageElement;
       expect(screen.getByText(feature.screenshotCaption)).toBeInTheDocument();
+
+      const src = img.getAttribute("src");
+      expect(src).toBeTruthy();
+      expect(src).toContain(srcStemById[feature.id]);
     }
+
+    const srcs = images.map((img) => img.getAttribute("src"));
+    expect(new Set(srcs).size).toBe(FEATURES.length);
   });
 
   it("links to the GitHub repo in the footer", () => {

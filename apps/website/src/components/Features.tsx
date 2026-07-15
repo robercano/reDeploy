@@ -36,6 +36,7 @@ export default function Features() {
                   width={1600}
                   height={1000}
                   loading="lazy"
+                  decoding="async"
                 />
               </div>
               <figcaption className="feature-screenshot__caption">{feature.screenshotCaption}</figcaption>
