@@ -312,3 +312,38 @@ describe("deploymentViewToFlow — edge id determinism", () => {
     expect(edges[0].id).toBe("lib:lib->user");
   });
 });
+
+// ---------------------------------------------------------------------------
+// sourceVerifyResults (issue #138)
+// ---------------------------------------------------------------------------
+
+describe("deploymentViewToFlow — sourceVerifyResults", () => {
+  it("leaves verifiedStatus/verifiedMessage undefined when the param is omitted", () => {
+    const view = makeView([makeContract({ id: "token" })]);
+    const { nodes } = deploymentViewToFlow(view);
+    const data = nodes[0].data as unknown as InspectorNodeData;
+    expect(data.verifiedStatus).toBeUndefined();
+    expect(data.verifiedMessage).toBeUndefined();
+  });
+
+  it("matches a result onto its node by contract id", () => {
+    const view = makeView([makeContract({ id: "token" }), makeContract({ id: "vault" })]);
+    const { nodes } = deploymentViewToFlow(view, [
+      { id: "token", address: "0xADDR_token", status: "verified" },
+    ]);
+    const token = nodes.find((n) => n.id === "token")!.data as unknown as InspectorNodeData;
+    const vault = nodes.find((n) => n.id === "vault")!.data as unknown as InspectorNodeData;
+    expect(token.verifiedStatus).toBe("verified");
+    expect(vault.verifiedStatus).toBeUndefined();
+  });
+
+  it("threads the message field through for a non-terminal/failed status", () => {
+    const view = makeView([makeContract({ id: "token" })]);
+    const { nodes } = deploymentViewToFlow(view, [
+      { id: "token", address: "0xADDR_token", status: "failed", message: "bytecode mismatch" },
+    ]);
+    const data = nodes[0].data as unknown as InspectorNodeData;
+    expect(data.verifiedStatus).toBe("failed");
+    expect(data.verifiedMessage).toBe("bytecode mismatch");
+  });
+});

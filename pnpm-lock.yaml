@@ -26,12 +26,21 @@ importers:
 
   apps/deploy-server:
     dependencies:
+      '@redeploy/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@redeploy/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@redeploy/reader':
         specifier: workspace:*
         version: link:../../packages/reader
+      '@redeploy/verify':
+        specifier: workspace:*
+        version: link:../../packages/verify
+      viem:
+        specifier: ^2.54.1
+        version: 2.54.1(typescript@5.9.3)(zod@4.4.3)
     devDependencies:
       '@types/node':
         specifier: ^22.7.5

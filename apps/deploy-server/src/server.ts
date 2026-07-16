@@ -3,13 +3,20 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPublicClient, http as viemHttp } from "viem";
 import * as core from "@redeploy/core";
 import { simulate } from "@redeploy/core";
 import type { PlannedStep, SimulateError, DeploymentSpec } from "@redeploy/core";
 import { DeployError } from "@redeploy/core";
 import { readDeployment, ReadError, buildSnapshot, snapshotRelativePath } from "@redeploy/reader";
 import type { DeploymentView } from "@redeploy/reader";
-import { normalizePrivateKey } from "./env.js";
+import type { ConfigSpec } from "@redeploy/config";
+import { normalizePrivateKey, readEtherscanConfig } from "./env.js";
+import { runConfigDrift, validateConfigSpecShape } from "./verify/run-config-drift.js";
+import type { ConfigDriftResponse } from "./verify/run-config-drift.js";
+import { runSourceVerify } from "./verify/run-source-verify.js";
+import type { SourceVerifyResponse } from "./verify/run-source-verify.js";
+import { createRpcChainReader } from "./verify/chain-reader.js";
 
 /** Maximum body size for POST requests (1 MiB). */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -517,13 +524,184 @@ function handleGetDeployment(_req: IncomingMessage, res: ServerResponse): void {
 }
 
 /**
+ * Write a plain JSON response with an explicit Content-Length, mirroring the
+ * inline pattern used throughout this file (GET /health, /api/deployment).
+ */
+function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+/**
+ * Shared by both /api/verify/config and /api/verify/source: read the
+ * persisted deployment from the server-resolved deploymentDir, treating a
+ * fresh/never-deployed directory as the EMPTY_DEPLOYMENT_VIEW (not an error)
+ * exactly like handleGetDeployment. On any other ReadError (or unexpected
+ * error), writes a 500 response and returns `null` so the caller bails out.
+ */
+function readPersistedDeploymentOr500(res: ServerResponse, logLabel: string): DeploymentView | null {
+  const deploymentDir = resolveDeploymentDir();
+  try {
+    return readDeployment({ deploymentDir });
+  } catch (err) {
+    if (err instanceof ReadError && err.code === "DEPLOYMENT_DIR_NOT_FOUND") {
+      return EMPTY_DEPLOYMENT_VIEW;
+    }
+    writeJsonResponse(res, 500, { error: "Failed to read deployment state" });
+    // Generic log line only — never the deployment dir path or raw error.
+    process.stderr.write(`[deploy-server] failed to read deployment state for ${logLabel}\n`);
+    return null;
+  }
+}
+
+/**
+ * Handle `POST /api/verify/config`.
+ *
+ * Reads the JSON body as a ConfigSpec (structurally validated via
+ * validateConfigSpecShape — a 400 for anything not shaped like
+ * `{version, steps, orderedSteps?}`), reads the persisted deployment (server
+ * env only — see readPersistedDeploymentOr500), builds a read-only
+ * (never-signing) chain reader over RPC_URL/FOUNDRY_OUT, and runs
+ * runConfigDrift() (see verify/run-config-drift.ts for the full
+ * graceful-degradation contract: unresolvable refs and non-derivable getter
+ * mappings become per-step "error"/"skipped" results, never a 500).
+ *
+ * Response: 200 `{ clean: boolean, results: ConfigDriftResultEntry[] }`.
+ * Error responses (non-streaming JSON):
+ *   - 413  body exceeds MAX_BODY_BYTES
+ *   - 400  malformed JSON, or body not shaped like a ConfigSpec
+ *   - 500  the persisted deployment could not be read
+ */
+async function handleVerifyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const bodyResult = await readAndParseBody(req, res);
+  if (!bodyResult.ok) return;
+  const body = bodyResult.parsed;
+
+  const shapeError = validateConfigSpecShape(body);
+  if (shapeError !== null) {
+    writeJsonResponse(res, 400, { error: shapeError });
+    return;
+  }
+
+  const deployment = readPersistedDeploymentOr500(res, "verify/config");
+  if (deployment === null) return;
+
+  const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+  const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
+
+  const addressToContractName = new Map<string, string>();
+  for (const c of deployment.contracts) {
+    if (c.address !== null) {
+      addressToContractName.set(c.address.toLowerCase(), c.contractName);
+    }
+  }
+  const reader = createRpcChainReader({
+    rpcUrl,
+    addressToContractName,
+    abiLoader: core.foundryArtifactResolver(outDir),
+  });
+
+  let result: ConfigDriftResponse;
+  try {
+    result = await runConfigDrift({ spec: body as ConfigSpec, deployment, reader });
+  } catch {
+    // Defense in depth — runConfigDrift() is designed to never throw, but a
+    // hard failure here must still degrade to a safe JSON error, never a
+    // crash. SECURITY: no error detail is forwarded (RPC_URL may embed a key).
+    writeJsonResponse(res, 500, { error: "Config drift check failed unexpectedly" });
+    process.stderr.write("[deploy-server] unexpected config drift error\n");
+    return;
+  }
+
+  writeJsonResponse(res, 200, result);
+}
+
+/**
+ * Handle `POST /api/verify/source`.
+ *
+ * Takes no meaningful request body (verification runs against the SERVER's
+ * persisted deployment + SERVER's ETHERSCAN_API_KEY only — never a
+ * client-supplied path or key); the studio client sends `{}` for consistency
+ * with the other POST endpoints. Body is still read/size-capped/JSON-parsed
+ * via the shared readAndParseBody helper.
+ *
+ * Resolves chainId via a KEY-LESS read-only RPC client (source verification
+ * must work — or rather, cleanly SKIP — even when DEPLOYER_PRIVATE_KEY is
+ * unset) and delegates to runSourceVerify(), which:
+ *   - skips cleanly (never errors) when ETHERSCAN_API_KEY is unset OR
+ *     chainId is 31337 (local Anvil) OR there are no deployed contracts.
+ *   - submits each deployed contract's Foundry-derived compiler input to
+ *     Etherscan via @redeploy/verify's verifyDeployment().
+ *
+ * Response: 200 `{ success, skipped, reason?, results: SourceVerifyResultEntry[] }`.
+ * Error responses (non-streaming JSON):
+ *   - 413  body exceeds MAX_BODY_BYTES
+ *   - 400  malformed JSON
+ *   - 500  the persisted deployment could not be read
+ *   - 502  the configured RPC endpoint could not be reached (chainId lookup)
+ *
+ * SECURITY: ETHERSCAN_API_KEY is read via env.ts's readEtherscanConfig() and
+ * handed to @redeploy/verify's createEtherscanClient() — it is NEVER
+ * included in this handler's response body or in any stderr log line.
+ */
+async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const bodyResult = await readAndParseBody(req, res);
+  if (!bodyResult.ok) return;
+
+  const deployment = readPersistedDeploymentOr500(res, "verify/source");
+  if (deployment === null) return;
+
+  const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+  const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
+  const contractsRoot = path.dirname(outDir);
+  const etherscan = readEtherscanConfig();
+
+  // Determine chainId via a lightweight, KEY-LESS read-only RPC client —
+  // source verification must never require DEPLOYER_PRIVATE_KEY.
+  let chainId: number;
+  try {
+    const publicClient = createPublicClient({ transport: viemHttp(rpcUrl) });
+    chainId = await publicClient.getChainId();
+  } catch {
+    // SECURITY: the caught error may embed rpcUrl — never forwarded.
+    writeJsonResponse(res, 502, { error: "Could not reach the configured RPC endpoint" });
+    process.stderr.write("[deploy-server] unexpected RPC error resolving chainId for verify/source\n");
+    return;
+  }
+
+  let result: SourceVerifyResponse;
+  try {
+    result = await runSourceVerify({
+      deployment,
+      outDir,
+      contractsRoot,
+      chainId,
+      etherscan,
+      fetchFn: fetch,
+    });
+  } catch {
+    writeJsonResponse(res, 500, { error: "Source verification failed unexpectedly" });
+    process.stderr.write("[deploy-server] unexpected source verify error\n");
+    return;
+  }
+
+  writeJsonResponse(res, 200, result);
+}
+
+/**
  * Dispatch an incoming request to the appropriate route handler.
  *
  * Routes:
- *   GET  /health          → 200 { status: "ok" }
- *   GET  /api/deployment  → 200 { contracts, configSteps, warnings } (or 500)
- *   POST /api/simulate    → 200 SSE stream (planned steps or errors)
- *   POST /api/deploy      → 200 SSE stream (deploy progress + result)
+ *   GET  /health              → 200 { status: "ok" }
+ *   GET  /api/deployment      → 200 { contracts, configSteps, warnings } (or 500)
+ *   POST /api/simulate        → 200 SSE stream (planned steps or errors)
+ *   POST /api/deploy          → 200 SSE stream (deploy progress + result)
+ *   POST /api/verify/config   → 200 JSON { clean, results } (config-drift check)
+ *   POST /api/verify/source   → 200 JSON { success, skipped, reason?, results } (Etherscan source verification)
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
@@ -592,6 +770,34 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       // Generic log line only — never the error value which may embed the URL/key.
       process.stderr.write("[deploy-server] unhandled deploy error\n");
+    });
+    return;
+  }
+
+  if (method === "POST" && url === "/api/verify/config") {
+    // handleVerifyConfig is async; fire-and-forget — errors are handled internally.
+    handleVerifyConfig(req, res).catch(() => {
+      if (!res.headersSent) {
+        writeJsonResponse(res, 500, { error: "Internal Server Error" });
+      } else {
+        res.end();
+      }
+      process.stderr.write("[deploy-server] unhandled verify/config error\n");
+    });
+    return;
+  }
+
+  if (method === "POST" && url === "/api/verify/source") {
+    // handleVerifySource is async; fire-and-forget — errors are handled internally.
+    handleVerifySource(req, res).catch(() => {
+      // SECURITY: do NOT log or forward the error — it may embed RPC_URL or
+      // the Etherscan API key from the environment.
+      if (!res.headersSent) {
+        writeJsonResponse(res, 500, { error: "Internal Server Error" });
+      } else {
+        res.end();
+      }
+      process.stderr.write("[deploy-server] unhandled verify/source error\n");
     });
     return;
   }

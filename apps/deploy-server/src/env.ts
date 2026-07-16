@@ -110,3 +110,34 @@ export function normalizePrivateKey(raw: string): string {
   }
   return `0x${trimmed}`;
 }
+
+/**
+ * Server-side Etherscan verification config, read from `process.env`.
+ *
+ * `apiUrl` lets a non-mainnet (or Etherscan-compatible) API base be used —
+ * see `.env.example`'s `ETHERSCAN_API_URL` comment. Omitted entirely when not
+ * set, so `createEtherscanClient()`'s own default
+ * (`https://api.etherscan.io/api`) applies.
+ */
+export interface EtherscanEnvConfig {
+  readonly apiKey: string;
+  readonly apiUrl?: string;
+}
+
+/**
+ * Read the server-side Etherscan verification config from `process.env`.
+ *
+ * Returns `null` when `ETHERSCAN_API_KEY` is unset or blank — callers MUST
+ * treat this as "source verification is not configured" and skip cleanly
+ * (never throw, never attempt a request). The key is read directly here and
+ * handed to `@redeploy/verify`'s `createEtherscanClient()`; it is NEVER
+ * logged, and NEVER included in any HTTP response body.
+ */
+export function readEtherscanConfig(): EtherscanEnvConfig | null {
+  const apiKey = process.env["ETHERSCAN_API_KEY"];
+  if (apiKey === undefined || apiKey.trim() === "") {
+    return null;
+  }
+  const apiUrl = process.env["ETHERSCAN_API_URL"];
+  return apiUrl !== undefined && apiUrl.trim() !== "" ? { apiKey, apiUrl } : { apiKey };
+}

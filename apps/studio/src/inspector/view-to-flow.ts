@@ -40,6 +40,7 @@ import type {
   InspectorFlowEdge,
   InspectorNodeData,
 } from "./types.js";
+import type { SourceVerifyResultEntry } from "../deploy/verify-client.js";
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -57,19 +58,32 @@ const GRID_SPACING_Y = 180;
  * Convert a DeploymentView into React Flow nodes and edges for the inspector.
  *
  * @param view - The DeploymentView returned by readDeployment().
+ * @param sourceVerifyResults - Optional per-contract source-verification
+ *   results (from a `/api/verify/source` run — issue #138), matched onto
+ *   nodes by contract id. Omitted / no match for a given id => no verified
+ *   badge is rendered for that node.
  * @returns An object with `nodes` and `edges` arrays ready for React Flow.
  */
-export function deploymentViewToFlow(view: DeploymentView): {
+export function deploymentViewToFlow(
+  view: DeploymentView,
+  sourceVerifyResults?: ReadonlyArray<SourceVerifyResultEntry>,
+): {
   nodes: InspectorFlowNode[];
   edges: InspectorFlowEdge[];
 } {
   // Build a set of known contract ids for fast lookup (used to skip dangling edges).
   const knownIds = new Set(view.contracts.map((c) => c.id));
 
+  const verifyById = new Map<string, SourceVerifyResultEntry>(
+    (sourceVerifyResults ?? []).map((r) => [r.id, r]),
+  );
+
   // Build nodes — one per contract, deterministic grid position.
   const nodes: InspectorFlowNode[] = view.contracts.map((contract, index) => {
     const col = index % GRID_COLS;
     const row = Math.floor(index / GRID_COLS);
+
+    const verifyResult = verifyById.get(contract.id);
 
     const data: InspectorNodeData = {
       id: contract.id,
@@ -78,6 +92,8 @@ export function deploymentViewToFlow(view: DeploymentView): {
       args: contract.args,
       dependencies: contract.links.dependencies,
       libraries: contract.links.libraries,
+      verifiedStatus: verifyResult?.status,
+      verifiedMessage: verifyResult?.message,
     };
 
     return {

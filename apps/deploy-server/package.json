@@ -13,8 +13,11 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@redeploy/config": "workspace:*",
     "@redeploy/core": "workspace:*",
-    "@redeploy/reader": "workspace:*"
+    "@redeploy/reader": "workspace:*",
+    "@redeploy/verify": "workspace:*",
+    "viem": "^2.54.1"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",

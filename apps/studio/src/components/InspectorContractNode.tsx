@@ -56,6 +56,42 @@ const notDeployedStyle: React.CSSProperties = {
   marginBottom: 6,
 };
 
+const verifiedBadgeBaseStyle: React.CSSProperties = {
+  display: "inline-block",
+  fontSize: 10,
+  fontWeight: 600,
+  padding: "2px 6px",
+  borderRadius: 10,
+};
+
+const VERIFIED_BADGE_STYLES: Record<string, React.CSSProperties> = {
+  verified: {
+    ...verifiedBadgeBaseStyle,
+    background: "var(--color-success-bg-strong)",
+    color: "var(--color-success-text-strong)",
+  },
+  "already-verified": {
+    ...verifiedBadgeBaseStyle,
+    background: "var(--color-success-bg-strong)",
+    color: "var(--color-success-text-strong)",
+  },
+  pending: {
+    ...verifiedBadgeBaseStyle,
+    background: "var(--color-warning-bg)",
+    color: "var(--color-warning-text)",
+  },
+  failed: {
+    ...verifiedBadgeBaseStyle,
+    background: "var(--color-danger-bg)",
+    color: "var(--color-danger-text)",
+  },
+  skipped: {
+    ...verifiedBadgeBaseStyle,
+    background: "var(--color-bg-elevated)",
+    color: "var(--color-text-muted)",
+  },
+};
+
 const argRowStyle: React.CSSProperties = {
   display: "flex",
   gap: 4,
@@ -93,7 +129,7 @@ function renderArgValue(v: ArgValue): string {
 
 function InspectorContractNodeInner({ data: rawData }: NodeProps) {
   const data = rawData as unknown as InspectorNodeData;
-  const { id, contractName, address, args } = data;
+  const { id, contractName, address, args, verifiedStatus, verifiedMessage } = data;
 
   const containerStyle: React.CSSProperties = {
     background: "var(--color-inspector-node-bg)",
@@ -146,6 +182,21 @@ function InspectorContractNodeInner({ data: rawData }: NodeProps) {
           </div>
         )}
       </div>
+
+      {/* Source-verification badge (issue #138) — only rendered once a
+          /api/verify/source run has produced a result for this contract. */}
+      {verifiedStatus !== undefined && (
+        <div style={{ marginBottom: 6 }}>
+          <div style={labelStyle}>Source Verification</div>
+          <span
+            style={VERIFIED_BADGE_STYLES[verifiedStatus] ?? verifiedBadgeBaseStyle}
+            data-testid={`inspector-node-${id}-verified`}
+            title={verifiedMessage}
+          >
+            {verifiedStatus}
+          </span>
+        </div>
+      )}
 
       {/* Constructor args */}
       {args.length > 0 && (
