@@ -75,6 +75,8 @@ import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { runSimulate } from "./deploy/simulate-client.js";
 import { runDeploy } from "./deploy/deploy-client.js";
+import { runVerifyConfig, runVerifySource } from "./deploy/verify-client.js";
+import type { ConfigDriftResultEntry, SourceVerifyResponse } from "./deploy/verify-client.js";
 import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
 import type { NodeFieldErrors } from "./deploy/field-errors.js";
 import type { DeploymentView, DeploymentSnapshot } from "@redeploy/reader";
@@ -560,6 +562,18 @@ export function App() {
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
 
+  // Verify action (issue #138): triggers config-drift detection
+  // (POST /api/verify/config) and source verification (POST /api/verify/source)
+  // against the persisted deployment. Both run against SERVER-side state (the
+  // last real deploy's journal + the server's ETHERSCAN_API_KEY) — this button
+  // sends no deployment-altering data, only the current ConfigSpec (for drift
+  // comparison). Results are threaded into the Inspector as per-step drift
+  // badges and per-contract verified badges.
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [driftResults, setDriftResults] = useState<ConfigDriftResultEntry[] | null>(null);
+  const [sourceVerifyResult, setSourceVerifyResult] = useState<SourceVerifyResponse | null>(null);
+
   // Provenance of `liveView`, tracked SEPARATELY from `viewKind` (bugfix,
   // issue #101 review). `viewKind` is the RENDER discriminator — it changes
   // to "plan" as soon as the user clicks Plan, even though `liveView` itself
@@ -1024,6 +1038,51 @@ export function App() {
     }
   }, [deploying]);
 
+  // "Verify" (issue #138) — runs config-drift detection + source verification
+  // against the persisted (server-side) deployment. Unlike handleSimulate/
+  // handleDeploy this never mutates the canvas/liveView — results are stored
+  // separately and threaded into the Inspector as badges, so Verify can be
+  // run repeatedly without disturbing whichever Simulate/Deploy/Plan result
+  // is currently shown.
+  const handleVerify = useCallback(async () => {
+    if (verifying) return;
+    setVerifying(true);
+    setVerifyError(null);
+
+    const [driftOutcome, sourceOutcome] = await Promise.all([
+      runVerifyConfig(config),
+      runVerifySource(),
+    ]);
+
+    const errors: string[] = [];
+
+    if (driftOutcome.ok) {
+      setDriftResults(driftOutcome.result.results);
+    } else {
+      setDriftResults(null);
+      errors.push(`Config drift check failed: ${driftOutcome.error}`);
+    }
+
+    if (sourceOutcome.ok) {
+      setSourceVerifyResult(sourceOutcome.result);
+    } else {
+      setSourceVerifyResult(null);
+      errors.push(`Source verification failed: ${sourceOutcome.error}`);
+    }
+
+    setVerifyError(errors.length > 0 ? errors.join("; ") : null);
+
+    // Switch to Inspector so the drift/verified badges are immediately
+    // visible, mirroring handleSimulate/handleDeploy's "show the result"
+    // behavior — but only when at least one check actually produced a result
+    // to show (an all-network-error run leaves the user right where they were).
+    if (driftOutcome.ok || sourceOutcome.ok) {
+      setMode("inspector");
+    }
+
+    setVerifying(false);
+  }, [verifying, config]);
+
   const deployBtnStyle: React.CSSProperties = {
     ...btnStyle,
     background: simulating ? "var(--color-primary-bg-subtle)" : "var(--color-success)",
@@ -1176,6 +1235,15 @@ export function App() {
         >
           {deploying ? "Deploying…" : "Deploy (real)"}
         </button>
+        <button
+          style={btnStyle}
+          onClick={() => { void handleVerify(); }}
+          disabled={verifying}
+          data-testid="deploy-verify-button"
+          title="Check config drift and run source verification against the persisted deployment"
+        >
+          {verifying ? "Verifying…" : "Verify"}
+        </button>
         <ThemeToggle mode={themeMode} onChange={setThemeMode} />
       </div>
 
@@ -1315,6 +1383,14 @@ export function App() {
         </div>
       )}
 
+      {/* Verify error banner (issue #138) — non-blocking; whichever of
+          drift/source succeeded is still stored and rendered in the Inspector. */}
+      {verifyError !== null && (
+        <div style={errorBannerStyle} data-testid="deploy-verify-error">
+          {verifyError}
+        </div>
+      )}
+
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
@@ -1392,6 +1468,8 @@ export function App() {
                 : undefined
             }
             themeMode={themeMode}
+            driftResults={driftResults ?? undefined}
+            sourceVerifyResults={sourceVerifyResult?.results}
           />
         )}
 

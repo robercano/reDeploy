@@ -30,6 +30,7 @@
 
 import type { Node, Edge } from "@xyflow/react";
 import type { ArgValue } from "@redeploy/reader";
+import type { SourceVerifyStatus } from "../deploy/verify-client.js";
 
 /** Data stored on each inspector contract node. */
 export interface InspectorNodeData {
@@ -45,6 +46,14 @@ export interface InspectorNodeData {
   dependencies: ReadonlyArray<string>;
   /** Library name → address or spec id. */
   libraries: Readonly<Record<string, string>>;
+  /**
+   * Source-verification status from the last `/api/verify/source` run
+   * (issue #138), keyed onto this node by contract id. `undefined` when no
+   * verify run has happened yet — the badge is only rendered once present.
+   */
+  verifiedStatus?: SourceVerifyStatus;
+  /** Human-readable detail for verifiedStatus (e.g. a failure reason). */
+  verifiedMessage?: string;
 }
 
 /** Kind discriminant for inspector edges. */

@@ -29,6 +29,7 @@ import type { DeploymentView, ConfigStepStatus } from "@redeploy/reader";
 import { InspectorContractNode } from "./InspectorContractNode.js";
 import { deploymentViewToFlow } from "../inspector/view-to-flow.js";
 import type { ThemeMode } from "../theme/useTheme.js";
+import type { ConfigDriftResultEntry, SourceVerifyResultEntry } from "../deploy/verify-client.js";
 
 // Register the custom node type once (stable reference required by React Flow).
 const INSPECTOR_NODE_TYPES: NodeTypes = {
@@ -105,11 +106,34 @@ const pendingBadgeStyle: React.CSSProperties = {
   color: "var(--color-warning-text)",
 };
 
+const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
+  match: {
+    ...badgeBaseStyle,
+    background: "var(--color-success-bg-strong)",
+    color: "var(--color-success-text-strong)",
+  },
+  drift: {
+    ...badgeBaseStyle,
+    background: "var(--color-danger-bg)",
+    color: "var(--color-danger-text)",
+  },
+  error: {
+    ...badgeBaseStyle,
+    background: "var(--color-warning-bg)",
+    color: "var(--color-warning-text)",
+  },
+  skipped: {
+    ...badgeBaseStyle,
+    background: "var(--color-bg-elevated)",
+    color: "var(--color-text-muted)",
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function ConfigStepCard({ step }: { step: ConfigStepStatus }) {
+function ConfigStepCard({ step, drift }: { step: ConfigStepStatus; drift?: ConfigDriftResultEntry }) {
   const badge = step.completed ? (
     <span
       style={completedBadgeStyle}
@@ -137,7 +161,20 @@ function ConfigStepCard({ step }: { step: ConfigStepStatus }) {
         }}
       >
         <span style={{ fontWeight: 500, fontSize: 12 }}>{step.id}</span>
-        {badge}
+        <span style={{ display: "flex", gap: 4 }}>
+          {badge}
+          {/* Config-drift badge (issue #138) — only rendered once a
+              /api/verify/config run has produced a result for this step. */}
+          {drift !== undefined && (
+            <span
+              style={DRIFT_BADGE_STYLES[drift.status] ?? badgeBaseStyle}
+              data-testid={`config-step-${step.id}-drift`}
+              title={drift.message}
+            >
+              {drift.status}
+            </span>
+          )}
+        </span>
       </div>
       {step.kind !== "" && (
         <div style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>kind: {step.kind}</div>
@@ -171,12 +208,36 @@ export interface InspectorProps {
    * renders a sensible canvas palette without a parent-supplied theme.
    */
   themeMode?: ThemeMode;
+  /**
+   * Per-config-step drift results from the last `/api/verify/config` run
+   * (issue #138), matched onto ConfigStepCards by step id. Omitted / no
+   * result for a given step id => no drift badge rendered for that step.
+   */
+  driftResults?: ConfigDriftResultEntry[];
+  /**
+   * Per-contract source-verification results from the last
+   * `/api/verify/source` run (issue #138), matched onto contract nodes by
+   * contract id. Omitted / no result for a given id => no verified badge
+   * rendered for that node.
+   */
+  sourceVerifyResults?: SourceVerifyResultEntry[];
 }
 
-export function Inspector({ view, contextLabel, themeMode = "system" }: InspectorProps) {
+export function Inspector({
+  view,
+  contextLabel,
+  themeMode = "system",
+  driftResults,
+  sourceVerifyResults,
+}: InspectorProps) {
   const { nodes, edges } = useMemo(
-    () => deploymentViewToFlow(view),
-    [view],
+    () => deploymentViewToFlow(view, sourceVerifyResults),
+    [view, sourceVerifyResults],
+  );
+
+  const driftById = useMemo(
+    () => new Map<string, ConfigDriftResultEntry>((driftResults ?? []).map((r) => [r.id, r])),
+    [driftResults],
   );
 
   return (
@@ -211,7 +272,7 @@ export function Inspector({ view, contextLabel, themeMode = "system" }: Inspecto
           <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No config steps.</p>
         ) : (
           view.configSteps.map((step) => (
-            <ConfigStepCard key={step.id} step={step} />
+            <ConfigStepCard key={step.id} step={step} drift={driftById.get(step.id)} />
           ))
         )}
         {view.warnings.length > 0 && (

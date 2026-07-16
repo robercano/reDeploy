@@ -214,3 +214,107 @@ describe("Inspector — contextLabel badge", () => {
     expect(screen.getByTestId("inspector-node-vault")).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Inspector — config-drift badges (issue #138)
+// ---------------------------------------------------------------------------
+
+describe("Inspector — config-drift badges", () => {
+  it("renders no drift badge for a step when driftResults is absent", () => {
+    render(<Inspector view={view} />);
+    expect(screen.queryByTestId("config-step-setFee-drift")).toBeNull();
+  });
+
+  it("renders a 'match' drift badge for a step present in driftResults", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "match", expected: 500, actual: 500 }]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    expect(badge.textContent).toBe("match");
+  });
+
+  it("renders a 'drift' badge distinctly for a mismatched step", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          { id: "setFee", status: "drift", expected: 500, actual: 999, message: "Expected 500 but got 999" },
+        ]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    expect(badge.textContent).toBe("drift");
+  });
+
+  it("renders 'error' and 'skipped' drift statuses for their respective steps", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          { id: "setFee", status: "error", expected: null, actual: null, message: "boom" },
+          { id: "setToken", status: "skipped", expected: null, actual: null, message: "no getter" },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("config-step-setFee-drift").textContent).toBe("error");
+    expect(screen.getByTestId("config-step-setToken-drift").textContent).toBe("skipped");
+  });
+
+  it("does not render a drift badge for a step absent from driftResults", () => {
+    render(
+      <Inspector view={view} driftResults={[{ id: "setFee", status: "match", expected: 1, actual: 1 }]} />,
+    );
+    expect(screen.getByTestId("config-step-setFee-drift")).not.toBeNull();
+    expect(screen.queryByTestId("config-step-setToken-drift")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inspector — source-verification badges (issue #138)
+// ---------------------------------------------------------------------------
+
+describe("Inspector — source-verification badges", () => {
+  it("renders no verified badge for a node when sourceVerifyResults is absent", () => {
+    render(<Inspector view={view} />);
+    expect(screen.queryByTestId("inspector-node-token-verified")).toBeNull();
+  });
+
+  it("renders a 'verified' badge for a contract present in sourceVerifyResults", () => {
+    render(
+      <Inspector
+        view={view}
+        sourceVerifyResults={[{ id: "token", address: "0x2222222222222222222222222222222222222222", status: "verified" }]}
+      />,
+    );
+    const badge = screen.getByTestId("inspector-node-token-verified");
+    expect(badge.textContent).toBe("verified");
+  });
+
+  it("renders distinct statuses ('failed', 'skipped') for different contracts", () => {
+    render(
+      <Inspector
+        view={view}
+        sourceVerifyResults={[
+          { id: "token", address: "0x2222222222222222222222222222222222222222", status: "failed", message: "no match" },
+          { id: "vault", address: "0x3333333333333333333333333333333333333333", status: "skipped", message: "no source" },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("inspector-node-token-verified").textContent).toBe("failed");
+    expect(screen.getByTestId("inspector-node-vault-verified").textContent).toBe("skipped");
+  });
+
+  it("does not render a verified badge for a contract absent from sourceVerifyResults", () => {
+    render(
+      <Inspector
+        view={view}
+        sourceVerifyResults={[{ id: "token", address: "0x2222222222222222222222222222222222222222", status: "verified" }]}
+      />,
+    );
+    expect(screen.getByTestId("inspector-node-token-verified")).not.toBeNull();
+    expect(screen.queryByTestId("inspector-node-vault-verified")).toBeNull();
+  });
+});
