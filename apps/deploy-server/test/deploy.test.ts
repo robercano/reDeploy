@@ -994,3 +994,277 @@ describe("Regression — existing routes unchanged by /api/deploy addition", () 
     expect(Array.isArray(done["errors"])).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-network support (issue #139) — POST /api/deploy?network=<name>
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — multi-network (?network=)", () => {
+  let tmpDir: string;
+  let configPath: string;
+  let savedNetworksConfig: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-networks-deploy-test-"));
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+  });
+
+  function writeNetworksConfig(config: unknown): void {
+    configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+    process.env["NETWORKS_CONFIG"] = configPath;
+  }
+
+  it("uses the selected network's rpcUrl, deployerPrivateKey, and deploymentDir", async () => {
+    const networkADir = path.join(tmpDir, "network-a-journal");
+    const networkBDir = path.join(tmpDir, "network-b-journal");
+    writeNetworksConfig({
+      networks: {
+        alpha: {
+          rpcUrl: "http://alpha-rpc.internal.example.com",
+          deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          deploymentDir: networkADir,
+        },
+        beta: {
+          rpcUrl: "http://beta-rpc.internal.example.com",
+          deployerPrivateKey: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          deploymentDir: networkBDir,
+        },
+      },
+    });
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const resA = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(resA.statusCode).toBe(200);
+
+    expect(coreMod.jsonRpcProvider).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        rpcUrl: "http://alpha-rpc.internal.example.com",
+        privateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    );
+    expect(coreMod.deploy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deploymentDir: networkADir }),
+    );
+
+    const resB = await doRequest(port, "POST", "/api/deploy?network=beta", JSON.stringify(VALID_SPEC));
+    expect(resB.statusCode).toBe(200);
+
+    expect(coreMod.jsonRpcProvider).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        rpcUrl: "http://beta-rpc.internal.example.com",
+        privateKey: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
+    );
+    expect(coreMod.deploy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deploymentDir: networkBDir }),
+    );
+
+    // The two networks' journal directories must be distinct (resume state isolation).
+    expect(networkADir).not.toBe(networkBDir);
+  });
+
+  it("forwards the network's deploymentParameters wrapped under moduleId to core.deploy", async () => {
+    writeNetworksConfig({
+      networks: {
+        alpha: {
+          rpcUrl: "http://alpha-rpc.internal.example.com",
+          deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          deploymentDir: path.join(tmpDir, "alpha-journal"),
+          moduleId: "CustomModule",
+          deploymentParameters: { someParam: 42 },
+        },
+      },
+    });
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    expect(coreMod.deploy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        moduleId: "CustomModule",
+        deploymentParameters: { CustomModule: { someParam: 42 } },
+      }),
+    );
+  });
+
+  it("defaults moduleId to 'Deployment' and omits deploymentParameters when not configured", async () => {
+    writeNetworksConfig({
+      networks: {
+        alpha: {
+          rpcUrl: "http://alpha-rpc.internal.example.com",
+          deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          deploymentDir: path.join(tmpDir, "alpha-journal"),
+        },
+      },
+    });
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    expect(coreMod.deploy).toHaveBeenCalledWith(expect.objectContaining({ moduleId: "Deployment" }));
+    const callArgs = coreMod.deploy.mock.calls[0]![0] as Record<string, unknown>;
+    expect(callArgs["deploymentParameters"]).toBeUndefined();
+  });
+
+  it("an unknown ?network= value → 400 Bad Request (non-SSE), core.deploy never called, no secret leak", async () => {
+    writeNetworksConfig({
+      networks: {
+        alpha: { rpcUrl: "http://alpha-rpc.internal.example.com" },
+      },
+    });
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=nonexistent", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toBe("application/json");
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain("nonexistent");
+
+    expect(coreMod.deploy).not.toHaveBeenCalled();
+    expect(coreMod.jsonRpcProvider).not.toHaveBeenCalled();
+  });
+
+  it("stops at 400 before opening the SSE stream for an unknown network", async () => {
+    writeNetworksConfig({ networks: { alpha: { rpcUrl: "http://alpha-rpc.internal.example.com" } } });
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=nonexistent", JSON.stringify(VALID_SPEC));
+    expect(res.headers["content-type"]).not.toMatch(/text\/event-stream/);
+  });
+
+  it("omitting ?network= falls back to the default network (backward compat with legacy env vars)", async () => {
+    writeNetworksConfig({ networks: { alpha: { rpcUrl: "http://alpha-rpc.internal.example.com" } } });
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    process.env["RPC_URL"] = "http://legacy-default-rpc.example.com";
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    expect(coreMod.jsonRpcProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ rpcUrl: "http://legacy-default-rpc.example.com" }),
+    );
+  });
+
+  it("a network missing a configured deployer private key → done{success:false}, names the network, no crash", async () => {
+    writeNetworksConfig({
+      networks: {
+        alpha: { rpcUrl: "http://alpha-rpc.internal.example.com" }, // no deployerPrivateKey / deployerPrivateKeyEnv
+      },
+    });
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors.length).toBeGreaterThan(0);
+    expect(String(errors[0]!["message"])).toContain("alpha");
+  });
+
+  it("a malformed NETWORKS_CONFIG file → 500 generic error, never leaking the file path", async () => {
+    configPath = path.join(tmpDir, "bad-networks.json");
+    fs.writeFileSync(configPath, "{ not valid json", "utf8");
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(500);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain(configPath);
+    expect(res.body).not.toContain(tmpDir);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-network support (issue #139) — snapshot network label
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — snapshot records the selected network label", () => {
+  let tmpDir: string;
+  let savedNetworksConfig: string | undefined;
+  let savedDeploymentDir: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-networks-snapshot-test-"));
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+    savedDeploymentDir = process.env["DEPLOYMENT_DIR"];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+    if (savedDeploymentDir === undefined) {
+      delete process.env["DEPLOYMENT_DIR"];
+    } else {
+      process.env["DEPLOYMENT_DIR"] = savedDeploymentDir;
+    }
+  });
+
+  it("buildSnapshot is called with network: '<name>' for a selected non-default network", async () => {
+    const journalDir = path.join(tmpDir, "alpha-journal");
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        networks: {
+          alpha: {
+            rpcUrl: "http://alpha-rpc.internal.example.com",
+            deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            deploymentDir: journalDir,
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    expect(readerMod.buildSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ network: "alpha" }),
+    );
+  });
+
+  it("buildSnapshot is called with network: 'default' when no ?network= is given", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    process.env["DEPLOYMENT_DIR"] = tmpDir;
+
+    const readerMod = vi.mocked(await import("@redeploy/reader"));
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    expect(readerMod.buildSnapshot).toHaveBeenCalledWith(expect.objectContaining({ network: "default" }));
+  });
+});

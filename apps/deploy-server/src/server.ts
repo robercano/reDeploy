@@ -17,6 +17,8 @@ import type { ConfigDriftResponse } from "./verify/run-config-drift.js";
 import { runSourceVerify } from "./verify/run-source-verify.js";
 import type { SourceVerifyResponse } from "./verify/run-source-verify.js";
 import { createRpcChainReader } from "./verify/chain-reader.js";
+import { loadNetworksRegistry, resolveNetwork, DEFAULT_MODULE_ID } from "./networks.js";
+import type { NetworkConfig } from "./networks.js";
 
 /** Maximum body size for POST requests (1 MiB). */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -59,6 +61,90 @@ const FALLBACK_TOOL_VERSION = "0.0.0";
  */
 function resolveDeploymentDir(): string {
   return process.env["DEPLOYMENT_DIR"] ?? path.join(os.tmpdir(), "redeploy-deployments", "default");
+}
+
+/**
+ * Extract a query-string parameter from a request-target string (`req.url`),
+ * WITHOUT using `new URL(...)` — mirroring the pathname-parsing rationale in
+ * `handleRequest()` below (Node passes through legal-but-malformed
+ * request-targets that make the WHATWG URL parser throw). `URLSearchParams`
+ * on the raw query substring never throws, so this is safe for arbitrary
+ * input.
+ *
+ * Returns `undefined` when `url` is undefined, has no `?`, or the param is
+ * absent.
+ */
+function getQueryParam(url: string | undefined, name: string): string | undefined {
+  if (url === undefined) return undefined;
+  const qIdx = url.indexOf("?");
+  if (qIdx === -1) return undefined;
+  const queryString = url.slice(qIdx + 1).split("#")[0] ?? "";
+  const value = new URLSearchParams(queryString).get(name);
+  return value === null ? undefined : value;
+}
+
+/**
+ * Resolve the target network for an incoming request, from the OPTIONAL
+ * `?network=<name>` query param — shared by `handleSimulate`, `handleDeploy`,
+ * and `handleGetDeployment` so all three stay in sync (see networks.ts's
+ * module doc for the full config schema and wire-shape rationale).
+ *
+ * SECURITY: the network is selected BY NAME ONLY. The name is looked up
+ * against `loadNetworksRegistry()` — a server-defined allowlist — never used
+ * to construct a path/URL/credential directly. This mirrors the
+ * `resolveDeploymentDir()` boundary above: rpcUrl, deployerPrivateKey,
+ * chainId, and deploymentDir values themselves NEVER come from client input,
+ * only the lookup key does.
+ *
+ * When `?network=` is omitted, resolves to the registry's default network —
+ * which, absent a `NETWORKS_CONFIG` file, is synthesized from the same
+ * `RPC_URL` / `DEPLOYER_PRIVATE_KEY` / `DEPLOYMENT_DIR` env vars
+ * `resolveDeploymentDir()` already used — so existing callers (e.g. the
+ * studio, before it sends a network param) keep working unmodified.
+ *
+ * On failure this WRITES the response itself and returns `undefined`:
+ *   - 500 `{ error: "Failed to load network configuration" }` when
+ *     `loadNetworksRegistry()` throws (a malformed/unreadable
+ *     `NETWORKS_CONFIG` file) — a server-side misconfiguration, never
+ *     forwarding the underlying error (may embed the config file path).
+ *   - 400 `{ error: "Unknown network" }` for a `?network=` value not present
+ *     in the registry — a clean client error, never a 500, and never
+ *     echoing the raw client-supplied string back.
+ *
+ * Callers MUST check for `undefined` and stop processing (the response is
+ * already sent).
+ */
+function resolveNetworkForRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): { name: string; config: NetworkConfig } | undefined {
+  let registry;
+  try {
+    registry = loadNetworksRegistry();
+  } catch {
+    const body = JSON.stringify({ error: "Failed to load network configuration" });
+    res.writeHead(500, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    process.stderr.write("[deploy-server] failed to load networks configuration\n");
+    return undefined;
+  }
+
+  const requestedName = getQueryParam(req.url, "network");
+  const resolution = resolveNetwork(registry, requestedName);
+  if (!resolution.ok) {
+    const body = JSON.stringify({ error: "Unknown network" });
+    res.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    return undefined;
+  }
+
+  return { name: resolution.name, config: resolution.config };
 }
 
 /**
@@ -193,12 +279,35 @@ async function readAndParseBody(
  *
  * Error responses (non-SSE):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON
+ *   - 400  malformed JSON, or an unknown `?network=` name
+ *   - 500  network configuration could not be loaded
+ *
+ * Network selection: accepts the OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest`), defaulting to the registry's default network.
+ *
+ * LIMITATION: simulate() is chain-agnostic AND, as of @redeploy/core's
+ * current public signature (`simulate(spec: unknown): SimulateResult`),
+ * accepts no options parameter — so a selected network's
+ * `deploymentParameters` cannot influence the planned steps today. We still
+ * resolve/validate the network name here (so all three endpoints share the
+ * same 400-on-unknown-network behavior and the wire shape is uniform ahead
+ * of a future core change), we just don't yet have anything to do with the
+ * resolved config. Once core's simulate() gains a
+ * deploymentParameters/moduleId option, wire `network.config.deploymentParameters`
+ * (keyed under `network.config.moduleId ?? DEFAULT_MODULE_ID`) through here.
  */
 async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const result = await readAndParseBody(req, res);
   if (!result.ok) return;
   const spec = result.parsed;
+
+  // Resolve + validate the target network (allowlist lookup only — see
+  // resolveNetworkForRequest doc). See this function's LIMITATION note: the
+  // resolved config is not yet consumed by simulate() itself.
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
+  // `network` is intentionally unused beyond validation — see LIMITATION
+  // above: core's simulate() has no options parameter to pass it through to.
 
   // --- Simulate ------------------------------------------------------------
   const simResult = simulate(spec);
@@ -236,12 +345,27 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  *      OR
  *      `done` { success: false, errors: [{code?, message},...] } — on failure.
  *
- * Environment variables consumed (values are NEVER echoed in any response):
+ * Network selection: accepts the OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest`), resolved BEFORE the SSE stream opens so an
+ * unknown network name yields a clean 400 (not a 500, not an SSE frame).
+ * rpcUrl / deployerPrivateKey / deploymentDir / deploymentParameters / moduleId
+ * all come from the resolved network's config (server-side registry only —
+ * see networks.ts), never from client input. When `?network=` is omitted,
+ * resolves to the registry's default network, which — absent a
+ * `NETWORKS_CONFIG` file — is synthesized from the same legacy env vars this
+ * endpoint always used:
  *   - RPC_URL:              JSON-RPC endpoint (default: http://127.0.0.1:8545)
  *   - DEPLOYER_PRIVATE_KEY: private key, with or without a "0x" prefix (required;
  *                           missing → SSE error; normalized via normalizePrivateKey)
- *   - FOUNDRY_OUT:          Foundry artifacts dir (default: <repo>/contracts/out)
  *   - DEPLOYMENT_DIR:       Where to persist the Ignition journal (default: OS temp)
+ * `FOUNDRY_OUT` (Foundry artifacts dir, default: <repo>/contracts/out) is
+ * NOT per-network — the compiled contract artifacts are the same regardless
+ * of which chain they're deployed to.
+ *
+ * Per-network deploymentParameters: the resolved network's
+ * `deploymentParameters` (a flat `paramName -> value` map) is wrapped under
+ * the resolved `moduleId` (`network.config.moduleId ?? DEFAULT_MODULE_ID`)
+ * before being passed to `core.deploy()`'s `deploymentParameters` option.
  *
  * Accounts derivation: we call provider.request({ method: "eth_accounts" }) on
  * the freshly-built jsonRpcProvider. This is answered locally (no RPC round-trip)
@@ -265,13 +389,21 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  *
  * Error responses (non-SSE):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON
+ *   - 400  malformed JSON, or an unknown `?network=` name
+ *   - 500  network configuration could not be loaded
  */
 async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // --- Read / parse body (identical to /api/simulate) ----------------------
   const bodyResult = await readAndParseBody(req, res);
   if (!bodyResult.ok) return;
   const body = bodyResult.parsed;
+
+  // --- Resolve + validate the target network BEFORE opening the SSE stream -
+  // An unknown network name (or a network-config load failure) must yield a
+  // clean, non-SSE 400/500 — mirroring the body-validation errors above —
+  // not an SSE `done{success:false}` frame.
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
 
   // --- Open SSE stream first so all outcomes flow through it ---------------
   res.writeHead(200, {
@@ -282,11 +414,11 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
 
   // --- Validate private key presence BEFORE building the provider ----------
   // SECURITY: never include the key value in any message or log.
-  const rawPrivateKey = process.env["DEPLOYER_PRIVATE_KEY"];
+  const rawPrivateKey = network.config.deployerPrivateKey;
   if (!rawPrivateKey || rawPrivateKey.trim() === "") {
     writeSseEvent(res, "done", {
       success: false,
-      errors: [{ message: "DEPLOYER_PRIVATE_KEY is not configured" }],
+      errors: [{ message: `Deployer private key is not configured for network "${network.name}"` }],
     });
     res.end();
     return;
@@ -296,17 +428,24 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   // privateKeyToAccount (inside jsonRpcProvider) requires the prefix.
   const privateKey = normalizePrivateKey(rawPrivateKey);
 
-  // --- Build environment-driven inputs ------------------------------------
+  // --- Build network-driven inputs -----------------------------------------
   // SECURITY: rpcUrl and privateKey are NEVER interpolated into any log or
   // response message — only passed to jsonRpcProvider() which is responsible
   // for not leaking them.
-  const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+  const rpcUrl = network.config.rpcUrl;
   const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
 
-  // Default deploymentDir: an OS-temp-based stable directory.
-  // We use "redeploy-default" as a stable-ish sub-path so repeated deploys
-  // from the same server instance are resumable (same dir → journal replay).
-  const deploymentDir = resolveDeploymentDir();
+  // Per-network deploymentDir — see networks.ts: always populated (explicit
+  // config value, or <tmp>/redeploy-deployments/<networkName> when omitted)
+  // so resume state for different networks never collides.
+  const deploymentDir = network.config.deploymentDir;
+
+  // Resolved Ignition module id + deploymentParameters for this network.
+  const moduleId = network.config.moduleId ?? DEFAULT_MODULE_ID;
+  const deploymentParameters =
+    network.config.deploymentParameters !== undefined
+      ? { [moduleId]: network.config.deploymentParameters }
+      : undefined;
 
   // Ensure deploymentDir exists before calling deploy() (Ignition expects it).
   try {
@@ -364,6 +503,8 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
       accounts,
       deploymentDir,
       artifactResolver,
+      moduleId,
+      ...(deploymentParameters !== undefined ? { deploymentParameters } : {}),
     });
   } catch (caughtErr) {
     // deploy() throws DeployError for INVALID_SPEC and COMPILE_ERROR.
@@ -446,6 +587,7 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
     const snapshot = buildSnapshot({
       deployment: deployment as DeploymentView,
       chainId,
+      network: network.name,
       toolVersion,
       spec: { spec: body },
     });
@@ -477,24 +619,33 @@ const EMPTY_DEPLOYMENT_VIEW: DeploymentView = { contracts: [], configSteps: [], 
  * used by the studio to fetch live state on demand (e.g. to diff against a
  * spec before deploying).
  *
- * The deployment directory is resolved STRICTLY from server env via
- * `resolveDeploymentDir()` — no client-supplied input (query param, header,
- * etc.) may influence which directory is read. This is a deliberate security
- * boundary: accepting a client-controlled path would open a path-traversal /
- * arbitrary-file-read hole.
+ * The deployment directory is resolved via the OPTIONAL `?network=<name>`
+ * query param (see `resolveNetworkForRequest`) against the server-defined
+ * network registry — an allowlist lookup. No client-supplied input (query
+ * param, header, etc.) is ever used to construct the directory path
+ * directly; only the resolved network's `deploymentDir` (server config) is.
+ * This is a deliberate security boundary: accepting a client-controlled path
+ * would open a path-traversal / arbitrary-file-read hole. Omitting
+ * `?network=` resolves to the registry's default network — preserving the
+ * pre-multi-network behavior for existing callers.
  *
  * Responses:
  *   - 200 { contracts, configSteps, warnings } — DeploymentView, on success.
  *   - 200 { contracts: [], configSteps: [], warnings: [] } — when
  *     readDeployment() throws ReadError("DEPLOYMENT_DIR_NOT_FOUND"): a fresh /
  *     never-deployed directory is not an error, it's the empty state.
+ *   - 400 { error: "Unknown network" } — an unrecognised `?network=` name.
  *   - 500 { error: "Failed to read deployment state" } — any other ReadError
  *     (e.g. JOURNAL_READ_ERROR) or unexpected error. SECURITY: the response
  *     body and stderr log never include the deployment directory path, the
  *     raw error message, or any env value.
+ *   - 500 { error: "Failed to load network configuration" } — a malformed/
+ *     unreadable `NETWORKS_CONFIG` file.
  */
-function handleGetDeployment(_req: IncomingMessage, res: ServerResponse): void {
-  const deploymentDir = resolveDeploymentDir();
+function handleGetDeployment(req: IncomingMessage, res: ServerResponse): void {
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
+  const deploymentDir = network.config.deploymentDir;
 
   let deployment: DeploymentView;
   try {
@@ -702,6 +853,11 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  *   POST /api/deploy          → 200 SSE stream (deploy progress + result)
  *   POST /api/verify/config   → 200 JSON { clean, results } (config-drift check)
  *   POST /api/verify/source   → 200 JSON { success, skipped, reason?, results } (Etherscan source verification)
+ *
+ * `GET /api/deployment`, `POST /api/simulate`, and `POST /api/deploy` all
+ * accept an OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest` / networks.ts) — hence routing matches on
+ * `pathname` (query-string-stripped), not the raw `url`, for these three.
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
@@ -731,7 +887,7 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  if (method === "POST" && url === "/api/simulate") {
+  if (method === "POST" && pathname === "/api/simulate") {
     // handleSimulate is async; fire-and-forget — errors are handled internally.
     handleSimulate(req, res).catch((err: unknown) => {
       // Unexpected error: attempt a 500 response if headers not yet sent.
@@ -751,7 +907,7 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  if (method === "POST" && url === "/api/deploy") {
+  if (method === "POST" && pathname === "/api/deploy") {
     // handleDeploy is async; fire-and-forget — errors are handled internally.
     handleDeploy(req, res).catch(() => {
       // Unexpected error escaping handleDeploy (should not happen in normal
