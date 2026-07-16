@@ -399,3 +399,111 @@ describe("validateConstructorArgs", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// validateConstructorArgs — scripting arg kinds (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("validateConstructorArgs — scripting arg kinds (issue #137)", () => {
+  // "UnknownManifest" is not in the real contract manifest, so validateConstructorArgs
+  // falls back to entry.args.length as the arity (see its doc) — keeps these
+  // tests independent of the real fixture contracts' constructor shapes.
+
+  it("flags a param arg with a blank name", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "c1", contract: "UnknownManifest", args: [{ kind: "param", name: "" }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([
+      { code: EMPTY_ARG_CODE, path: "contracts[0].args[0]", message: "constructor argument must have a value" },
+    ]);
+  });
+
+  it("does not flag a param arg with a non-blank name", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "c1", contract: "UnknownManifest", args: [{ kind: "param", name: "initialOwner" }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+
+  it("flags an expr arg with a blank expression", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "c1", contract: "UnknownManifest", args: [{ kind: "expr", expression: "   " }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([
+      { code: EMPTY_ARG_CODE, path: "contracts[0].args[0]", message: "constructor argument must have a value" },
+    ]);
+  });
+
+  it("does not flag an expr arg with a non-blank expression", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "c1", contract: "UnknownManifest", args: [{ kind: "expr", expression: "1n + 2n" }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+
+  it("flags a resolver arg with a blank name", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "c1", contract: "UnknownManifest", args: [{ kind: "resolver", name: "" }] },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([
+      { code: EMPTY_ARG_CODE, path: "contracts[0].args[0]", message: "constructor argument must have a value" },
+    ]);
+  });
+
+  it("does not flag a resolver arg with a non-blank name (with or without args)", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "c1",
+          contract: "UnknownManifest",
+          args: [
+            { kind: "resolver", name: "readOracleDecimals" },
+            { kind: "resolver", name: "computeSalt", args: ["v1", 42] },
+          ],
+        },
+      ],
+    };
+    expect(validateConstructorArgs(spec)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseErrorPath / buildNodeFieldErrors — deeper arg sub-paths (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("parseErrorPath / buildNodeFieldErrors — scripting-kind error paths (issue #137)", () => {
+  it("maps a core UNKNOWN_PARAM-style path (contracts[i].args[j].name) to the arg slot", () => {
+    // Mirrors the real path shape validateSpec emits for UNKNOWN_PARAM
+    // (spec/validate.ts: `${basePath}.args[${j}].name`).
+    const parsed = parseErrorPath("contracts[1].args[0].name");
+    expect(parsed).toEqual({ kind: "arg", contractIndex: 1, argIndex: 0 });
+  });
+
+  it("buildNodeFieldErrors maps an UNKNOWN_PARAM error to the correct node's arg slot", () => {
+    const errors: StructuredDeployError[] = [
+      {
+        code: "UNKNOWN_PARAM",
+        path: "contracts[0].args[0].name",
+        message: 'references undeclared parameter "foo"',
+      },
+    ];
+    const result = buildNodeFieldErrors(errors, ["node-a"]);
+    expect(result.get("node-a")).toEqual({ args: { 0: 'references undeclared parameter "foo"' } });
+  });
+});

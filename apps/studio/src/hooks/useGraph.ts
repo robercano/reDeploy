@@ -57,6 +57,8 @@ import type {
   StudioSetXStep,
   StudioGrantRoleStep,
   StudioOrderedConfigStep,
+  StudioParameter,
+  ArgSlotUpdate,
 } from "../spec/types.js";
 import type { ContractManifest, ManifestFunction } from "../manifest/index.js";
 import type { Template } from "../templates/types.js";
@@ -117,6 +119,9 @@ function bumpCountersForPersistedState(state: PersistedState): void {
     for (const s of n.data.configSteps) scanStepId(s.id);
   }
   for (const s of state.orderedSteps) scanStepId(s.id);
+  // Parameter ids (issue #137) share the same "-N" suffix convention and the
+  // same stepCounter — see makeStepId/makeParamId.
+  for (const p of state.parameters ?? []) scanStepId(p.id);
   if (maxStep > stepCounter) stepCounter = maxStep;
 }
 
@@ -297,9 +302,31 @@ interface UseGraphReturn {
   /**
    * "New / Clear canvas" (issue #80): resets nodes, edges, orderedSteps, and
    * selectedNodeId to empty/null, and removes the persisted localStorage
-   * copy so a reload doesn't resurrect the cleared graph.
+   * copy so a reload doesn't resurrect the cleared graph. Also clears
+   * parameters/networks/selectedNetwork (issue #137).
    */
   resetGraph: () => void;
+  // ---- Deployment-wide parameters (issue #137) -----------------------------
+  /** Declared parameters (Parameters panel state), serialized to DeploymentSpec.parameters. */
+  parameters: StudioParameter[];
+  /** Declared network names for the Parameters panel's per-network override columns. */
+  networks: string[];
+  /** The currently-selected network, or null. Affects which override value graphToSpec emits. */
+  selectedNetwork: string | null;
+  /** Add a new (blank) parameter declaration. */
+  addParameter: () => void;
+  /** Remove a parameter declaration by id. */
+  removeParameter: (id: string) => void;
+  /** Update a parameter's name and/or defaultValue. */
+  updateParameter: (id: string, update: Partial<Omit<StudioParameter, "id" | "networkOverrides">>) => void;
+  /** Set a parameter's override value for a specific declared network. */
+  updateParameterOverride: (id: string, network: string, value: string) => void;
+  /** Declare a new network name (no-op if blank or already declared). */
+  addNetwork: (name: string) => void;
+  /** Remove a declared network, pruning its override from every parameter and clearing selectedNetwork if it was selected. */
+  removeNetwork: (name: string) => void;
+  /** Select the network whose override values graphToSpec should emit as defaults (null = use each parameter's defaultValue). */
+  setSelectedNetwork: (name: string | null) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,11 +387,13 @@ export function useGraph(): UseGraphReturn {
   );
 
   const updateArgSlot = useCallback(
-    (nodeId: string, slotIndex: number, value: string) =>
+    (nodeId: string, slotIndex: number, update: ArgSlotUpdate) =>
       updateNodeData(nodeId, (d) => ({
         ...d,
         args: d.args.map((slot) =>
-          slot.index === slotIndex ? { ...slot, value } : slot,
+          slot.index === slotIndex
+            ? { ...slot, ...(typeof update === "string" ? { value: update } : update) }
+            : slot,
         ),
       })),
     [updateNodeData],
@@ -385,6 +414,15 @@ export function useGraph(): UseGraphReturn {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [orderedSteps, setOrderedSteps] = useState<StudioOrderedConfigStep[]>(
     () => (persisted ? persisted.orderedSteps : []),
+  );
+
+  // ---- Deployment-wide parameters (issue #137) -------------------------------
+  const [parameters, setParameters] = useState<StudioParameter[]>(
+    () => (persisted?.parameters ?? []),
+  );
+  const [networks, setNetworks] = useState<string[]>(() => persisted?.networks ?? []);
+  const [selectedNetwork, setSelectedNetworkState] = useState<string | null>(
+    () => persisted?.selectedNetwork ?? null,
   );
 
   // ---- React Flow change handlers -------------------------------------------
@@ -713,6 +751,65 @@ export function useGraph(): UseGraphReturn {
     });
   }, []);
 
+  // ---- Deployment-wide parameters (issue #137) -------------------------------
+
+  const addParameter = useCallback(() => {
+    const id = makeStepId("param");
+    const param: StudioParameter = { id, name: "", defaultValue: "", networkOverrides: {} };
+    setParameters((prev) => [...prev, param]);
+  }, []);
+
+  const removeParameter = useCallback((id: string) => {
+    setParameters((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const updateParameter = useCallback(
+    (id: string, update: Partial<Omit<StudioParameter, "id" | "networkOverrides">>) => {
+      setParameters((prev) => prev.map((p) => (p.id === id ? { ...p, ...update } : p)));
+    },
+    [],
+  );
+
+  const updateParameterOverride = useCallback((id: string, network: string, value: string) => {
+    setParameters((prev) =>
+      prev.map((p) =>
+        p.id === id ? { ...p, networkOverrides: { ...p.networkOverrides, [network]: value } } : p,
+      ),
+    );
+  }, []);
+
+  const addNetwork = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (trimmed === "") return;
+    setNetworks((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+  }, []);
+
+  /**
+   * Remove a declared network. Also prunes that network's override entry from
+   * every parameter (a dangling override for a network that no longer exists
+   * would otherwise linger, unreachable from the panel's UI) and clears
+   * `selectedNetwork` if it was the one being removed (falls back to "no
+   * network selected" rather than silently keeping a reference to a removed
+   * network).
+   */
+  const removeNetwork = useCallback((name: string) => {
+    setNetworks((prev) => prev.filter((n) => n !== name));
+    setParameters((prev) =>
+      prev.map((p) => {
+        if (!(name in p.networkOverrides)) return p;
+        const rest = Object.fromEntries(
+          Object.entries(p.networkOverrides).filter(([k]) => k !== name),
+        );
+        return { ...p, networkOverrides: rest };
+      }),
+    );
+    setSelectedNetworkState((prev) => (prev === name ? null : prev));
+  }, []);
+
+  const setSelectedNetwork = useCallback((name: string | null) => {
+    setSelectedNetworkState(name);
+  }, []);
+
   // ---- Autosave (debounced) — issue #80 --------------------------------------
   // Every change to nodes/edges/orderedSteps resets a short debounce timer;
   // the actual localStorage write only happens once changes settle for
@@ -724,7 +821,7 @@ export function useGraph(): UseGraphReturn {
       clearTimeout(saveTimerRef.current);
     }
     saveTimerRef.current = setTimeout(() => {
-      savePersistedState(nodes, edges, orderedSteps);
+      savePersistedState(nodes, edges, orderedSteps, parameters, networks, selectedNetwork);
       saveTimerRef.current = null;
     }, AUTOSAVE_DEBOUNCE_MS);
 
@@ -734,7 +831,7 @@ export function useGraph(): UseGraphReturn {
         saveTimerRef.current = null;
       }
     };
-  }, [nodes, edges, orderedSteps]);
+  }, [nodes, edges, orderedSteps, parameters, networks, selectedNetwork]);
 
   // ---- Reset ("New / Clear canvas") — issue #80 ------------------------------
 
@@ -747,6 +844,9 @@ export function useGraph(): UseGraphReturn {
     setEdges([]);
     setOrderedSteps([]);
     setSelectedNodeId(null);
+    setParameters([]);
+    setNetworks([]);
+    setSelectedNetworkState(null);
     clearPersistedState();
   }, []);
 
@@ -771,5 +871,16 @@ export function useGraph(): UseGraphReturn {
     moveOrderedStepUp,
     moveOrderedStepDown,
     resetGraph,
+    // Deployment-wide parameters (issue #137)
+    parameters,
+    networks,
+    selectedNetwork,
+    addParameter,
+    removeParameter,
+    updateParameter,
+    updateParameterOverride,
+    addNetwork,
+    removeNetwork,
+    setSelectedNetwork,
   };
 }

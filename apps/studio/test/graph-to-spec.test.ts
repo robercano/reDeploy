@@ -945,3 +945,180 @@ describe("graphToSpec — large-integer literal preservation (uint256 safety)", 
     expect(typeof arg.value).toBe("string");
   });
 });
+
+// ---------------------------------------------------------------------------
+// (k) Scripting arg kinds — param / expr / resolver (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — scripting arg kinds (issue #137)", () => {
+  it("emits a ParamArg for a 'param' kind slot", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "param", value: "", paramName: "initialOwner" }],
+      }),
+    ];
+    const { deployment } = graphToSpec(
+      nodes,
+      [],
+      [],
+      [{ id: "p1", name: "initialOwner", defaultValue: "0xabc", networkOverrides: {} }],
+    );
+
+    const arg = deployment.contracts[0].args![0];
+    expect(arg).toEqual({ kind: "param", name: "initialOwner" });
+    expect(deployment.parameters).toEqual({ initialOwner: "0xabc" });
+
+    const result = validateSpec(deployment);
+    expect(result.ok).toBe(true);
+  });
+
+  it("emits an ExprArg for an 'expr' kind slot", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "expr", value: "", expression: "params.supply * 2n" }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+
+    const arg = deployment.contracts[0].args![0];
+    expect(arg).toEqual({ kind: "expr", expression: "params.supply * 2n" });
+    // validateSpec does not evaluate expressions — only structural/cross-field checks.
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("emits a ResolverArg (no args) for a 'resolver' kind slot with no resolverArgs", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "resolver", value: "", resolverName: "readOracleDecimals" }],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+
+    const arg = deployment.contracts[0].args![0];
+    expect(arg).toEqual({ kind: "resolver", name: "readOracleDecimals" });
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("emits a ResolverArg with parsed literal args for a 'resolver' kind slot with resolverArgs", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [
+          {
+            index: 0,
+            kind: "resolver",
+            value: "",
+            resolverName: "computeSalt",
+            resolverArgs: ["v1", "42", "true"],
+          },
+        ],
+      }),
+    ];
+    const { deployment } = graphToSpec(nodes, []);
+
+    const arg = deployment.contracts[0].args![0];
+    expect(arg).toEqual({
+      kind: "resolver",
+      name: "computeSalt",
+      args: ["v1", 42, true],
+    });
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("a constructorRef edge overrides a param/expr/resolver slot (edge always wins)", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "oracle", "Oracle"),
+      makeNode("n2", "vault", "Vault", {
+        args: [{ index: 0, kind: "expr", value: "", expression: "1n + 2n" }],
+      }),
+    ];
+    const edges: GraphEdge[] = [
+      { id: "e1", source: "n1", target: "n2", data: { edgeKind: "constructorRef", argIndex: 0 } },
+    ];
+    const { deployment } = graphToSpec(nodes, edges);
+    const vaultEntry = deployment.contracts.find((c) => c.id === "vault")!;
+    expect(vaultEntry.args![0]).toEqual({ kind: "ref", contract: "oracle" });
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+
+  it("validateSpec reports UNKNOWN_PARAM when a param slot references an undeclared parameter", () => {
+    const nodes: GraphNode[] = [
+      makeNode("n1", "token", "Token", {
+        args: [{ index: 0, kind: "param", value: "", paramName: "notDeclared" }],
+      }),
+    ];
+    // No parameters declared at all.
+    const { deployment } = graphToSpec(nodes, []);
+    const result = validateSpec(deployment);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.code === "UNKNOWN_PARAM")).toBe(true);
+  });
+
+  it("emits DeploymentSpec.parameters from declared StudioParameters (defaults only, no network selected)", () => {
+    const { deployment } = graphToSpec(
+      [],
+      [],
+      [],
+      [
+        { id: "p1", name: "owner", defaultValue: "0xowner", networkOverrides: { mainnet: "0xmainnet" } },
+        { id: "p2", name: "cap", defaultValue: "1000", networkOverrides: {} },
+      ],
+      null,
+    );
+    expect(deployment.parameters).toEqual({ owner: "0xowner", cap: 1000 });
+  });
+
+  it("substitutes the selected network's override in place of defaultValue", () => {
+    const { deployment } = graphToSpec(
+      [],
+      [],
+      [],
+      [{ id: "p1", name: "owner", defaultValue: "0xdefault", networkOverrides: { mainnet: "0xmainnet" } }],
+      "mainnet",
+    );
+    expect(deployment.parameters).toEqual({ owner: "0xmainnet" });
+  });
+
+  it("falls back to defaultValue when the selected network has no override for a parameter", () => {
+    const { deployment } = graphToSpec(
+      [],
+      [],
+      [],
+      [{ id: "p1", name: "owner", defaultValue: "0xdefault", networkOverrides: {} }],
+      "mainnet",
+    );
+    expect(deployment.parameters).toEqual({ owner: "0xdefault" });
+  });
+
+  it("does not resolve inherited Object.prototype members as a network override (prototype-pollution guard)", () => {
+    // A network named after an Object.prototype member (e.g. "toString") with
+    // no OWN override recorded must fall back to defaultValue rather than
+    // reading the inherited prototype function/value off the plain object.
+    for (const protoNetwork of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+      const { deployment } = graphToSpec(
+        [],
+        [],
+        [],
+        [{ id: "p1", name: "x", defaultValue: "5", networkOverrides: {} }],
+        protoNetwork,
+      );
+      expect(deployment.parameters).toEqual({ x: 5 });
+    }
+  });
+
+  it("skips a declared parameter with an empty name", () => {
+    const { deployment } = graphToSpec(
+      [],
+      [],
+      [],
+      [{ id: "p1", name: "", defaultValue: "irrelevant", networkOverrides: {} }],
+    );
+    expect(deployment.parameters).toBeUndefined();
+  });
+
+  it("omits DeploymentSpec.parameters entirely when no parameters are declared", () => {
+    const { deployment } = graphToSpec([], [], [], []);
+    expect(deployment.parameters).toBeUndefined();
+    expect(validateSpec(deployment).ok).toBe(true);
+  });
+});

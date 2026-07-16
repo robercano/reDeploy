@@ -25,6 +25,7 @@ import type {
   StudioConfigStep,
   StudioEdgeData,
   StudioOrderedConfigStep,
+  StudioParameter,
 } from "../spec/types.js";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,22 @@ export interface PersistedState {
   nodes: PersistedNode[];
   edges: PersistedEdge[];
   orderedSteps: StudioOrderedConfigStep[];
+  /**
+   * Deployment-wide parameter declarations (issue #137), optional for
+   * backward compatibility with state saved before this field existed —
+   * absent means "no parameters declared" (useGraph.ts defaults to []).
+   */
+  parameters?: StudioParameter[];
+  /**
+   * Declared network names for the Parameters panel's per-network override
+   * columns (issue #137), optional for the same backward-compat reason.
+   */
+  networks?: string[];
+  /**
+   * The currently-selected network in the Parameters panel (issue #137), or
+   * null for "no network selected". Optional/absent defaults to null.
+   */
+  selectedNetwork?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,10 +99,35 @@ export interface PersistedState {
 function isArgSlot(v: unknown): v is ArgSlot {
   if (v === null || typeof v !== "object") return false;
   const s = v as Record<string, unknown>;
-  return (
-    typeof s["index"] === "number" &&
-    (s["kind"] === "literal" || s["kind"] === "ref") &&
-    typeof s["value"] === "string"
+  if (typeof s["index"] !== "number") return false;
+  if (typeof s["value"] !== "string") return false;
+  const kind = s["kind"];
+  if (kind !== "literal" && kind !== "ref" && kind !== "param" && kind !== "expr" && kind !== "resolver") {
+    return false;
+  }
+  // Kind-specific fields (issue #137) — optional, but must be well-typed when present.
+  if (s["paramName"] !== undefined && typeof s["paramName"] !== "string") return false;
+  if (s["expression"] !== undefined && typeof s["expression"] !== "string") return false;
+  if (s["resolverName"] !== undefined && typeof s["resolverName"] !== "string") return false;
+  if (
+    s["resolverArgs"] !== undefined &&
+    (!Array.isArray(s["resolverArgs"]) || !s["resolverArgs"].every((a) => typeof a === "string"))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Structural check for a StudioParameter (issue #137) — see spec/types.ts. */
+function isStudioParameter(v: unknown): v is StudioParameter {
+  if (v === null || typeof v !== "object") return false;
+  const p = v as Record<string, unknown>;
+  if (typeof p["id"] !== "string") return false;
+  if (typeof p["name"] !== "string") return false;
+  if (typeof p["defaultValue"] !== "string") return false;
+  if (p["networkOverrides"] === null || typeof p["networkOverrides"] !== "object") return false;
+  return Object.values(p["networkOverrides"] as Record<string, unknown>).every(
+    (val) => typeof val === "string",
   );
 }
 
@@ -157,6 +199,22 @@ function isPersistedState(v: unknown): v is PersistedState {
   if (!Array.isArray(s["orderedSteps"]) || !s["orderedSteps"].every(isConfigStepShape)) {
     return false;
   }
+  // Issue #137 fields — optional (backward-compat with pre-existing saved state).
+  if (s["parameters"] !== undefined) {
+    if (!Array.isArray(s["parameters"]) || !s["parameters"].every(isStudioParameter)) return false;
+  }
+  if (s["networks"] !== undefined) {
+    if (!Array.isArray(s["networks"]) || !s["networks"].every((n) => typeof n === "string")) {
+      return false;
+    }
+  }
+  if (
+    s["selectedNetwork"] !== undefined &&
+    s["selectedNetwork"] !== null &&
+    typeof s["selectedNetwork"] !== "string"
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -185,11 +243,21 @@ export function loadPersistedState(): PersistedState | null {
   }
 }
 
-/** Persist the given graph state, stamped with the current version. Best-effort. */
+/**
+ * Persist the given graph state, stamped with the current version. Best-effort.
+ *
+ * `parameters` / `networks` / `selectedNetwork` (issue #137) are optional
+ * with empty/null defaults so every pre-existing call site (which only ever
+ * passed nodes/edges/orderedSteps) continues to compile and behave exactly
+ * as before.
+ */
 export function savePersistedState(
   nodes: Node<Record<string, unknown>>[],
   edges: Edge<Record<string, unknown>>[],
   orderedSteps: StudioOrderedConfigStep[],
+  parameters: StudioParameter[] = [],
+  networks: string[] = [],
+  selectedNetwork: string | null = null,
 ): void {
   if (typeof window === "undefined") return;
   try {
@@ -218,6 +286,9 @@ export function savePersistedState(
         ...(e.data ? { data: e.data as unknown as StudioEdgeData } : {}),
       })),
       orderedSteps,
+      parameters,
+      networks,
+      selectedNetwork,
     };
     window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(state));
   } catch {

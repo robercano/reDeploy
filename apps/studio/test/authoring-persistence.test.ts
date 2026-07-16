@@ -17,7 +17,7 @@ import {
 } from "../src/hooks/authoring-persistence";
 import type { PersistedState } from "../src/hooks/authoring-persistence";
 import type { Node, Edge } from "@xyflow/react";
-import type { StudioOrderedConfigStep } from "../src/spec/types";
+import type { StudioOrderedConfigStep, StudioParameter } from "../src/spec/types";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -278,5 +278,140 @@ describe("authoring-persistence — corrupt/stale state is discarded gracefully"
     };
     window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(bad));
     expect(loadPersistedState()).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scripting arg kinds + parameters (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("authoring-persistence — scripting arg kinds + parameters round trip (issue #137)", () => {
+  it("round-trips param/expr/resolver arg slots", () => {
+    const nodes = [
+      makeNode("contract-1", {
+        args: [
+          { index: 0, kind: "param", value: "", paramName: "owner" },
+          { index: 1, kind: "expr", value: "", expression: "1n + 2n" },
+          { index: 2, kind: "resolver", value: "", resolverName: "computeSalt", resolverArgs: ["v1", "42"] },
+        ],
+      }),
+    ];
+    savePersistedState(nodes, [], []);
+    const loaded = loadPersistedState();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.nodes[0].data.args).toEqual([
+      { index: 0, kind: "param", value: "", paramName: "owner" },
+      { index: 1, kind: "expr", value: "", expression: "1n + 2n" },
+      { index: 2, kind: "resolver", value: "", resolverName: "computeSalt", resolverArgs: ["v1", "42"] },
+    ]);
+  });
+
+  it("round-trips declared parameters, networks, and the selected network", () => {
+    const parameters: StudioParameter[] = [
+      { id: "param-1", name: "owner", defaultValue: "0xdef", networkOverrides: { mainnet: "0xmain" } },
+    ];
+    savePersistedState([], [], [], parameters, ["mainnet", "sepolia"], "mainnet");
+    const loaded = loadPersistedState();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.parameters).toEqual(parameters);
+    expect(loaded!.networks).toEqual(["mainnet", "sepolia"]);
+    expect(loaded!.selectedNetwork).toBe("mainnet");
+  });
+
+  it("defaults parameters/networks/selectedNetwork to []/[]/null when called with the pre-existing 3-arg signature", () => {
+    savePersistedState([], [], []);
+    const loaded = loadPersistedState();
+    expect(loaded!.parameters).toEqual([]);
+    expect(loaded!.networks).toEqual([]);
+    expect(loaded!.selectedNetwork).toBeNull();
+  });
+
+  it("accepts saved state that predates the parameters/networks/selectedNetwork fields (backward compat)", () => {
+    const legacy = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      // no parameters / networks / selectedNetwork keys at all
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(legacy));
+    const loaded = loadPersistedState();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.parameters).toBeUndefined();
+    expect(loaded!.networks).toBeUndefined();
+    expect(loaded!.selectedNetwork).toBeUndefined();
+  });
+
+  it("rejects an arg slot with an unrecognized kind", () => {
+    const bad = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [
+        {
+          id: "contract-1",
+          position: { x: 0, y: 0 },
+          data: {
+            deployId: "token",
+            contractName: "Token",
+            args: [{ index: 0, kind: "bogus", value: "" }],
+            after: [],
+            configSteps: [],
+          },
+        },
+      ],
+      edges: [],
+      orderedSteps: [],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(bad));
+    expect(loadPersistedState()).toBeNull();
+  });
+
+  it("rejects a declared parameter missing required fields", () => {
+    const bad = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      parameters: [{ id: "p1", name: "owner" /* missing defaultValue/networkOverrides */ }],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(bad));
+    expect(loadPersistedState()).toBeNull();
+  });
+
+  it("rejects networks that is not an array of strings", () => {
+    const bad = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      networks: [1, 2, 3],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(bad));
+    expect(loadPersistedState()).toBeNull();
+  });
+
+  it("rejects a selectedNetwork that is neither a string nor null", () => {
+    const bad = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      selectedNetwork: 42,
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(bad));
+    expect(loadPersistedState()).toBeNull();
+  });
+
+  it("accepts a null selectedNetwork", () => {
+    const good = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      selectedNetwork: null,
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(good));
+    const loaded = loadPersistedState();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.selectedNetwork).toBeNull();
   });
 });

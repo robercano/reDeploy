@@ -33,7 +33,15 @@
 import { memo, useCallback, useState } from "react";
 import { Handle, Position, useReactFlow } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
-import type { ContractNodeData, ArgSlot, StudioConfigStep, StudioAddressRef, StudioSetXStep, StudioGrantRoleStep } from "../spec/types.js";
+import type {
+  ContractNodeData,
+  ArgSlot,
+  ArgSlotUpdate,
+  StudioConfigStep,
+  StudioAddressRef,
+  StudioSetXStep,
+  StudioGrantRoleStep,
+} from "../spec/types.js";
 import { getContract, getStateChangingFunctions } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
 import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
@@ -128,6 +136,31 @@ const paramTypeStyle: React.CSSProperties = {
   fontStyle: "italic",
 };
 
+/**
+ * Compute a local (client-side, immediate) inline-validation message for the
+ * new scripting arg kinds (issue #137) — distinct from `errorMessage`, which
+ * only reflects the most recent Deploy (simulate)/(real) run. Unlike the
+ * pre-existing literal-blank check (validateConstructorArgs, only run at
+ * Deploy time), param/expr/resolver slots are cheap to validate on every
+ * keystroke, so we surface "must have a value" feedback immediately.
+ *
+ * Returns undefined for "literal"/"ref" kinds (unchanged pre-existing
+ * behavior: blank literals are only flagged by the Deploy-time check) or when
+ * the kind-specific required field is non-blank.
+ */
+function localArgKindError(slot: ArgSlot): string | undefined {
+  if (slot.kind === "param" && (slot.paramName ?? "").trim() === "") {
+    return "parameter name must not be empty";
+  }
+  if (slot.kind === "expr" && (slot.expression ?? "").trim() === "") {
+    return "expression must not be empty";
+  }
+  if (slot.kind === "resolver" && (slot.resolverName ?? "").trim() === "") {
+    return "resolver name must not be empty";
+  }
+  return undefined;
+}
+
 function ArgRow({
   slot,
   nodeId,
@@ -135,10 +168,11 @@ function ArgRow({
   refSourceDeployId,
   isOverview,
   errorMessage,
+  paramNames,
 }: {
   slot: ArgSlot;
   nodeId: string;
-  onUpdate: (index: number, value: string) => void;
+  onUpdate: (index: number, update: ArgSlotUpdate) => void;
   /** When defined, the slot is bound by a constructorRef edge to this deploy ID. */
   refSourceDeployId?: string;
   /** When true, the visible arg content is hidden (overview mode). */
@@ -149,11 +183,20 @@ function ArgRow({
    * the input is highlighted in red.
    */
   errorMessage?: string;
+  /** Names of parameters declared in the Parameters panel (issue #137), for the "param" kind's input suggestions. */
+  paramNames?: string[];
 }) {
   const handleId = `${nodeId}-arg-${slot.index}`;
   const hasParamInfo = slot.name !== undefined || slot.type !== undefined;
   const isBoundByEdge = refSourceDeployId !== undefined;
-  const hasError = errorMessage !== undefined;
+  // A stale "ref" kind slot with no bound edge behaves like "literal" in the
+  // UI (see graph-to-spec.ts's fallback doc) — the kind selector never offers
+  // "ref" as a user-selectable option (edges create it implicitly).
+  const effectiveKind = slot.kind === "ref" ? "literal" : slot.kind;
+  const localError = isBoundByEdge ? undefined : localArgKindError(slot);
+  const displayedError = errorMessage ?? localError;
+  const hasError = displayedError !== undefined;
+  const datalistId = `arg-${nodeId}-${slot.index}-param-names`;
 
   return (
     <div style={argRowStyle}>
@@ -198,25 +241,106 @@ function ArgRow({
             </div>
           ) : (
             <>
-              <input
-                style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
-                value={slot.value}
-                placeholder="value"
-                title={
-                  hasError
-                    ? errorMessage
-                    : `Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`
-                }
-                onChange={(e) => onUpdate(slot.index, e.target.value)}
-                aria-label={`arg-${slot.index}`}
-                aria-invalid={hasError ? "true" : undefined}
-              />
+              {/* Kind selector (issue #137): literal | param | expression | resolver.
+                  "ref" is never a selectable option — it is implied only by an
+                  incoming constructorRef edge (isBoundByEdge above).
+                  NOTE: aria-label intentionally does NOT start with "arg-" —
+                  several pre-existing tests locate the single PRIMARY value
+                  input per slot via a `/^arg-/` regex/exact match and expect
+                  exactly one match per slot; every kind's primary input below
+                  keeps the shared `arg-${index}` label so that invariant holds
+                  regardless of which kind is selected. */}
+              <select
+                style={{ ...smallSelectStyle, marginBottom: 2 }}
+                value={effectiveKind}
+                onChange={(e) => onUpdate(slot.index, { kind: e.target.value as ArgSlot["kind"] })}
+                aria-label={`argkind-${slot.index}`}
+              >
+                <option value="literal">literal</option>
+                <option value="param">param</option>
+                <option value="expr">expression</option>
+                <option value="resolver">resolver</option>
+              </select>
+
+              {effectiveKind === "literal" && (
+                <input
+                  style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
+                  value={slot.value}
+                  placeholder="value"
+                  title={
+                    hasError
+                      ? displayedError
+                      : `Constructor arg ${slot.index}${slot.name ? ` — ${slot.name}` : ""}${slot.type ? ` (${slot.type})` : ""}`
+                  }
+                  onChange={(e) => onUpdate(slot.index, { value: e.target.value })}
+                  aria-label={`arg-${slot.index}`}
+                  aria-invalid={hasError ? "true" : undefined}
+                />
+              )}
+
+              {effectiveKind === "param" && (
+                <>
+                  <input
+                    style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
+                    value={slot.paramName ?? ""}
+                    placeholder="parameter name"
+                    list={paramNames && paramNames.length > 0 ? datalistId : undefined}
+                    onChange={(e) => onUpdate(slot.index, { paramName: e.target.value })}
+                    aria-label={`arg-${slot.index}`}
+                    aria-invalid={hasError ? "true" : undefined}
+                  />
+                  {paramNames && paramNames.length > 0 && (
+                    <datalist id={datalistId}>
+                      {paramNames.map((n) => (
+                        <option key={n} value={n} />
+                      ))}
+                    </datalist>
+                  )}
+                </>
+              )}
+
+              {effectiveKind === "expr" && (
+                <input
+                  style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}` } : inputStyle}
+                  value={slot.expression ?? ""}
+                  placeholder='expression, e.g. params.supply * 2n'
+                  onChange={(e) => onUpdate(slot.index, { expression: e.target.value })}
+                  aria-label={`arg-${slot.index}`}
+                  aria-invalid={hasError ? "true" : undefined}
+                />
+              )}
+
+              {effectiveKind === "resolver" && (
+                <>
+                  <input
+                    style={hasError ? { ...inputStyle, border: `1px solid ${ERROR_BORDER_COLOR}`, marginBottom: 2 } : { ...inputStyle, marginBottom: 2 }}
+                    value={slot.resolverName ?? ""}
+                    placeholder="resolver name"
+                    onChange={(e) => onUpdate(slot.index, { resolverName: e.target.value })}
+                    aria-label={`arg-${slot.index}`}
+                    aria-invalid={hasError ? "true" : undefined}
+                  />
+                  <input
+                    style={inputStyle}
+                    value={(slot.resolverArgs ?? []).join(",")}
+                    placeholder="resolver args (comma-separated, optional)"
+                    onChange={(e) =>
+                      onUpdate(slot.index, {
+                        resolverArgs:
+                          e.target.value === "" ? [] : e.target.value.split(",").map((s) => s.trim()),
+                      })
+                    }
+                    aria-label={`argresolverargs-${slot.index}`}
+                  />
+                </>
+              )}
+
               {hasError && (
                 <div
                   style={fieldErrorMessageStyle}
                   data-testid={`node-field-error-arg-${slot.index}-${nodeId}`}
                 >
-                  {errorMessage}
+                  {displayedError}
                 </div>
               )}
             </>
@@ -268,6 +392,13 @@ export interface ConfigCallbacks {
   onUpdateGrantRoleStep: (nodeId: string, stepId: string, update: Partial<Omit<StudioGrantRoleStep, "kind" | "id">>) => void;
   /** All deploy targets currently on the canvas (for address-ref arg picker). */
   deployTargets?: CanvasDeployTarget[];
+  /**
+   * Names of parameters declared in the Parameters panel (issue #137),
+   * injected by App.tsx for the constructor arg "param" kind's input
+   * suggestions (ArgRow's datalist). Reuses this existing threading
+   * mechanism (data.configCallbacks) rather than adding a new node-data field.
+   */
+  paramNames?: string[];
 }
 
 const configCardStyle: React.CSSProperties = {
@@ -690,6 +821,8 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
   // Resolve configCallbacks and deployTargets if present in data (injected by App.tsx)
   const configCallbacks = (rawData as unknown as Record<string, unknown>).configCallbacks as ConfigCallbacks | undefined;
   const deployTargets = configCallbacks?.deployTargets ?? [];
+  // Declared parameter names (issue #137), for the "param" kind's input suggestions.
+  const paramNames = configCallbacks?.paramNames ?? [];
 
   return (
     <div
@@ -774,10 +907,11 @@ function ContractNodeInner({ id, data: rawData, selected }: NodeProps) {
               key={slot.index}
               slot={slot}
               nodeId={id}
-              onUpdate={(idx, val) => data.onUpdateArgSlot(id, idx, val)}
+              onUpdate={(idx, update) => data.onUpdateArgSlot(id, idx, update)}
               refSourceDeployId={data.refSourceDeployIds?.get(slot.index)}
               isOverview={isOverview}
               errorMessage={data.errors?.args?.[slot.index]}
+              paramNames={paramNames}
             />
           ))}
         </div>
