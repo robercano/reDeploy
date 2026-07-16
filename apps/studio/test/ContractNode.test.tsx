@@ -21,8 +21,8 @@
  * Handle components don't throw.
  */
 
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import type { NodeProps } from "@xyflow/react";
 import { ContractNode } from "../src/components/ContractNode.js";
@@ -531,5 +531,223 @@ describe("ContractNode — error highlighting (issue #83)", () => {
     const nodeEl = screen.getByTestId("contract-node-test-node");
     // selected primary token wins over the error "danger" token.
     expect(nodeEl.style.border).toContain("var(--color-primary)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: per-slot kind selector + per-kind inputs (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("ContractNode — ArgRow kind selector (issue #137)", () => {
+  it("renders the kind selector with literal selected by default", () => {
+    const data = makeData({ args: [{ index: 0, kind: "literal", value: "hello" }] });
+    renderContractNode(data);
+
+    const select = screen.getByLabelText("argkind-0") as HTMLSelectElement;
+    expect(select.value).toBe("literal");
+    // Options present
+    const optionValues = Array.from(select.options).map((o) => o.value);
+    expect(optionValues).toEqual(["literal", "param", "expr", "resolver"]);
+  });
+
+  it("does not render the kind selector for a slot bound by a constructorRef edge", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "" }],
+      refSourceDeployIds: new Map([[0, "token"]]),
+    });
+    renderContractNode(data);
+    expect(screen.queryByLabelText("argkind-0")).toBeNull();
+  });
+
+  it("switching the kind selector to 'param' calls onUpdateArgSlot with {kind:'param'}", () => {
+    const onUpdateArgSlot = vi.fn();
+    const data = makeData({
+      args: [{ index: 0, kind: "literal", value: "" }],
+      onUpdateArgSlot,
+    });
+    renderContractNode(data);
+
+    fireEvent.change(screen.getByLabelText("argkind-0"), { target: { value: "param" } });
+    expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { kind: "param" });
+  });
+
+  it("a stale 'ref' kind slot with no bound edge behaves like literal (kind selector shows 'literal')", () => {
+    const data = makeData({ args: [{ index: 0, kind: "ref", value: "42" }] });
+    renderContractNode(data);
+
+    const select = screen.getByLabelText("argkind-0") as HTMLSelectElement;
+    expect(select.value).toBe("literal");
+    const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+    expect(input.value).toBe("42");
+  });
+
+  describe("param kind", () => {
+    it("renders a parameter-name input and calls onUpdateArgSlot on change", () => {
+      const onUpdateArgSlot = vi.fn();
+      const data = makeData({
+        args: [{ index: 0, kind: "param", value: "", paramName: "" }],
+        onUpdateArgSlot,
+      });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.value).toBe("");
+      fireEvent.change(input, { target: { value: "initialOwner" } });
+      expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { paramName: "initialOwner" });
+    });
+
+    it("flags a blank parameter name as invalid (inline validation, no server errors needed)", () => {
+      const data = makeData({ args: [{ index: 0, kind: "param", value: "", paramName: "" }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(screen.getByTestId("node-field-error-arg-0-test-node").textContent).toBe(
+        "parameter name must not be empty",
+      );
+    });
+
+    it("does not flag a non-blank parameter name", () => {
+      const data = makeData({ args: [{ index: 0, kind: "param", value: "", paramName: "owner" }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBeNull();
+      expect(screen.queryByTestId("node-field-error-arg-0-test-node")).toBeNull();
+    });
+
+    it("offers declared parameter names as datalist suggestions when provided via configCallbacks.paramNames", () => {
+      const data = {
+        ...makeData({ args: [{ index: 0, kind: "param", value: "", paramName: "" }] }),
+        configCallbacks: {
+          onAddConfigStep: noop,
+          onRemoveConfigStep: noop,
+          onUpdateSetXStep: noop,
+          onUpdateGrantRoleStep: noop,
+          deployTargets: [],
+          paramNames: ["owner", "cap"],
+        },
+      };
+      renderContractNode(data as unknown as ContractNodeData);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      const listId = input.getAttribute("list");
+      expect(listId).not.toBeNull();
+      const datalist = document.getElementById(listId!) as HTMLDataListElement;
+      const values = Array.from(datalist.options).map((o) => o.value);
+      expect(values).toEqual(["owner", "cap"]);
+    });
+  });
+
+  describe("expr kind", () => {
+    it("renders an expression input and calls onUpdateArgSlot on change", () => {
+      const onUpdateArgSlot = vi.fn();
+      const data = makeData({
+        args: [{ index: 0, kind: "expr", value: "", expression: "" }],
+        onUpdateArgSlot,
+      });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "params.supply * 2n" } });
+      expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { expression: "params.supply * 2n" });
+    });
+
+    it("flags a blank expression as invalid", () => {
+      const data = makeData({ args: [{ index: 0, kind: "expr", value: "", expression: "   " }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(screen.getByTestId("node-field-error-arg-0-test-node").textContent).toBe(
+        "expression must not be empty",
+      );
+    });
+
+    it("does not flag a non-blank expression", () => {
+      const data = makeData({ args: [{ index: 0, kind: "expr", value: "", expression: "1n + 2n" }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBeNull();
+    });
+  });
+
+  describe("resolver kind", () => {
+    it("renders a resolver-name input and a resolver-args input, both wired to onUpdateArgSlot", () => {
+      const onUpdateArgSlot = vi.fn();
+      const data = makeData({
+        args: [{ index: 0, kind: "resolver", value: "", resolverName: "", resolverArgs: [] }],
+        onUpdateArgSlot,
+      });
+      renderContractNode(data);
+
+      const nameInput = screen.getByLabelText("arg-0") as HTMLInputElement;
+      fireEvent.change(nameInput, { target: { value: "computeSalt" } });
+      expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { resolverName: "computeSalt" });
+
+      const argsInput = screen.getByLabelText("argresolverargs-0") as HTMLInputElement;
+      fireEvent.change(argsInput, { target: { value: "v1, 42, true" } });
+      expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, {
+        resolverArgs: ["v1", "42", "true"],
+      });
+    });
+
+    it("clears resolverArgs to an empty array when the args input is cleared", () => {
+      const onUpdateArgSlot = vi.fn();
+      const data = makeData({
+        args: [{ index: 0, kind: "resolver", value: "", resolverName: "computeSalt", resolverArgs: ["v1"] }],
+        onUpdateArgSlot,
+      });
+      renderContractNode(data);
+
+      const argsInput = screen.getByLabelText("argresolverargs-0") as HTMLInputElement;
+      expect(argsInput.value).toBe("v1");
+      fireEvent.change(argsInput, { target: { value: "" } });
+      expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { resolverArgs: [] });
+    });
+
+    it("flags a blank resolver name as invalid", () => {
+      const data = makeData({ args: [{ index: 0, kind: "resolver", value: "", resolverName: "" }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(screen.getByTestId("node-field-error-arg-0-test-node").textContent).toBe(
+        "resolver name must not be empty",
+      );
+    });
+
+    it("does not flag a non-blank resolver name", () => {
+      const data = makeData({ args: [{ index: 0, kind: "resolver", value: "", resolverName: "computeSalt" }] });
+      renderContractNode(data);
+
+      const input = screen.getByLabelText("arg-0") as HTMLInputElement;
+      expect(input.getAttribute("aria-invalid")).toBeNull();
+    });
+  });
+
+  it("switching kind to 'literal' updates the slot back to a plain value input", () => {
+    const onUpdateArgSlot = vi.fn();
+    const data = makeData({
+      args: [{ index: 0, kind: "param", value: "", paramName: "owner" }],
+      onUpdateArgSlot,
+    });
+    renderContractNode(data);
+
+    fireEvent.change(screen.getByLabelText("argkind-0"), { target: { value: "literal" } });
+    expect(onUpdateArgSlot).toHaveBeenCalledWith("test-node", 0, { kind: "literal" });
+  });
+
+  it("server-provided errorMessage takes precedence over the local inline-validation message", () => {
+    const data = makeData({
+      args: [{ index: 0, kind: "param", value: "", paramName: "" }],
+      errors: { args: { 0: "server-side error message" } },
+    });
+    renderContractNode(data);
+
+    expect(screen.getByTestId("node-field-error-arg-0-test-node").textContent).toBe(
+      "server-side error message",
+    );
   });
 });

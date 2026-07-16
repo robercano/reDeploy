@@ -15,6 +15,9 @@ import { renderHook, act } from "@testing-library/react";
 import { useGraph, stepReferencesDeployId } from "../src/hooks/useGraph";
 import type { ContractNodeData, StudioEdgeData } from "../src/spec/types";
 import type { ContractManifest, ManifestFunction } from "../src/manifest/types";
+import { graphToSpec } from "../src/spec/graph-to-spec";
+import { toGraphNodes } from "../src/spec/project-nodes";
+import type { GraphEdge } from "../src/spec/graph-to-spec";
 import {
   AUTHORING_STORAGE_KEY,
   AUTHORING_STATE_VERSION,
@@ -147,6 +150,38 @@ describe("useGraph — node data callbacks", () => {
     expect(nd(result.current.nodes[0]).args).toHaveLength(1);
     act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, "hello"));
     expect(nd(result.current.nodes[0]).args[0].value).toBe("hello");
+  });
+
+  // -------------------------------------------------------------------------
+  // Scripting arg kinds (issue #137) — object-form ArgSlotUpdate
+  // -------------------------------------------------------------------------
+
+  it("onUpdateArgSlot accepts an ArgSlotUpdate object to switch kind + set a kind-specific field", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(ONE_ARG_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, { kind: "param" }));
+    expect(nd(result.current.nodes[0]).args[0].kind).toBe("param");
+
+    act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, { paramName: "owner" }));
+    expect(nd(result.current.nodes[0]).args[0].paramName).toBe("owner");
+    // Switching kind does not clear the original literal `value` field.
+    expect(nd(result.current.nodes[0]).args[0].value).toBe("");
+  });
+
+  it("onUpdateArgSlot preserves kind-specific fields across an unrelated update (merge, not replace)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(ONE_ARG_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+
+    act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, { kind: "resolver", resolverName: "computeSalt" }));
+    act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, { resolverArgs: ["v1", "42"] }));
+
+    const slot = nd(result.current.nodes[0]).args[0];
+    expect(slot.kind).toBe("resolver");
+    expect(slot.resolverName).toBe("computeSalt");
+    expect(slot.resolverArgs).toEqual(["v1", "42"]);
   });
 });
 
@@ -1085,5 +1120,245 @@ describe("useGraph — resetGraph", () => {
     const { result } = renderHook(() => useGraph());
     expect(() => act(() => result.current.resetGraph())).not.toThrow();
     expect(result.current.nodes).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deployment-wide parameters (issue #137)
+// ---------------------------------------------------------------------------
+
+describe("useGraph — parameters CRUD", () => {
+  it("addParameter appends a blank parameter with a stable id", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addParameter());
+    expect(result.current.parameters).toHaveLength(1);
+    expect(result.current.parameters[0]).toMatchObject({ name: "", defaultValue: "", networkOverrides: {} });
+    expect(typeof result.current.parameters[0].id).toBe("string");
+  });
+
+  it("updateParameter updates name and defaultValue", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addParameter());
+    const id = result.current.parameters[0].id;
+
+    act(() => result.current.updateParameter(id, { name: "owner", defaultValue: "0xabc" }));
+    expect(result.current.parameters[0]).toMatchObject({ name: "owner", defaultValue: "0xabc" });
+  });
+
+  it("removeParameter removes the parameter by id", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addParameter();
+      result.current.addParameter();
+    });
+    const [first, second] = result.current.parameters;
+
+    act(() => result.current.removeParameter(first.id));
+    expect(result.current.parameters).toHaveLength(1);
+    expect(result.current.parameters[0].id).toBe(second.id);
+  });
+
+  it("addNetwork declares a new network; is a no-op for blank or duplicate names", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addNetwork("mainnet"));
+    expect(result.current.networks).toEqual(["mainnet"]);
+
+    act(() => result.current.addNetwork("   "));
+    expect(result.current.networks).toEqual(["mainnet"]);
+
+    act(() => result.current.addNetwork("mainnet"));
+    expect(result.current.networks).toEqual(["mainnet"]);
+  });
+
+  it("updateParameterOverride sets a per-network override value", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addParameter();
+      result.current.addNetwork("mainnet");
+    });
+    const id = result.current.parameters[0].id;
+
+    act(() => result.current.updateParameterOverride(id, "mainnet", "0xmain"));
+    expect(result.current.parameters[0].networkOverrides).toEqual({ mainnet: "0xmain" });
+  });
+
+  it("removeNetwork prunes that network's override from every parameter", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addParameter();
+      result.current.addNetwork("mainnet");
+      result.current.addNetwork("sepolia");
+    });
+    const id = result.current.parameters[0].id;
+    act(() => {
+      result.current.updateParameterOverride(id, "mainnet", "0xmain");
+      result.current.updateParameterOverride(id, "sepolia", "0xsep");
+    });
+
+    act(() => result.current.removeNetwork("mainnet"));
+    expect(result.current.networks).toEqual(["sepolia"]);
+    expect(result.current.parameters[0].networkOverrides).toEqual({ sepolia: "0xsep" });
+  });
+
+  it("removeNetwork clears selectedNetwork when the removed network was selected", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addNetwork("mainnet"));
+    act(() => result.current.setSelectedNetwork("mainnet"));
+    expect(result.current.selectedNetwork).toBe("mainnet");
+
+    act(() => result.current.removeNetwork("mainnet"));
+    expect(result.current.selectedNetwork).toBeNull();
+  });
+
+  it("removeNetwork leaves selectedNetwork untouched when a DIFFERENT network is removed", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addNetwork("mainnet");
+      result.current.addNetwork("sepolia");
+    });
+    act(() => result.current.setSelectedNetwork("mainnet"));
+
+    act(() => result.current.removeNetwork("sepolia"));
+    expect(result.current.selectedNetwork).toBe("mainnet");
+  });
+
+  it("setSelectedNetwork selects/deselects a network", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addNetwork("mainnet"));
+    act(() => result.current.setSelectedNetwork("mainnet"));
+    expect(result.current.selectedNetwork).toBe("mainnet");
+    act(() => result.current.setSelectedNetwork(null));
+    expect(result.current.selectedNetwork).toBeNull();
+  });
+
+  it("resetGraph clears parameters, networks, and selectedNetwork", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addParameter();
+      result.current.addNetwork("mainnet");
+    });
+    act(() => result.current.setSelectedNetwork("mainnet"));
+
+    act(() => result.current.resetGraph());
+
+    expect(result.current.parameters).toHaveLength(0);
+    expect(result.current.networks).toHaveLength(0);
+    expect(result.current.selectedNetwork).toBeNull();
+  });
+});
+
+describe("useGraph — parameters persistence (round trip)", () => {
+  it("restores parameters, networks, and selectedNetwork from a valid saved state", () => {
+    const saved = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      parameters: [
+        { id: "param-99", name: "owner", defaultValue: "0xdef", networkOverrides: { mainnet: "0xmain" } },
+      ],
+      networks: ["mainnet"],
+      selectedNetwork: "mainnet",
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(saved));
+
+    const { result } = renderHook(() => useGraph());
+    expect(result.current.parameters).toEqual(saved.parameters);
+    expect(result.current.networks).toEqual(["mainnet"]);
+    expect(result.current.selectedNetwork).toBe("mainnet");
+  });
+
+  it("a freshly-added parameter after restoring persisted state never collides with a restored parameter id", () => {
+    const saved = {
+      version: AUTHORING_STATE_VERSION,
+      nodes: [],
+      edges: [],
+      orderedSteps: [],
+      parameters: [{ id: "param-50", name: "owner", defaultValue: "", networkOverrides: {} }],
+    };
+    window.localStorage.setItem(AUTHORING_STORAGE_KEY, JSON.stringify(saved));
+
+    const { result } = renderHook(() => useGraph());
+    act(() => result.current.addParameter());
+
+    const ids = result.current.parameters.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("defaults to empty parameters/networks and null selectedNetwork when nothing is persisted", () => {
+    const { result } = renderHook(() => useGraph());
+    expect(result.current.parameters).toEqual([]);
+    expect(result.current.networks).toEqual([]);
+    expect(result.current.selectedNetwork).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Full end-to-end round trip (issue #137): author with the new kinds +
+  // declared parameters, autosave, remount (simulating a reload), and assert
+  // graphToSpec's output is IDENTICAL before and after.
+  // ---------------------------------------------------------------------------
+
+  it("re-emits an identical DeploymentSpec after persist + restore for param/expr/resolver slots + declared parameters", () => {
+    vi.useFakeTimers();
+
+    const { result, unmount } = renderHook(() => useGraph());
+    act(() => result.current.addContractFromManifest(ONE_ARG_MANIFEST));
+    const nodeId = result.current.nodes[0].id;
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(nodeId, "token"));
+    act(() => nd(result.current.nodes[0]).onUpdateArgSlot(nodeId, 0, { kind: "param", paramName: "owner" }));
+    act(() => result.current.addParameter());
+    const paramId = result.current.parameters[0].id;
+    act(() =>
+      result.current.updateParameter(paramId, { name: "owner", defaultValue: "0xdefault" }),
+    );
+    act(() => result.current.addNetwork("mainnet"));
+    act(() => result.current.updateParameterOverride(paramId, "mainnet", "0xmain"));
+    act(() => result.current.setSelectedNetwork("mainnet"));
+
+    // Compute the spec BEFORE reload.
+    const graphNodesBefore = toGraphNodes(result.current.nodes);
+    const graphEdgesBefore: GraphEdge[] = result.current.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      data: e.data as unknown as GraphEdge["data"],
+    }));
+    const specBefore = graphToSpec(
+      graphNodesBefore,
+      graphEdgesBefore,
+      result.current.orderedSteps,
+      result.current.parameters,
+      result.current.selectedNetwork,
+    );
+
+    // Force the debounced autosave to flush, then unmount (simulating navigating away).
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    unmount();
+
+    // Remount (simulating a page reload) — state is restored from localStorage.
+    const { result: reloaded } = renderHook(() => useGraph());
+    const graphNodesAfter = toGraphNodes(reloaded.current.nodes);
+    const graphEdgesAfter: GraphEdge[] = reloaded.current.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      data: e.data as unknown as GraphEdge["data"],
+    }));
+    const specAfter = graphToSpec(
+      graphNodesAfter,
+      graphEdgesAfter,
+      reloaded.current.orderedSteps,
+      reloaded.current.parameters,
+      reloaded.current.selectedNetwork,
+    );
+
+    expect(specAfter).toEqual(specBefore);
+    // Sanity: the param arg + spec.parameters override actually made it through.
+    expect(specBefore.deployment.contracts[0].args![0]).toEqual({ kind: "param", name: "owner" });
+    expect(specBefore.deployment.parameters).toEqual({ owner: "0xmain" });
+
+    vi.useRealTimers();
   });
 });

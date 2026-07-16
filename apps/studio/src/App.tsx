@@ -61,6 +61,7 @@ import { computePlan } from "./spec/plan-diff.js";
 import type { DeploymentPlan } from "./spec/plan-diff.js";
 import { OrderedConfigPanelToggle } from "./components/OrderedConfigPanel.js";
 import type { OrderedPanelDeployTarget } from "./components/OrderedConfigPanel.js";
+import { ParametersPanelToggle } from "./components/ParametersPanel.js";
 import { useGraph } from "./hooks/useGraph.js";
 import { useUserTemplates } from "./hooks/useUserTemplates.js";
 import { graphToTemplate } from "./templates/serialize.js";
@@ -271,6 +272,17 @@ interface AuthoringCanvasProps {
   onUpdateOrderedStep: ReturnType<typeof useGraph>["updateOrderedStep"];
   onMoveOrderedStepUp: ReturnType<typeof useGraph>["moveOrderedStepUp"];
   onMoveOrderedStepDown: ReturnType<typeof useGraph>["moveOrderedStepDown"];
+  // Parameters panel props (issue #137)
+  parameters: ReturnType<typeof useGraph>["parameters"];
+  networks: ReturnType<typeof useGraph>["networks"];
+  selectedNetwork: ReturnType<typeof useGraph>["selectedNetwork"];
+  onAddParameter: ReturnType<typeof useGraph>["addParameter"];
+  onRemoveParameter: ReturnType<typeof useGraph>["removeParameter"];
+  onUpdateParameter: ReturnType<typeof useGraph>["updateParameter"];
+  onUpdateParameterOverride: ReturnType<typeof useGraph>["updateParameterOverride"];
+  onAddNetwork: ReturnType<typeof useGraph>["addNetwork"];
+  onRemoveNetwork: ReturnType<typeof useGraph>["removeNetwork"];
+  onSelectNetwork: ReturnType<typeof useGraph>["setSelectedNetwork"];
   /** Theme mode driving React Flow's built-in `colorMode` prop (issue #94). */
   themeMode: ThemeMode;
 }
@@ -302,6 +314,16 @@ function AuthoringCanvas({
   onUpdateOrderedStep,
   onMoveOrderedStepUp,
   onMoveOrderedStepDown,
+  parameters,
+  networks,
+  selectedNetwork,
+  onAddParameter,
+  onRemoveParameter,
+  onUpdateParameter,
+  onUpdateParameterOverride,
+  onAddNetwork,
+  onRemoveNetwork,
+  onSelectNetwork,
   themeMode,
 }: AuthoringCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
@@ -438,6 +460,20 @@ function AuthoringCanvas({
           onUpdateStep={onUpdateOrderedStep}
           onMoveUp={onMoveOrderedStepUp}
           onMoveDown={onMoveOrderedStepDown}
+          btnStyle={btnStyle}
+          activeBtnStyle={activeBtnStyle}
+        />
+        <ParametersPanelToggle
+          parameters={parameters}
+          networks={networks}
+          selectedNetwork={selectedNetwork}
+          onAddParameter={onAddParameter}
+          onRemoveParameter={onRemoveParameter}
+          onUpdateParameter={onUpdateParameter}
+          onUpdateParameterOverride={onUpdateParameterOverride}
+          onAddNetwork={onAddNetwork}
+          onRemoveNetwork={onRemoveNetwork}
+          onSelectNetwork={onSelectNetwork}
           btnStyle={btnStyle}
           activeBtnStyle={activeBtnStyle}
         />
@@ -588,6 +624,16 @@ export function App() {
     moveOrderedStepUp,
     moveOrderedStepDown,
     resetGraph,
+    parameters,
+    networks,
+    selectedNetwork,
+    addParameter,
+    removeParameter,
+    updateParameter,
+    updateParameterOverride,
+    addNetwork,
+    removeNetwork,
+    setSelectedNetwork,
   } = useGraph();
 
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
@@ -613,6 +659,21 @@ export function App() {
     return targets;
   }, [nodes]);
 
+  // Declared parameter names (issue #137), for the "param" kind's input
+  // suggestions in ContractNode's ArgRow. De-duplicated + blanks filtered so
+  // the datalist doesn't offer an empty or repeated option.
+  const paramNames = useMemo(() => {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const p of parameters) {
+      if (p.name !== "" && !seen.has(p.name)) {
+        seen.add(p.name);
+        names.push(p.name);
+      }
+    }
+    return names;
+  }, [parameters]);
+
   // Build stable configCallbacks object to inject into each node's data.
   // These callbacks allow ContractNode to render the inline per-node config section.
   const configCallbacks = useMemo<ConfigCallbacks>(
@@ -622,13 +683,16 @@ export function App() {
       onUpdateSetXStep: updateSetXStep,
       onUpdateGrantRoleStep: updateGrantRoleStep,
       deployTargets,
+      paramNames,
     }),
-    [addConfigStep, removeConfigStep, updateSetXStep, updateGrantRoleStep, deployTargets],
+    [addConfigStep, removeConfigStep, updateSetXStep, updateGrantRoleStep, deployTargets, paramNames],
   );
 
-  // Compute the spec pair for export whenever nodes/edges/orderedSteps change.
-  // toGraphNodes strips all display-only fields (viewMode, refSourceDeployIds)
-  // and callbacks — graphToSpec only reads the five payload fields.
+  // Compute the spec pair for export whenever nodes/edges/orderedSteps/
+  // parameters/selectedNetwork change. toGraphNodes strips all display-only
+  // fields (viewMode, refSourceDeployIds) and callbacks — graphToSpec only
+  // reads the five payload fields plus the parameters/selectedNetwork
+  // arguments (issue #137).
   const { deployment, config } = useMemo(() => {
     const graphNodes = toGraphNodes(nodes);
     const graphEdges: GraphEdge[] = edges.map((e) => ({
@@ -637,8 +701,8 @@ export function App() {
       target: e.target,
       data: e.data as unknown as GraphEdge["data"],
     }));
-    return graphToSpec(graphNodes, graphEdges, orderedSteps);
-  }, [nodes, edges, orderedSteps]);
+    return graphToSpec(graphNodes, graphEdges, orderedSteps, parameters, selectedNetwork);
+  }, [nodes, edges, orderedSteps, parameters, selectedNetwork]);
 
   // Keep ref in sync so the simulate callback is never stale-closed.
   deploymentRef.current = deployment;
@@ -1280,6 +1344,16 @@ export function App() {
             onUpdateOrderedStep={updateOrderedStep}
             onMoveOrderedStepUp={moveOrderedStepUp}
             onMoveOrderedStepDown={moveOrderedStepDown}
+            parameters={parameters}
+            networks={networks}
+            selectedNetwork={selectedNetwork}
+            onAddParameter={addParameter}
+            onRemoveParameter={removeParameter}
+            onUpdateParameter={updateParameter}
+            onUpdateParameterOverride={updateParameterOverride}
+            onAddNetwork={addNetwork}
+            onRemoveNetwork={removeNetwork}
+            onSelectNetwork={setSelectedNetwork}
             themeMode={themeMode}
           />
         </ReactFlowProvider>

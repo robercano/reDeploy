@@ -203,11 +203,21 @@ function isBlankLiteral(value: LiteralValue): boolean {
  *
  * Two error shapes come out of this, matching what can actually be
  * highlighted:
- *   - FIELD-level (`contracts[i].args[j]`): the slot exists but its literal
- *     value is blank. Ref-bound args (kind === "ref" — supplied by an
- *     incoming constructorRef edge, see graph-to-spec.ts) are supplied by the
- *     link and are NEVER flagged, regardless of what value the (ignored)
- *     literal input might otherwise hold.
+ *   - FIELD-level (`contracts[i].args[j]`): the slot exists but its value is
+ *     blank/missing for its kind:
+ *       - "literal": the literal value itself is blank (isBlankLiteral).
+ *       - "param": the referenced parameter name is blank (issue #137 —
+ *         core's UNKNOWN_PARAM only fires for a NON-empty name that isn't
+ *         declared; an empty name would otherwise sail through as
+ *         `{kind:"param", name:""}` und­etected).
+ *       - "expr": the expression text is blank (core's evaluator does reject
+ *         an empty expression, but only at compile/deploy time — this
+ *         studio-side check surfaces it immediately, before any network call).
+ *       - "resolver": the resolver name is blank.
+ *     Ref-bound args (kind === "ref" — supplied by an incoming constructorRef
+ *     edge, see graph-to-spec.ts) are supplied by the link and are NEVER
+ *     flagged, regardless of what value the (ignored) literal input might
+ *     otherwise hold.
  *   - NODE-level (`contracts[i]`): the manifest expects a parameter at index
  *     j but the node has no slot for it at all — there is no input to
  *     highlight, so the whole node is flagged instead. At most one such
@@ -236,8 +246,20 @@ export function validateConstructorArgs(deployment: DeploymentSpec): StructuredD
     for (let j = 0; j < slotCount; j++) {
       if (j < argsLen) {
         const arg = entry.args![j];
-        if (arg.kind !== "literal") continue; // ref-bound — supplied by the edge link.
-        if (isBlankLiteral(arg.value)) {
+        let blank = false;
+        if (arg.kind === "ref") {
+          // ref-bound — supplied by the edge link, never flagged.
+          continue;
+        } else if (arg.kind === "literal") {
+          blank = isBlankLiteral(arg.value);
+        } else if (arg.kind === "param") {
+          blank = arg.name.trim() === "";
+        } else if (arg.kind === "expr") {
+          blank = arg.expression.trim() === "";
+        } else if (arg.kind === "resolver") {
+          blank = arg.name.trim() === "";
+        }
+        if (blank) {
           errors.push({
             code: EMPTY_ARG_CODE,
             path: `contracts[${i}].args[${j}]`,

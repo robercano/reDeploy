@@ -39,22 +39,35 @@
 
 import type { NodeFieldErrors } from "../deploy/field-errors.js";
 
-/** A single constructor argument slot on a contract node. */
+/**
+ * A single constructor argument slot on a contract node.
+ *
+ * Mirrors core's `ContractArg` union (see `@redeploy/core/spec`'s ParamArg /
+ * ExprArg / ResolverArg / RefArg / LiteralArg) plus the studio-only "ref"
+ * kind (edge-bound, no core equivalent — normalized to a literal or RefArg at
+ * export, see graph-to-spec.ts's buildContractArgs).
+ */
 export interface ArgSlot {
   /** Position index in the constructor args array. */
   index: number;
   /**
-   * "literal" — a plain JSON value entered by the user.
-   * "ref"     — filled by an incoming constructorRef edge; value is ignored.
+   * "literal"  — a plain JSON value entered by the user (slot.value).
+   * "ref"      — filled by an incoming constructorRef edge; value is ignored.
+   * "param"    — references a named parameter declared in the Parameters
+   *              panel (slot.paramName) — emits ParamArg { kind: "param", name }.
+   * "expr"     — a computed expression (slot.expression) — emits ExprArg
+   *              { kind: "expr", expression }.
+   * "resolver" — a named resolver escape-hatch (slot.resolverName +
+   *              slot.resolverArgs) — emits ResolverArg { kind: "resolver", name, args? }.
    */
-  kind: "literal" | "ref";
-  /** Stringified literal value (number, boolean, string, null). */
+  kind: "literal" | "ref" | "param" | "expr" | "resolver";
+  /** Stringified literal value (number, boolean, string, null). Used when kind === "literal". */
   value: string;
   /**
    * DISPLAY-ONLY: the constructor parameter name, e.g. "asset_".
    * Populated when the node is added from the Contracts Browser manifest.
    * This field is NOT serialized to DeploymentSpec — graph-to-spec.ts only
-   * reads index / kind / value when building ContractArg.
+   * reads index / kind / value(+kind-specific fields) when building ContractArg.
    */
   name?: string;
   /**
@@ -62,10 +75,43 @@ export interface ArgSlot {
    * "contract IERC20".
    * Populated when the node is added from the Contracts Browser manifest.
    * This field is NOT serialized to DeploymentSpec — graph-to-spec.ts only
-   * reads index / kind / value when building ContractArg.
+   * reads index / kind / value(+kind-specific fields) when building ContractArg.
    */
   type?: string;
+  /**
+   * Used when kind === "param": the name of the declared parameter this slot
+   * references (must match a name declared in the Parameters panel to avoid
+   * an UNKNOWN_PARAM validation error — see ParametersPanel.tsx).
+   */
+  paramName?: string;
+  /** Used when kind === "expr": the expression text (core's safe expression language). */
+  expression?: string;
+  /** Used when kind === "resolver": the resolver name (must be a key in the injected ResolverRegistry at deploy time). */
+  resolverName?: string;
+  /**
+   * Used when kind === "resolver": positional literal args passed to the
+   * resolver, each a raw string parsed via parseLiteralValue at emission
+   * (same convention as free-text config-step args elsewhere in the studio).
+   */
+  resolverArgs?: string[];
 }
+
+/**
+ * A partial update to an arg slot, as applied by NodeCallbacks.onUpdateArgSlot.
+ *
+ * Callers may pass either:
+ * - a plain `string` (shorthand for `{ value: <string> }`, preserving the
+ *   pre-existing literal-edit call shape used throughout the codebase/tests), or
+ * - an `ArgSlotUpdate` object to change the slot's kind and/or any
+ *   kind-specific field (paramName / expression / resolverName / resolverArgs).
+ *
+ * Fields are merged onto the existing slot — omitted fields are left
+ * untouched (e.g. switching kind does not clear previously-entered values for
+ * OTHER kinds, so switching back and forth doesn't lose data).
+ */
+export type ArgSlotUpdate =
+  | string
+  | Partial<Pick<ArgSlot, "kind" | "value" | "paramName" | "expression" | "resolverName" | "resolverArgs">>;
 
 /**
  * Callbacks injected into node data so React Flow custom nodes can call them.
@@ -78,7 +124,7 @@ export interface ArgSlot {
 export interface NodeCallbacks {
   onUpdateDeployId: (nodeId: string, value: string) => void;
   onUpdateContractName: (nodeId: string, value: string) => void;
-  onUpdateArgSlot: (nodeId: string, slotIndex: number, value: string) => void;
+  onUpdateArgSlot: (nodeId: string, slotIndex: number, update: ArgSlotUpdate) => void;
 }
 
 /**
@@ -225,3 +271,35 @@ export interface ConstructorRefEdgeData {
 
 /** Union of all edge data variants (wire edges have been removed). */
 export type StudioEdgeData = ConstructorRefEdgeData;
+
+// ---- Deployment-wide parameters (issue #137) --------------------------------
+
+/**
+ * A deployment-wide parameter declaration, authored via the Parameters panel
+ * (ParametersPanel.tsx) and referenced from constructor arg slots of
+ * kind === "param" (see ArgSlot.paramName).
+ *
+ * Serializes to `DeploymentSpec.parameters[name]` — but core's `parameters`
+ * field models ONLY a flat map of default values, with no notion of
+ * "network". `networkOverrides` is therefore STUDIO-ONLY state: when a
+ * network is selected in the Parameters panel (see useGraph's
+ * `selectedNetwork`), graph-to-spec.ts's `buildParameters()` substitutes that
+ * network's override value (when set) IN PLACE OF `defaultValue` for the
+ * single value emitted into `DeploymentSpec.parameters[name]`. The emitted
+ * spec never carries more than one value per parameter — "per-network" is a
+ * studio-authoring convenience for switching which single value gets baked
+ * into the exported/simulated/deployed spec, not a feature of the spec format
+ * itself. See graph-to-spec.ts's buildParameters() doc for the full story,
+ * and the studio module's report for why deploy-server does not (yet) wire
+ * DeployOptions.deploymentParameters for a true per-network runtime override.
+ */
+export interface StudioParameter {
+  /** Stable id for React keys / CRUD — independent of `name` (which is user-editable). */
+  id: string;
+  /** Parameter name — must match the name(s) referenced by any `{kind:"param"}` ArgSlot. */
+  name: string;
+  /** Default value (raw string, parsed via parseLiteralValue at emission time). */
+  defaultValue: string;
+  /** Per-network override values (raw strings), keyed by network name. Studio-only — see above. */
+  networkOverrides: Record<string, string>;
+}
