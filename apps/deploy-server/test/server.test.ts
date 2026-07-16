@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { IncomingMessage, ServerResponse, Server, request as httpRequest } from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { handleRequest, createServer } from "../src/server.js";
 
 // ---------------------------------------------------------------------------
@@ -444,5 +447,91 @@ describe("POST /api/simulate", () => {
     const doneEvent = events.find((e) => e.event === "done");
     expect(doneEvent).toBeDefined();
     expect((doneEvent!.data as Record<string, unknown>)["success"]).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/simulate — multi-network (?network=) (issue #139)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/simulate — multi-network (?network=)", () => {
+  let tmpDir: string;
+  let savedNetworksConfig: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-simulate-networks-test-"));
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+  });
+
+  it("a known ?network= value → normal SSE simulate response (network is chain-agnostic)", async () => {
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ networks: { alpha: { rpcUrl: "http://alpha.example.com" } } }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const simpleSpec = { version: 1, contracts: [{ id: "token", contract: "Token" }] };
+    const res = await doRequest(port, "POST", "/api/simulate?network=alpha", JSON.stringify(simpleSpec));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect((doneEvent!.data as Record<string, unknown>)["success"]).toBe(true);
+  });
+
+  it("an unknown ?network= value → 400 Bad Request (non-SSE), no step events, no secret leak", async () => {
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ networks: { alpha: { rpcUrl: "http://alpha.example.com" } } }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const simpleSpec = { version: 1, contracts: [{ id: "token", contract: "Token" }] };
+    const res = await doRequest(port, "POST", "/api/simulate?network=nonexistent", JSON.stringify(simpleSpec));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toBe("application/json");
+    expect(res.headers["content-type"]).not.toMatch(/text\/event-stream/);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain("nonexistent");
+  });
+
+  it("omitting ?network= still works (default network, backward compat)", async () => {
+    const simpleSpec = { version: 1, contracts: [{ id: "token", contract: "Token" }] };
+    const res = await doRequest(port, "POST", "/api/simulate", JSON.stringify(simpleSpec));
+    expect(res.statusCode).toBe(200);
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect((doneEvent!.data as Record<string, unknown>)["success"]).toBe(true);
+  });
+
+  it("a malformed NETWORKS_CONFIG file → 500 generic error, never leaking the file path", async () => {
+    const configPath = path.join(tmpDir, "bad-networks.json");
+    fs.writeFileSync(configPath, "{ not valid json", "utf8");
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const simpleSpec = { version: 1, contracts: [{ id: "token", contract: "Token" }] };
+    const res = await doRequest(port, "POST", "/api/simulate", JSON.stringify(simpleSpec));
+
+    expect(res.statusCode).toBe(500);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain(configPath);
+    expect(res.body).not.toContain(tmpDir);
   });
 });

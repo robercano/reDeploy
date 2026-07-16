@@ -247,3 +247,118 @@ describe("POST /api/deployment — falls through to 404", () => {
     expect(JSON.parse(res.body)).toEqual({ error: "Not Found" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/deployment — multi-network (?network=) (issue #139)
+// ---------------------------------------------------------------------------
+
+describe("GET /api/deployment — multi-network (?network=)", () => {
+  let baseDir: string;
+  let networkADir: string;
+  let networkBDir: string;
+  let configPath: string;
+  let savedNetworksConfig: string | undefined;
+
+  beforeEach(() => {
+    baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-deployment-networks-test-"));
+    networkADir = path.join(baseDir, "network-a");
+    networkBDir = path.join(baseDir, "network-b");
+    fs.mkdirSync(networkADir, { recursive: true });
+    fs.mkdirSync(networkBDir, { recursive: true });
+
+    writeJournal(networkADir, [
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_INITIALIZE",
+        futureId: "Deployment#token",
+        contractName: "Token",
+        constructorArgs: ["Network A Token"],
+        libraries: {},
+        dependencies: [],
+      },
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_COMPLETE",
+        futureId: "Deployment#token",
+        result: { type: "SUCCESS", address: "0xA000000000000000000000000000000000000A" },
+      },
+    ]);
+    writeDeployedAddresses(networkADir, {
+      "Deployment#token": "0xA000000000000000000000000000000000000A",
+    });
+
+    writeJournal(networkBDir, [
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_INITIALIZE",
+        futureId: "Deployment#token",
+        contractName: "Token",
+        constructorArgs: ["Network B Token"],
+        libraries: {},
+        dependencies: [],
+      },
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_COMPLETE",
+        futureId: "Deployment#token",
+        result: { type: "SUCCESS", address: "0xB000000000000000000000000000000000000B" },
+      },
+    ]);
+    writeDeployedAddresses(networkBDir, {
+      "Deployment#token": "0xB000000000000000000000000000000000000B",
+    });
+
+    configPath = path.join(baseDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        networks: {
+          alpha: { rpcUrl: "http://alpha.example.com", deploymentDir: networkADir },
+          beta: { rpcUrl: "http://beta.example.com", deploymentDir: networkBDir },
+        },
+      }),
+      "utf8",
+    );
+
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+    process.env["NETWORKS_CONFIG"] = configPath;
+  });
+
+  afterEach(() => {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+  });
+
+  it("?network=alpha reads network A's deployment dir, not network B's", async () => {
+    const res = await doRequest(port, "GET", "/api/deployment?network=alpha");
+    expect(res.statusCode).toBe(200);
+    const view = JSON.parse(res.body) as { contracts: Array<Record<string, unknown>> };
+    expect(view.contracts).toHaveLength(1);
+    expect(view.contracts[0]?.["address"]).toBe("0xA000000000000000000000000000000000000A");
+  });
+
+  it("?network=beta reads network B's deployment dir, not network A's", async () => {
+    const res = await doRequest(port, "GET", "/api/deployment?network=beta");
+    expect(res.statusCode).toBe(200);
+    const view = JSON.parse(res.body) as { contracts: Array<Record<string, unknown>> };
+    expect(view.contracts).toHaveLength(1);
+    expect(view.contracts[0]?.["address"]).toBe("0xB000000000000000000000000000000000000B");
+  });
+
+  it("an unknown ?network= value → 400, never a 500, no path/secret leak", async () => {
+    const res = await doRequest(port, "GET", "/api/deployment?network=nonexistent");
+    expect(res.statusCode).toBe(400);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain("nonexistent");
+    expect(res.body).not.toContain(networkADir);
+    expect(res.body).not.toContain(networkBDir);
+  });
+
+  it("combining ?network= with other query params still routes correctly", async () => {
+    const res = await doRequest(port, "GET", "/api/deployment?foo=1&network=alpha");
+    expect(res.statusCode).toBe(200);
+    const view = JSON.parse(res.body) as { contracts: unknown[] };
+    expect(view.contracts).toHaveLength(1);
+  });
+});
