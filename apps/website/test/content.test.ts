@@ -17,6 +17,11 @@ describe("content", () => {
       expect(feature.description.length).toBeGreaterThan(0);
       expect(feature.screenshotCaption.length).toBeGreaterThan(0);
     }
+
+    expect(FEATURES.map((f) => f.id)).toEqual(["canvas", "inspector", "templates", "deploy-flow"]);
+
+    const captions = FEATURES.map((f) => f.screenshotCaption);
+    expect(new Set(captions).size).toBe(captions.length);
   });
 
   it("points footer links at the real GitHub repo", () => {

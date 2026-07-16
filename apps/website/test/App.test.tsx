@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import App from "../src/App.js";
-import { HERO, BENEFITS, REPO_URL } from "../src/content.js";
+import { HERO, BENEFITS, FEATURES, REPO_URL } from "../src/content.js";
 
 describe("App", () => {
   it("renders the hero pitch and primary CTA", () => {
@@ -28,11 +28,30 @@ describe("App", () => {
     ]);
   });
 
-  it("renders a clearly-labeled placeholder for every feature screenshot", () => {
+  it("renders a real Studio screenshot for every feature, with a matching caption", () => {
     render(<App />);
 
-    const placeholders = screen.getAllByText("Placeholder — Studio screenshot");
-    expect(placeholders.length).toBeGreaterThan(0);
+    const images = screen.getAllByRole("img");
+    expect(images.length).toBe(FEATURES.length);
+
+    const srcStemById: Record<string, string> = {
+      canvas: "studio-canvas",
+      inspector: "studio-inspector",
+      templates: "studio-templates",
+      "deploy-flow": "studio-deploy-flow",
+    };
+
+    for (const feature of FEATURES) {
+      const img = screen.getByAltText(feature.screenshotCaption) as HTMLImageElement;
+      expect(screen.getByText(feature.screenshotCaption)).toBeInTheDocument();
+
+      const src = img.getAttribute("src");
+      expect(src).toBeTruthy();
+      expect(src).toContain(srcStemById[feature.id]);
+    }
+
+    const srcs = images.map((img) => img.getAttribute("src"));
+    expect(new Set(srcs).size).toBe(FEATURES.length);
   });
 
   it("links to the GitHub repo in the footer", () => {

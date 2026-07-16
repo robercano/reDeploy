@@ -30,6 +30,8 @@ export default defineConfig({
       exclude: [
         // Bootstrap / entry-point files (no logic)
         "src/main.tsx",
+        // Type-only declaration files (no runtime code to cover)
+        "**/*.d.ts",
         // Config files
         "vite.config.ts",
         "**/*.config.*",
