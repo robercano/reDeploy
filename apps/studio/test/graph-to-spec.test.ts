@@ -1090,6 +1090,22 @@ describe("graphToSpec — scripting arg kinds (issue #137)", () => {
     expect(deployment.parameters).toEqual({ owner: "0xdefault" });
   });
 
+  it("does not resolve inherited Object.prototype members as a network override (prototype-pollution guard)", () => {
+    // A network named after an Object.prototype member (e.g. "toString") with
+    // no OWN override recorded must fall back to defaultValue rather than
+    // reading the inherited prototype function/value off the plain object.
+    for (const protoNetwork of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+      const { deployment } = graphToSpec(
+        [],
+        [],
+        [],
+        [{ id: "p1", name: "x", defaultValue: "5", networkOverrides: {} }],
+        protoNetwork,
+      );
+      expect(deployment.parameters).toEqual({ x: 5 });
+    }
+  });
+
   it("skips a declared parameter with an empty name", () => {
     const { deployment } = graphToSpec(
       [],

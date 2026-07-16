@@ -233,7 +233,13 @@ function buildParameters(
   const result: Record<string, LiteralValue> = {};
   for (const p of parameters) {
     if (p.name === "") continue;
-    const override = selectedNetwork !== null ? p.networkOverrides[selectedNetwork] : undefined;
+    // Only read an OWN key: a network named after an Object.prototype member
+    // (e.g. "toString", "constructor", "__proto__") must NOT resolve to the
+    // inherited prototype value when there is no genuine override recorded.
+    const override =
+      selectedNetwork !== null && Object.hasOwn(p.networkOverrides, selectedNetwork)
+        ? p.networkOverrides[selectedNetwork]
+        : undefined;
     const raw = override !== undefined && override !== "" ? override : p.defaultValue;
     result[p.name] = parseLiteralValue(raw);
   }

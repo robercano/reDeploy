@@ -236,7 +236,7 @@ function ParameterCard({
               <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{n}</span>
               <input
                 style={{ ...inputStyle, marginBottom: 0 }}
-                value={param.networkOverrides[n] ?? ""}
+                value={Object.hasOwn(param.networkOverrides, n) ? param.networkOverrides[n] : ""}
                 placeholder={`override for ${n} (blank = use default)`}
                 onChange={(e) => onUpdateOverride(n, e.target.value)}
                 aria-label={`parameter-override-${param.id}-${n}`}

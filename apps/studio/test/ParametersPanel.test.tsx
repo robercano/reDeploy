@@ -162,6 +162,17 @@ describe("ParametersPanel — per-network overrides", () => {
     expect(sepoliaInput.value).toBe("");
   });
 
+  it("renders the empty placeholder (not an inherited prototype value) for a network named after an Object.prototype member", () => {
+    // Regression test: networkOverrides is a plain object, so a network named
+    // "toString" (etc.) with no OWN override recorded must not resolve to the
+    // inherited Object.prototype.toString function.
+    const parameters = [makeParam({ id: "p1", name: "owner", networkOverrides: {} })];
+    render(<ParametersPanel {...baseProps({ parameters, networks: ["toString"] })} />);
+
+    const input = screen.getByLabelText("parameter-override-p1-toString") as HTMLInputElement;
+    expect(input.value).toBe("");
+  });
+
   it("calls onUpdateParameterOverride(id, network, value) when an override input changes", () => {
     const onUpdateParameterOverride = vi.fn();
     const parameters = [makeParam({ id: "p1", name: "owner" })];
