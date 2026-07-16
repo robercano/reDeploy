@@ -9,9 +9,12 @@
  *   3. Heuristic getter-mapping derivation (see derive-reads.ts) so steps with
  *      no derivable mapping degrade to "skipped" results instead of throwing
  *      `ConfigVerifyError("MISSING_GETTER_MAPPING")`.
- *   4. A final safety-net try/catch around `verifyConfig()` itself, so ANY
+ *   4. A safety-net try/catch around `verifyConfig()` itself, so ANY
  *      unexpected `ConfigVerifyError` (or other throw) degrades to a single
  *      synthetic "error" result rather than ever crashing the HTTP handler.
+ *   5. An OUTER safety-net around the entire function body (including the
+ *      pre-scan in step 2/3), so even a bug in the pre-scan helpers can never
+ *      escape as an uncaught throw — see the "NEVER throws" contract below.
  *
  * `orderedSteps` are merged with `steps` before checking — `verifyConfig()`
  * only reads `spec.steps`, but drift detection has no notion of "ordered";
@@ -20,6 +23,15 @@
  *
  * Result ordering mirrors the original spec (steps, then orderedSteps) so the
  * studio can render results in the same order the user authored them.
+ *
+ * SECURITY: no error surfaced anywhere in this module may ever include the
+ * RPC transport URL (which routinely embeds an Infura/Alchemy API key) —
+ * see chain-reader.ts, which is the one place that knows the URL and is
+ * responsible for sanitizing errors before they reach here. This module
+ * additionally never forwards a raw `err.message` for anything OTHER than a
+ * per-step `ChainReader.call()` failure (already sanitized at the source),
+ * so a future/alternate `ChainReader` implementation misbehaving the same
+ * way cannot leak through the outer safety nets either.
  */
 
 import type { ConfigSpec, ConfigStep } from "@redeploy/config";
@@ -55,7 +67,10 @@ export interface ConfigDriftResponse {
  * into `{ $bigint: "<decimal>" }`, mirroring `@redeploy/reader`'s
  * `BigIntValue` convention used elsewhere in this codebase for the same
  * reason, so the studio can render it the same way it already renders
- * constructor args.
+ * constructor args. Recurses through arrays and plain objects so a nested or
+ * array-typed on-chain return value (e.g. a getter returning a struct/tuple
+ * or an array containing bigints) is normalized too, not just a top-level
+ * bigint.
  */
 function normalizeForJson(value: unknown): unknown {
   if (typeof value === "bigint") {
@@ -109,10 +124,36 @@ export interface RunConfigDriftOptions {
 /**
  * Run config-drift detection for every step in `spec` against the live chain
  * state. NEVER throws — every failure mode (undeployed ref, no derivable
- * getter, or an unexpected verifyConfig() error) degrades to a per-step or
- * synthetic "error"/"skipped" result instead.
+ * getter, an unexpected verifyConfig() error, or a malformed individual step
+ * tripping up the pre-scan itself) degrades to a per-step or synthetic
+ * "error"/"skipped" result instead.
  */
 export async function runConfigDrift(options: RunConfigDriftOptions): Promise<ConfigDriftResponse> {
+  try {
+    return await runConfigDriftUnsafe(options);
+  } catch {
+    // Outer safety net: `runConfigDriftUnsafe`'s pre-scan (findUnresolvedRef
+    // + deriveReads) is written to tolerate malformed individual steps (see
+    // step-refs.ts / derive-reads.ts's INPUT TRUST notes) and should never
+    // reach here — this catch exists purely so a future regression there
+    // degrades to a safe synthetic result instead of a 500. SECURITY: no
+    // error detail is forwarded (see this module's top-level SECURITY note).
+    return {
+      clean: false,
+      results: [
+        {
+          id: "__config__",
+          status: "error",
+          expected: null,
+          actual: null,
+          message: "Config drift check failed unexpectedly",
+        },
+      ],
+    };
+  }
+}
+
+async function runConfigDriftUnsafe(options: RunConfigDriftOptions): Promise<ConfigDriftResponse> {
   const { spec, deployment, reader } = options;
 
   const deployedAddresses: Record<string, string> = {};
@@ -162,9 +203,19 @@ export async function runConfigDrift(options: RunConfigDriftOptions): Promise<Co
         });
       }
     } catch (err) {
+      // SECURITY: deliberately do NOT forward `err.message` here, even for a
+      // ConfigVerifyError. In the normal case a ConfigVerifyError's message
+      // is safe (it only names step ids / known deployment ids), but
+      // per-step ChainReader.call() failures are already caught and
+      // returned as "error" results *inside* verifyConfig() itself — so
+      // nothing that reaches this catch is expected to originate from the
+      // RPC layer. To keep that invariant even if verifyConfig()'s internals
+      // change, this catch surfaces only the stable error CODE, never the
+      // free-text message (see chain-reader.ts's SECURITY note for the
+      // underlying URL/API-key leak this whole module guards against).
       const message =
         err instanceof ConfigVerifyError
-          ? `Config drift check could not run: ${err.message}`
+          ? `Config drift check could not run (${err.code}).`
           : "Config drift check failed unexpectedly";
       results.push({ id: "__config__", status: "error", expected: null, actual: null, message });
     }

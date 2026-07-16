@@ -9,6 +9,10 @@
  *   - throws (does not swallow) when the address is unknown, or when
  *     readContract itself throws — verifyConfig() relies on these throwing so
  *     it can turn them into per-step "error" results.
+ *   - SECURITY: sanitizes readContract failures before rethrowing — viem
+ *     embeds the RPC transport URL (which may carry an API key) in its raw
+ *     error message, and that message is returned verbatim to HTTP clients
+ *     by /api/verify/config, so it must never reach the caller unsanitized.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -80,7 +84,7 @@ describe("createRpcChainReader", () => {
     await expect(reader.call({ address: ADDRESS, function: "getFee" })).rejects.toThrow(/No known deployed contract/);
   });
 
-  it("propagates a readContract failure (never swallows it)", async () => {
+  it("propagates a readContract failure (never swallows it), sanitized", async () => {
     const loadArtifact = vi.fn().mockResolvedValue({ abi: [] });
     readContractSpy.mockRejectedValue(new Error("execution reverted"));
 
@@ -90,6 +94,38 @@ describe("createRpcChainReader", () => {
       abiLoader: { loadArtifact },
     });
 
-    await expect(reader.call({ address: ADDRESS, function: "getLimit" })).rejects.toThrow("execution reverted");
+    // Still throws (verifyConfig() relies on this to produce a per-step
+    // "error" result) — but the sanitized message names the failed call
+    // instead of forwarding viem's raw error text verbatim.
+    await expect(reader.call({ address: ADDRESS, function: "getLimit" })).rejects.toThrow(
+      `On-chain read of "getLimit" at ${ADDRESS} failed`,
+    );
+  });
+
+  it("SECURITY: never forwards viem's raw error message (which may embed the RPC URL/API key)", async () => {
+    const loadArtifact = vi.fn().mockResolvedValue({ abi: [] });
+    const SENTINEL_URL = "http://secret-rpc.internal.example.com/v3/SENTINELKEY123";
+    // Mirrors viem's real HttpRequestError shape: the transport URL (and any
+    // embedded API key) is baked into the thrown error's `.message`.
+    readContractSpy.mockRejectedValue(
+      new Error(`HTTP request failed.\n\nURL: ${SENTINEL_URL}\n\nRequest body: {"method":"eth_call"}`),
+    );
+
+    const reader = createRpcChainReader({
+      rpcUrl: SENTINEL_URL,
+      addressToContractName: new Map([[ADDRESS.toLowerCase(), "Vault"]]),
+      abiLoader: { loadArtifact },
+    });
+
+    let caught: unknown;
+    try {
+      await reader.call({ address: ADDRESS, function: "getLimit" });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain("SENTINELKEY123");
+    expect((caught as Error).message).not.toContain("secret-rpc.internal.example.com");
   });
 });

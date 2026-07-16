@@ -24,6 +24,16 @@
  *
  * Functions that don't match the `set<Name>` convention (free-text setter
  * names, e.g. "updateFee") cannot be derived and are reported as "skipped".
+ *
+ * INPUT TRUST: `steps` ultimately originates from the client-supplied HTTP
+ * request body (see run-config-drift.ts / server.ts), which is only
+ * shape-validated at the top level (`validateConfigSpecShape` — "steps is an
+ * array") before being cast to `ConfigStep[]`. Individual step CONTENTS are
+ * NOT schema-validated, so a step's `function` (or other fields) may be
+ * missing, `null`, or the wrong type at runtime despite the `ConfigStep`
+ * compile-time type. Every helper below is written defensively against that
+ * — a partially-authored step (e.g. the studio's "function not chosen yet"
+ * state) must degrade to a "skipped" result, never throw.
  */
 
 import type { ConfigStep, ConfigArg } from "@redeploy/config";
@@ -45,8 +55,14 @@ export interface DerivedReads {
   readonly skipped: SkippedStep[];
 }
 
-/** Strip a canonical signature's parameter list, e.g. "setFee(uint256)" -> "setFee". */
-function bareFunctionName(fn: string): string {
+/**
+ * Strip a canonical signature's parameter list, e.g. "setFee(uint256)" ->
+ * "setFee". Returns `null` for anything that isn't a non-empty string (a
+ * partially-authored step may have `function` unset, `null`, or otherwise
+ * malformed at runtime — see the module doc's INPUT TRUST note).
+ */
+function bareFunctionName(fn: unknown): string | null {
+  if (typeof fn !== "string" || fn.length === 0) return null;
   const idx = fn.indexOf("(");
   return idx === -1 ? fn : fn.slice(0, idx);
 }
@@ -76,8 +92,15 @@ export function deriveReads(steps: ConfigStep[]): DerivedReads {
 
     if (step.kind === "setX") {
       const bare = bareFunctionName(step.function);
+      if (bare === null) {
+        skipped.push({
+          id: step.id,
+          reason: 'cannot verify: step is missing a "function" name',
+        });
+        continue;
+      }
       const getter = deriveGetterName(bare);
-      const args = step.args ?? [];
+      const args = Array.isArray(step.args) ? step.args : [];
       if (getter === null) {
         skipped.push({
           id: step.id,
@@ -100,6 +123,13 @@ export function deriveReads(steps: ConfigStep[]): DerivedReads {
 
     // wire
     const bare = bareFunctionName(step.function);
+    if (bare === null) {
+      skipped.push({
+        id: step.id,
+        reason: 'cannot verify: step is missing a "function" name',
+      });
+      continue;
+    }
     const getter = deriveGetterName(bare);
     if (getter === null) {
       skipped.push({

@@ -15,9 +15,21 @@
  * work even when no deployer key is configured.
  *
  * Per-call failures (unknown address, missing ABI entry, revert, network
- * error) are all surfaced by simply letting them throw — `verifyConfig()`
- * catches per-step `ChainReader.call()` failures and turns them into a
- * per-step "error" result; this reader must NOT swallow them itself.
+ * error) are all surfaced by throwing — `verifyConfig()` catches per-step
+ * `ChainReader.call()` failures and turns them into a per-step "error"
+ * result whose `message` is `err.message` VERBATIM, which is then returned
+ * to the HTTP client as-is (see run-config-drift.ts / server.ts). This
+ * reader must NOT swallow failures, but it MUST sanitize them first:
+ *
+ * SECURITY: viem's `readContract()` embeds the full RPC transport URL in its
+ * thrown error's `.message` on ANY failure (unreachable RPC, timeout, 429,
+ * or even an ordinary revert) — e.g. `"HTTP request failed.\nURL:
+ * https://mainnet.infura.io/v3/<KEY>\n..."`. A production `RPC_URL`
+ * routinely embeds an Infura/Alchemy API key. Since that message is
+ * returned verbatim to any client hitting `/api/verify/config`, we catch
+ * viem's error here and rethrow a fixed, URL-free message — this is the
+ * only layer that knows the RPC URL, so sanitization has to happen right
+ * here, at the source.
  */
 
 import { createPublicClient, http } from "viem";
@@ -62,12 +74,20 @@ export function createRpcChainReader(options: CreateRpcChainReaderOptions): Chai
       const artifact = await abiLoader.loadArtifact(contractName);
       const bareFn = bareFunctionName(fnName);
 
-      return publicClient.readContract({
-        address: address as `0x${string}`,
-        abi: artifact.abi as Abi,
-        functionName: bareFn,
-        args: args as readonly unknown[],
-      });
+      try {
+        return await publicClient.readContract({
+          address: address as `0x${string}`,
+          abi: artifact.abi as Abi,
+          functionName: bareFn,
+          args: args as readonly unknown[],
+        });
+      } catch {
+        // SECURITY: never let viem's raw error (which embeds the RPC
+        // transport URL, and therefore any embedded API key) escape this
+        // function — see the class doc above. Keep the message useful for
+        // drift diagnosis (which read, on which contract) without the URL.
+        throw new Error(`On-chain read of "${bareFn}" at ${address} failed`);
+      }
     },
   };
 }

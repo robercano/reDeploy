@@ -292,13 +292,106 @@ describe("POST /api/verify/config", () => {
     expect(body.results[0]).toMatchObject({ id: "set-x", status: "error" });
   });
 
-  it("SECURITY: RPC_URL sentinel never appears in the response", async () => {
+  it("SECURITY: RPC_URL sentinel never appears in the response (success path)", async () => {
     process.env["RPC_URL"] = "http://secret-rpc.internal.example.com";
     readContractSpy.mockResolvedValue(500n);
 
     const res = await doRequest(port, "POST", "/api/verify/config", SET_FEE_SPEC);
 
     expect(res.body).not.toContain("secret-rpc.internal.example.com");
+  });
+
+  it("SECURITY: RPC_URL sentinel never appears in the response when the on-chain read FAILS", async () => {
+    // Mirrors viem's real error shape: `readContract()` embeds the full
+    // transport URL (which may carry an Infura/Alchemy API key) in the
+    // thrown error's `.message` on ANY failure (unreachable RPC, timeout,
+    // 429, or a plain revert). This test exercises that failure path — the
+    // success-path sentinel test above cannot catch a leak here because the
+    // URL never appears in a successful call. This test FAILS against the
+    // pre-fix chain-reader.ts (which let viem's raw error propagate
+    // verbatim) and PASSES once createRpcChainReader().call() sanitizes it.
+    const SENTINEL_URL = "http://secret-rpc.internal.example.com/v3/SENTINELKEY123";
+    process.env["RPC_URL"] = SENTINEL_URL;
+    readContractSpy.mockRejectedValue(
+      new Error(`HTTP request failed.\n\nURL: ${SENTINEL_URL}\n\nRequest body: {"method":"eth_call"}`),
+    );
+
+    const res = await doRequest(port, "POST", "/api/verify/config", SET_FEE_SPEC);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain("SENTINELKEY123");
+    expect(res.body).not.toContain("secret-rpc.internal.example.com");
+    const body = JSON.parse(res.body) as { clean: boolean; results: Array<Record<string, unknown>> };
+    expect(body.clean).toBe(false);
+    expect(body.results[0]).toMatchObject({ id: "set-fee", status: "error" });
+  });
+
+  it("SECURITY: RPC_URL sentinel never appears in the response when verifyConfig() itself throws", async () => {
+    // Covers the outer `__config__` synthetic-error safety net (the
+    // verifyConfig()-throws catch in run-config-drift.ts), which previously
+    // forwarded `err.message` verbatim and had no test coverage at all. A
+    // grantRole step with an empty id trips verifyConfig()'s own
+    // MALFORMED_SPEC validation before any ChainReader.call() is made.
+    process.env["RPC_URL"] = "http://secret-rpc.internal.example.com/v3/SENTINELKEY123";
+    const spec = JSON.stringify({
+      version: 1,
+      steps: [
+        {
+          kind: "grantRole",
+          id: "",
+          target: "feeController",
+          role: "MINTER_ROLE",
+          account: { kind: "literal", value: "0x2222222222222222222222222222222222222222" },
+        },
+      ],
+    });
+
+    const res = await doRequest(port, "POST", "/api/verify/config", spec);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain("SENTINELKEY123");
+    expect(res.body).not.toContain("secret-rpc.internal.example.com");
+    const body = JSON.parse(res.body) as { clean: boolean; results: Array<Record<string, unknown>> };
+    expect(body.clean).toBe(false);
+    expect(body.results[0]).toMatchObject({ id: "__config__", status: "error" });
+    expect(readContractSpy).not.toHaveBeenCalled();
+  });
+
+  it("a structurally-valid spec with a partial (function not yet chosen) wire/setX step is 200, not a 500", async () => {
+    // Regression test: findUnresolvedRef/deriveReads used to do unguarded
+    // property access (bareFunctionName(step.function) on an undefined
+    // function name; arg.kind on a null args element) and threw an uncaught
+    // TypeError for a structurally-valid-but-partially-authored step — a
+    // very plausible studio state ("wire step drawn, setter not chosen
+    // yet"). The endpoint must degrade those steps to "skipped"/"error",
+    // never 500.
+    const spec = JSON.stringify({
+      version: 1,
+      steps: [
+        // wire step with no `function` chosen yet.
+        { kind: "wire", id: "partial-wire", source: "feeController", into: "feeController" },
+        // setX step with no `function` AND a null args element.
+        { kind: "setX", id: "partial-setx", target: "feeController", args: [null] },
+      ],
+    });
+
+    const res = await doRequest(port, "POST", "/api/verify/config", spec);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { clean: boolean; results: Array<Record<string, unknown>> };
+    expect(["skipped", "error"]).toContain(body.results.find((r) => r["id"] === "partial-wire")?.["status"]);
+    expect(["skipped", "error"]).toContain(body.results.find((r) => r["id"] === "partial-setx")?.["status"]);
+    expect(readContractSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalizes bigints nested inside arrays and objects, not just top-level values", async () => {
+    readContractSpy.mockResolvedValue([1n, { nested: 2n }]);
+
+    const res = await doRequest(port, "POST", "/api/verify/config", SET_FEE_SPEC);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { results: Array<Record<string, unknown>> };
+    expect(body.results[0]?.["actual"]).toEqual([{ $bigint: "1" }, { nested: { $bigint: "2" } }]);
   });
 });
 
