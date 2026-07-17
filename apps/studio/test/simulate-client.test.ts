@@ -542,3 +542,62 @@ describe("runSimulate — chunk splitting robustness", () => {
     expect(result.view.contracts[1].links.dependencies).toEqual(["a"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// runSimulate — network param (issue #139)
+// ---------------------------------------------------------------------------
+
+describe("runSimulate — network param (issue #139)", () => {
+  it("omitted network param → POSTs to /api/simulate with no query string (back-compat)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([doneFrame(true)]), { status: 200 }),
+    );
+
+    await runSimulate({}, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/simulate", expect.anything());
+  });
+
+  it("undefined network param → POSTs to /api/simulate with no query string", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([doneFrame(true)]), { status: 200 }),
+    );
+
+    await runSimulate({}, mockFetch, undefined);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/simulate", expect.anything());
+  });
+
+  it("a network name → POSTs to /api/simulate?network=<name>", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([doneFrame(true)]), { status: 200 }),
+    );
+
+    await runSimulate({}, mockFetch, "sepolia");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/simulate?network=sepolia", expect.anything());
+  });
+
+  it("a network name with special characters is URI-encoded", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([doneFrame(true)]), { status: 200 }),
+    );
+
+    await runSimulate({}, mockFetch, "my network/1");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/api/simulate?network=${encodeURIComponent("my network/1")}`,
+      expect.anything(),
+    );
+  });
+
+  it("an empty-string network param is treated the same as omitted (no query string)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(makeStream([doneFrame(true)]), { status: 200 }),
+    );
+
+    await runSimulate({}, mockFetch, "");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/simulate", expect.anything());
+  });
+});

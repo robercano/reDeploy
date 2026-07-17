@@ -210,15 +210,25 @@ export async function* consumeSseStream(
  * @param spec     - The DeploymentSpec JSON object to send (as the request body).
  * @param fetchFn  - The fetch implementation to use (defaults to global fetch;
  *                   accept as a parameter for testability).
+ * @param network  - Optional target network name (issue #139), sent as
+ *                   `?network=<name>` (URI-encoded). Omitted/undefined ⇒ no
+ *                   query param at all — identical to the pre-#139 request,
+ *                   which resolves to the deploy-server's default network.
  */
 export async function runSimulate(
   spec: unknown,
   fetchFn: typeof fetch = fetch,
+  network?: string,
 ): Promise<SimulateResult> {
   let response: Response;
 
+  const url =
+    network !== undefined && network !== ""
+      ? `/api/simulate?network=${encodeURIComponent(network)}`
+      : "/api/simulate";
+
   try {
-    response = await fetchFn("/api/simulate", {
+    response = await fetchFn(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec),
