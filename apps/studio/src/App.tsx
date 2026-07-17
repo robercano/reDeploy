@@ -75,6 +75,8 @@ import { enrichNodesWithRefSources } from "./spec/enrich-nodes.js";
 import { SAMPLE_DEPLOYMENT_VIEW } from "./inspector/sample-view.js";
 import { runSimulate } from "./deploy/simulate-client.js";
 import { runDeploy } from "./deploy/deploy-client.js";
+import { fetchNetworks, FALLBACK_NETWORKS_RESULT } from "./deploy/networks-client.js";
+import type { NetworkSummary } from "./deploy/networks-client.js";
 import { runVerifyConfig, runVerifySource } from "./deploy/verify-client.js";
 import type { ConfigDriftResultEntry, SourceVerifyResponse } from "./deploy/verify-client.js";
 import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
@@ -613,6 +615,58 @@ export function App() {
   // too. See deploy/field-errors.ts for the path → field/node mapping.
   const [fieldErrors, setFieldErrors] = useState<Map<string, NodeFieldErrors>>(new Map());
 
+  // Network selector (issue #139): populated from the deploy-server's
+  // GET /api/networks on mount, with a graceful single-"default" fallback
+  // (see networks-client.ts) so the toolbar always has at least one option
+  // even offline or against a pre-#139 deploy-server. `defaultNetworkName`
+  // is purely a display label for the "use the server's default" option —
+  // it does not itself get sent as `?network=` (an unset selection still
+  // omits the query param entirely, preserving pre-#139 request shape).
+  //
+  // UNIFICATION (issue #139 design choice): this deliberately does NOT
+  // introduce a second "selected network" concept. The SAME
+  // `selectedNetwork`/`setSelectedNetwork` state already threaded through
+  // useGraph() for the Parameters panel's per-network override substitution
+  // (graph-to-spec.ts's buildParameters) is reused as the toolbar's active
+  // network — selecting a network in the toolbar simultaneously (a) is sent
+  // as `?network=` to /api/simulate and /api/deploy, AND (b) drives which
+  // parameter override values get baked into the emitted spec. A network
+  // name typed only in the toolbar (not yet "declared" in the Parameters
+  // panel) is harmless: buildParameters looks up overrides via
+  // Object.hasOwn and simply finds none, falling back to each parameter's
+  // defaultValue — exactly as if no network were selected.
+  const [availableNetworks, setAvailableNetworks] = useState<NetworkSummary[]>(
+    FALLBACK_NETWORKS_RESULT.networks,
+  );
+  const [defaultNetworkName, setDefaultNetworkName] = useState<string>(
+    FALLBACK_NETWORKS_RESULT.defaultNetwork,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchNetworks()
+      .then((result) => {
+        if (cancelled) return;
+        // Skip the state update entirely when the result IS (by reference)
+        // the same FALLBACK_NETWORKS_RESULT this state was already
+        // initialized from (the common case in any environment/test that
+        // never reaches a real deploy-server) — avoids a no-op re-render,
+        // and avoids act()-wrapping warnings in the many unrelated tests
+        // that render <App/> without stubbing fetch at all.
+        if (result === FALLBACK_NETWORKS_RESULT) return;
+        setAvailableNetworks(result.networks);
+        setDefaultNetworkName(result.defaultNetwork);
+      })
+      .catch(() => {
+        // fetchNetworks() itself never rejects (see its doc comment) — this
+        // catch is defense in depth only, so a future change there can never
+        // turn into an unhandled rejection here.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Keep a ref to the current deployment so the callback always has the latest value
   // without being stale-closed.
   const deploymentRef = useRef<ReturnType<typeof graphToSpec>["deployment"] | null>(null);
@@ -649,6 +703,21 @@ export function App() {
     removeNetwork,
     setSelectedNetwork,
   } = useGraph();
+
+  // Toolbar network-select options (issue #139): the union of server-fetched
+  // networks (availableNetworks — the deployable targets deploy-server
+  // actually knows about) and the Parameters panel's freeform "declared"
+  // network names (networks — authoring-only, used for override columns).
+  // A name declared only client-side (not yet known to the server) is still
+  // offered so the user can select it — see the UNIFICATION note above.
+  const networkSelectOptions = useMemo<NetworkSummary[]>(() => {
+    const byName = new Map<string, NetworkSummary>();
+    for (const n of availableNetworks) byName.set(n.name, n);
+    for (const n of networks) {
+      if (!byName.has(n)) byName.set(n, { name: n });
+    }
+    return Array.from(byName.values());
+  }, [availableNetworks, networks]);
 
   const { userTemplates, saveTemplate, deleteTemplate } = useUserTemplates();
 
@@ -929,7 +998,10 @@ export function App() {
       return;
     }
 
-    const result = await runSimulate(spec);
+    // Thread the toolbar's selected network through as `?network=` (issue
+    // #139) — omitted (undefined) when no network is selected, preserving
+    // the pre-#139 request shape exactly (see runSimulate's doc comment).
+    const result = await runSimulate(spec, fetch, selectedNetwork ?? undefined);
 
     if (result.ok) {
       setLiveView(result.view);
@@ -957,7 +1029,7 @@ export function App() {
     }
 
     setSimulating(false);
-  }, [simulating]);
+  }, [simulating, selectedNetwork]);
 
   // "Plan" (issue #101) — a synchronous, local dry-run create/skip/change
   // preview. Unlike Simulate/Deploy this never touches the network: it
@@ -1009,7 +1081,9 @@ export function App() {
     }
 
     try {
-      const result = await runDeploy(spec);
+      // Thread the toolbar's selected network through as `?network=` (issue
+      // #139) — same rationale as handleSimulate above.
+      const result = await runDeploy(spec, fetch, selectedNetwork ?? undefined);
 
       if (result.ok) {
         setLiveView(result.view);
@@ -1036,7 +1110,7 @@ export function App() {
     } finally {
       setDeploying(false);
     }
-  }, [deploying]);
+  }, [deploying, selectedNetwork]);
 
   // "Verify" (issue #138) — runs config-drift detection + source verification
   // against the persisted (server-side) deployment. Unlike handleSimulate/
@@ -1211,6 +1285,31 @@ export function App() {
             />
           </label>
         )}
+        {/* Network selector (issue #139) — populated from GET /api/networks
+            on mount (graceful single-"default" fallback offline/pre-#139
+            server, see networks-client.ts). The selected value is the SAME
+            selectedNetwork state used for the Parameters panel's per-network
+            override substitution (see the UNIFICATION note above
+            networkSelectOptions) — this is the ONE control that drives both
+            `?network=` routing and which override values get baked into the
+            spec. An empty selection ("") means "no network selected": no
+            `?network=` query param is sent (server default network),
+            matching pre-#139 behavior exactly. */}
+        <select
+          style={{ ...btnStyle, cursor: "pointer" }}
+          value={selectedNetwork ?? ""}
+          onChange={(e) => setSelectedNetwork(e.target.value === "" ? null : e.target.value)}
+          data-testid="deploy-network-select"
+          aria-label="deploy-network-select"
+          title="Target network for Deploy (simulate) / Deploy (real)"
+        >
+          <option value="">{`Default (${defaultNetworkName})`}</option>
+          {networkSelectOptions.map((n) => (
+            <option key={n.name} value={n.name}>
+              {n.chainId !== undefined ? `${n.name} (chainId ${n.chainId})` : n.name}
+            </option>
+          ))}
+        </select>
         <button
           style={deployBtnStyle}
           onClick={() => { void handleSimulate(); }}
@@ -1262,8 +1361,14 @@ export function App() {
             <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
               Target: <strong data-testid="deploy-real-target">{deployTargetLabel}</strong>
               <br />
+              Network:{" "}
+              <strong data-testid="deploy-real-network">
+                {selectedNetwork ?? `Default (${defaultNetworkName})`}
+              </strong>
+              <br />
               <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-                Network / RPC is resolved server-side from its environment.
+                RPC / deployer credentials for this network are resolved
+                server-side — never entered here.
               </span>
             </p>
             {/* Compact plan preview (issue #101) — non-blocking, best-effort */}

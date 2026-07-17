@@ -349,3 +349,57 @@ describe("runDeploy — structured errors (issue #83)", () => {
     expect(result.errors).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// runDeploy — network param (issue #139)
+// ---------------------------------------------------------------------------
+
+describe("runDeploy — network param (issue #139)", () => {
+  it("omitted network param → POSTs to /api/deploy with no query string (back-compat)", async () => {
+    const raw = progressFrame() + doneOkFrame(null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runDeploy({}, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/deploy", expect.anything());
+  });
+
+  it("undefined network param → POSTs to /api/deploy with no query string", async () => {
+    const raw = progressFrame() + doneOkFrame(null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runDeploy({}, mockFetch, undefined);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/deploy", expect.anything());
+  });
+
+  it("a network name → POSTs to /api/deploy?network=<name>", async () => {
+    const raw = progressFrame() + doneOkFrame(null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runDeploy({}, mockFetch, "sepolia");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/deploy?network=sepolia", expect.anything());
+  });
+
+  it("a network name with special characters is URI-encoded", async () => {
+    const raw = progressFrame() + doneOkFrame(null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runDeploy({}, mockFetch, "my network/1");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/api/deploy?network=${encodeURIComponent("my network/1")}`,
+      expect.anything(),
+    );
+  });
+
+  it("an empty-string network param is treated the same as omitted (no query string)", async () => {
+    const raw = progressFrame() + doneOkFrame(null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runDeploy({}, mockFetch, "");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/deploy", expect.anything());
+  });
+});

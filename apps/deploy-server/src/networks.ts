@@ -417,3 +417,34 @@ export function resolveNetwork(
   }
   return { ok: true, name, config };
 }
+
+/** A single entry in `listNetworks()`'s output — public/non-secret fields only. */
+export interface NetworkSummary {
+  readonly name: string;
+  readonly chainId?: number;
+}
+
+/** The shape returned by `listNetworks()` — the wire body of `GET /api/networks`. */
+export interface NetworksListing {
+  readonly networks: NetworkSummary[];
+  readonly defaultNetwork: string;
+}
+
+/**
+ * Produce the client-safe listing of every registered network, for
+ * `GET /api/networks` (see `server.ts`'s `handleListNetworks`).
+ *
+ * SECURITY: this is the ONLY place a `NetworkConfig` is projected for a
+ * client response. It MUST expose the network `name` and (when configured)
+ * `chainId` ONLY — never `rpcUrl`, `deployerPrivateKey`, `deploymentDir`,
+ * `deploymentParameters`, or `moduleId`, all of which are secret- or
+ * filesystem-path-shaped. Any future `NetworkConfig` field must be reviewed
+ * before being added here.
+ */
+export function listNetworks(registry: NetworksRegistry): NetworksListing {
+  const networks: NetworkSummary[] = [];
+  for (const [name, config] of registry.networks) {
+    networks.push(config.chainId !== undefined ? { name, chainId: config.chainId } : { name });
+  }
+  return { networks, defaultNetwork: registry.defaultNetworkName };
+}

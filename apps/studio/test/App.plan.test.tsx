@@ -121,9 +121,14 @@ describe("App — Plan button", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     render(<App />);
+    // The studio's own mount-time GET /api/networks call (issue #139, network
+    // selector) may already have registered a call by this point — capture
+    // the baseline so this test only asserts that clicking Plan itself never
+    // triggers an ADDITIONAL fetch call.
+    const callsBeforeClick = fetchSpy.mock.calls.length;
     fireEvent.click(screen.getByTestId("deploy-plan-button"));
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.length).toBe(callsBeforeClick);
   });
 
   it("switches to inspector mode and renders PlanView instead of the default Inspector", () => {
