@@ -367,6 +367,21 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  * the resolved `moduleId` (`network.config.moduleId ?? DEFAULT_MODULE_ID`)
  * before being passed to `core.deploy()`'s `deploymentParameters` option.
  *
+ * PRECEDENCE: a network's server-side `deploymentParameters` OVERRIDE any
+ * value the request body's `spec.parameters` carries for the same parameter
+ * name — including values the studio baked in from its client-side
+ * per-network `networkOverrides` (the studio emits those as spec.parameters
+ * DEFAULTS, not as deploymentParameters, at spec-generation time). This is
+ * Ignition's own precedence: `spec.parameters` become each ParamArg's
+ * `m.getParameter(name, defaultValue)` default, and `deploymentParameters`
+ * passed to `core.deploy()` beat that default on a key collision — reDeploy
+ * does not reimplement this, it only wires the resolved network config into
+ * `deploymentParameters`. Verified end-to-end (real two-Anvil chains, no
+ * mocks) in test/e2e/multi-network.e2e.test.ts. Rationale: server config is
+ * trusted infrastructure (same boundary as rpcUrl/deployer keys — see
+ * networks.ts's module doc) and must not be silently overridable by a
+ * client-supplied spec value.
+ *
  * Accounts derivation: we call provider.request({ method: "eth_accounts" }) on
  * the freshly-built jsonRpcProvider. This is answered locally (no RPC round-trip)
  * by the provider's internal viem account, returning [account.address]. This
