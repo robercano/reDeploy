@@ -686,6 +686,232 @@ describe("validateConfig — failure modes", () => {
 });
 
 // ---------------------------------------------------------------------------
+// `read` args
+// ---------------------------------------------------------------------------
+
+describe("validateConfig — read args", () => {
+  it("accepts a valid no-arg read arg (setX)", () => {
+    const result = validateConfig(
+      {
+        version: 1,
+        steps: [
+          {
+            kind: "setX",
+            id: "set-decimals",
+            target: "priceOracle",
+            function: "setDecimals",
+            args: [{ kind: "read", contract: "token", function: "decimals" }],
+          },
+        ],
+      },
+      new Set(["priceOracle", "token"]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a valid read arg with ref/literal read-call args (grantRole.account)", () => {
+    const result = validateConfig(
+      {
+        version: 1,
+        steps: [
+          {
+            kind: "grantRole",
+            id: "grant-minter",
+            target: "token",
+            role: "MINTER_ROLE",
+            account: {
+              kind: "read",
+              contract: "registry",
+              function: "lookup",
+              args: [
+                { kind: "literal", value: "minter" },
+                { kind: "ref", contract: "vault" },
+              ],
+            },
+          },
+        ],
+      },
+      new Set(["token", "registry", "vault"]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("skips ref-resolution for read args when no deployment is provided (shape-only)", () => {
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "s1",
+          target: "c",
+          function: "f",
+          args: [{ kind: "read", contract: "unknown-contract", function: "decimals" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("emits MISSING_REF when a read arg's source contract is not in the deployment", () => {
+    const result = validateConfig(
+      {
+        version: 1,
+        steps: [
+          {
+            kind: "setX",
+            id: "s1",
+            target: "vault",
+            function: "setDecimals",
+            args: [{ kind: "read", contract: "noSuchToken", function: "decimals" }],
+          },
+        ],
+      },
+      new Set(["vault"]),
+    );
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("MISSING_REF");
+    const refErr = (result as { ok: false; errors: ConfigError[] }).errors.find(
+      (e) => e.code === "MISSING_REF",
+    );
+    expect(refErr?.path).toBe("steps[0].args[0].contract");
+  });
+
+  it("emits MISSING_REF when a read arg's source contract is unknown in grantRole.account", () => {
+    const result = validateConfig(
+      {
+        version: 1,
+        steps: [
+          {
+            kind: "grantRole",
+            id: "s1",
+            target: "token",
+            role: "MINTER",
+            account: { kind: "read", contract: "noSuchRegistry", function: "lookup" },
+          },
+        ],
+      },
+      new Set(["token"]),
+    );
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("MISSING_REF");
+    expect(errorPaths(result)).toContain("steps[0].account.contract");
+  });
+
+  it("emits MISSING_REF for a nested ref inside a read arg's own args", () => {
+    const result = validateConfig(
+      {
+        version: 1,
+        steps: [
+          {
+            kind: "setX",
+            id: "s1",
+            target: "vault",
+            function: "setDecimals",
+            args: [
+              {
+                kind: "read",
+                contract: "registry",
+                function: "lookup",
+                args: [{ kind: "ref", contract: "noSuchNestedRef" }],
+              },
+            ],
+          },
+        ],
+      },
+      new Set(["vault", "registry"]),
+    );
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("MISSING_REF");
+    const refErr = (result as { ok: false; errors: ConfigError[] }).errors.find(
+      (e) => e.code === "MISSING_REF",
+    );
+    expect(refErr?.path).toBe("steps[0].args[0].args[0].contract");
+  });
+
+  it("rejects a read arg with an empty-string function name", () => {
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "s1",
+          target: "vault",
+          function: "setDecimals",
+          args: [{ kind: "read", contract: "token", function: "" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("INVALID_SHAPE");
+  });
+
+  it("rejects a read arg with an empty-string contract", () => {
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "s1",
+          target: "vault",
+          function: "setDecimals",
+          args: [{ kind: "read", contract: "", function: "decimals" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("INVALID_SHAPE");
+  });
+
+  it("rejects a nested `read` inside a read arg's own args (no nested reads in v1)", () => {
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "s1",
+          target: "vault",
+          function: "setDecimals",
+          args: [
+            {
+              kind: "read",
+              contract: "registry",
+              function: "lookup",
+              args: [{ kind: "read", contract: "token", function: "decimals" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("INVALID_SHAPE");
+  });
+
+  it("rejects an unknown arg kind inside a read arg's own args", () => {
+    const result = validateConfig({
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "s1",
+          target: "vault",
+          function: "setDecimals",
+          args: [
+            {
+              kind: "read",
+              contract: "registry",
+              function: "lookup",
+              args: [{ kind: "addressRef", deployId: "token" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(errorCodes(result)).toContain("INVALID_SHAPE");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Schema exports
 // ---------------------------------------------------------------------------
 

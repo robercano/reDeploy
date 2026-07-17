@@ -36,15 +36,21 @@
  *   2. Validate the spec (fail fast — INVALID_SPEC if any ref is unknown).
  *   3. Read the journal to learn which steps are already complete (from a
  *      previous run).
- *   4. Iterate spec.steps IN ORDER. Steps already in the journal are SKIPPED.
+ *   4. Iterate spec.steps IN ORDER. Steps already in the journal are SKIPPED
+ *      — the step's args are never resolved and NO read arg is ever invoked
+ *      for a skipped step.
  *   5. Iterate spec.orderedSteps IN STRICT ARRAY ORDER. Steps already in the
- *      journal are SKIPPED. Each step waits for the previous to complete.
- *   6. For each remaining step (in either list):
+ *      journal are SKIPPED (same no-read guarantee as above). Each step
+ *      waits for the previous to complete.
+ *   6. For each remaining (non-skipped) step (in either list):
  *        a. Resolve all refs to addresses via the safe Map (throws UNKNOWN_REF
  *           on unknown or prototype-key ids).
- *        b. Build a resolved ConfigCall.
- *        c. Call executor.execute(call) and await it.
- *        d. ONLY on success: append a completion record to the journal.
+ *        b. Resolve any `read` args by calling `executor.read()` (throws
+ *           READ_UNSUPPORTED if the executor has no `read` method) — this is
+ *           the ONLY point at which a read (`eth_call`) is ever performed.
+ *        c. Build a resolved ConfigCall.
+ *        d. Call executor.execute(call) and await it.
+ *        e. ONLY on success: append a completion record to the journal.
  *   7. If the executor throws, the error propagates immediately. The journal
  *      retains only the steps that completed before the failure. Re-running
  *      with the same stateDir resumes from the first un-journaled step.
@@ -54,17 +60,29 @@
  * next run. On-chain idempotency of re-execution is out of scope — callers
  * should design their contracts accordingly.
  *
+ * READ ARGS AND ORDERING
+ * ========================
+ *
+ * The source contract for a `read` arg is always already deployed by the
+ * time `applyConfig` runs (all deploys precede all config). If the value
+ * being read depends on the EFFECT of an earlier config step, place the
+ * reading step in `orderedSteps` AFTER that step — there is no separate
+ * dependency graph for config steps; ordering is expressed purely by list
+ * placement (see ORDERED vs. UNORDERED STEPS above).
+ *
  * STEP-KIND → ConfigCall MAPPING
  * ================================
  *
  *   setX      → target  = safeAddresses.get(step.target)
  *               function = step.function
- *               args     = step.args (each ref resolved to its address)
+ *               args     = step.args (each ref resolved to its address, each
+ *                          read resolved via executor.read())
  *
  *   grantRole → target  = safeAddresses.get(step.target)
  *               function = "grantRole"
  *               role     = step.role
- *               args     = [resolvedAccountAddress]
+ *               args     = [resolvedAccountAddress] (account may be a ref,
+ *                          literal, or read)
  *
  *   wire      → target  = safeAddresses.get(step.into)
  *               function = step.function
@@ -78,48 +96,25 @@ import type {
   ApplyConfigOptions,
   ApplyConfigResult,
   ConfigCall,
+  ConfigExecutor,
   ResolvedArg,
 } from "./types.js";
-import type { ConfigSpec, ConfigStep, ConfigArg } from "../steps/types.js";
+import type { ConfigSpec, ConfigStep, ConfigArg, RefArg, LiteralArg } from "../steps/types.js";
 
 // Re-export for convenient public API access from this module
-export type { ApplyConfigOptions, ApplyConfigResult, ConfigCall, ResolvedArg } from "./types.js";
+export type {
+  ApplyConfigOptions,
+  ApplyConfigResult,
+  ConfigCall,
+  ReadCall,
+  ResolvedArg,
+} from "./types.js";
 export { ConfigExecError } from "./errors.js";
 export type { ConfigExecErrorCode } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Resolve a single ConfigArg to a ResolvedArg.
- *
- * - Literal args pass through unchanged.
- * - Ref args are looked up in `safeAddresses` (a Map built from own-enumerable
- *   entries of deployedAddresses at the start of applyConfig); throws
- *   UNKNOWN_REF if the id is absent from the Map. Using a Map makes the lookup
- *   intrinsically safe: prototype keys such as "constructor", "__proto__", and
- *   "toString" are never present in the Map and therefore always throw
- *   UNKNOWN_REF, even if they somehow bypassed upstream validation.
- */
-function resolveArg(
-  arg: ConfigArg,
-  safeAddresses: Map<string, string>,
-  contextLabel: string,
-): ResolvedArg {
-  if (arg.kind === "literal") {
-    return arg.value as ResolvedArg;
-  }
-  // arg.kind === "ref"
-  const address = safeAddresses.get(arg.contract);
-  if (address === undefined) {
-    throw new ConfigExecError(
-      "UNKNOWN_REF",
-      `${contextLabel}: ref "${arg.contract}" could not be resolved — not found in deployedAddresses`,
-    );
-  }
-  return address;
-}
 
 /**
  * Resolve a named contract id to its deployed address.
@@ -145,26 +140,105 @@ function resolveContractId(
 }
 
 /**
+ * Resolve a `ref | literal` arg (i.e. a `ReadCallArg`, or the `ref`/`literal`
+ * branches of a `ConfigArg`) to a `ResolvedArg`. Synchronous — neither branch
+ * needs the executor.
+ *
+ * - Literal args pass through unchanged.
+ * - Ref args are looked up in `safeAddresses` (a Map built from own-enumerable
+ *   entries of deployedAddresses at the start of applyConfig); throws
+ *   UNKNOWN_REF if the id is absent from the Map. Using a Map makes the lookup
+ *   intrinsically safe: prototype keys such as "constructor", "__proto__", and
+ *   "toString" are never present in the Map and therefore always throw
+ *   UNKNOWN_REF, even if they somehow bypassed upstream validation.
+ */
+function resolveSimpleArg(
+  arg: RefArg | LiteralArg,
+  safeAddresses: Map<string, string>,
+  contextLabel: string,
+): ResolvedArg {
+  if (arg.kind === "literal") {
+    return arg.value as ResolvedArg;
+  }
+  // arg.kind === "ref"
+  return resolveContractId(arg.contract, safeAddresses, contextLabel);
+}
+
+/**
+ * Resolve a single ConfigArg (`ref | literal | read`) to a ResolvedArg.
+ *
+ * - `ref` / `literal` — delegated to `resolveSimpleArg` (synchronous).
+ * - `read` — resolves the read's source `contract` to an address, resolves
+ *   its own (ref/literal-only) `args`, then AWAITS `executor.read()`. Throws
+ *   `ConfigExecError("READ_UNSUPPORTED", ...)` if the executor has no `read`
+ *   method — this check happens BEFORE the read is attempted, so a
+ *   read-unsupported executor's `execute()` is never reached with
+ *   unresolved/partial data for this step.
+ *
+ * This function is async ONLY because of the `read` branch; `applyConfig`
+ * only calls it for steps that are actually being executed this run (never
+ * for steps skipped because they are already journaled), so a resumed run
+ * performs NO reads for skipped steps.
+ */
+async function resolveArg(
+  arg: ConfigArg,
+  safeAddresses: Map<string, string>,
+  contextLabel: string,
+  executor: ConfigExecutor,
+): Promise<ResolvedArg> {
+  if (arg.kind !== "read") {
+    return resolveSimpleArg(arg, safeAddresses, contextLabel);
+  }
+
+  // arg.kind === "read"
+  const target = resolveContractId(
+    arg.contract,
+    safeAddresses,
+    `${contextLabel} read source`,
+  );
+  const readArgs: ResolvedArg[] = (arg.args ?? []).map((readArg, i) =>
+    resolveSimpleArg(readArg, safeAddresses, `${contextLabel} read-args[${i}]`),
+  );
+
+  if (!executor.read) {
+    throw new ConfigExecError(
+      "READ_UNSUPPORTED",
+      `${contextLabel}: read arg targets "${arg.contract}"."${arg.function}" but the injected executor does not implement read()`,
+    );
+  }
+
+  return executor.read({ target, function: arg.function, args: readArgs });
+}
+
+/**
  * Build a resolved ConfigCall from a ConfigStep.
  *
- * All refs in the step are resolved to addresses before this function returns.
- * Throws ConfigExecError("UNKNOWN_REF") for any unresolvable ref.
+ * All refs in the step are resolved to addresses, and all `read` args are
+ * resolved via `executor.read()`, before this function's promise resolves.
+ * Throws ConfigExecError("UNKNOWN_REF") for any unresolvable ref, or
+ * ConfigExecError("READ_UNSUPPORTED") if a `read` arg is present but the
+ * executor has no `read` method.
  *
  * @param safeAddresses - A Map built exclusively from own-enumerable entries of
  *   deployedAddresses (see applyConfig). Using a Map rather than the raw
  *   Record prevents prototype-key mis-resolution.
+ * @param executor - The injected ConfigExecutor; only needed for its optional
+ *   `read` method (invoked for any `read` arg encountered in the step).
  */
-function buildConfigCall(
+async function buildConfigCall(
   step: ConfigStep,
   safeAddresses: Map<string, string>,
-): ConfigCall {
+  executor: ConfigExecutor,
+): Promise<ConfigCall> {
   const stepLabel = `step "${step.id}" (${step.kind})`;
 
   switch (step.kind) {
     case "setX": {
       const target = resolveContractId(step.target, safeAddresses, stepLabel);
-      const args: ResolvedArg[] = (step.args ?? []).map((arg, i) =>
-        resolveArg(arg, safeAddresses, `${stepLabel} args[${i}]`),
+      const args: ResolvedArg[] = await Promise.all(
+        (step.args ?? []).map((arg, i) =>
+          resolveArg(arg, safeAddresses, `${stepLabel} args[${i}]`, executor),
+        ),
       );
       return {
         stepId: step.id,
@@ -177,10 +251,11 @@ function buildConfigCall(
 
     case "grantRole": {
       const target = resolveContractId(step.target, safeAddresses, stepLabel);
-      const accountAddress = resolveArg(
+      const accountAddress = await resolveArg(
         step.account,
         safeAddresses,
         `${stepLabel} account`,
+        executor,
       );
       return {
         stepId: step.id,
@@ -227,9 +302,12 @@ function buildConfigCall(
  *   validateConfig() (checked against deployedAddresses keys).
  * @throws ConfigExecError with code "UNKNOWN_REF" if a ref cannot be
  *   resolved during step execution (defensive; normally caught by INVALID_SPEC).
+ * @throws ConfigExecError with code "READ_UNSUPPORTED" if a step's args
+ *   contain a `read` arg and the injected executor has no `read` method.
  * @throws ConfigExecError with code "JOURNAL_ERROR" if the journal file
  *   exists but cannot be read.
- * @throws any error thrown by executor.execute() — NOT wrapped.
+ * @throws any error thrown by executor.execute() or executor.read() — NOT
+ *   wrapped.
  */
 export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyConfigResult> {
   const { spec, deployedAddresses, executor, stateDir } = options;
@@ -268,22 +346,31 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
   const skippedStepIds: string[] = [];
 
   /**
-   * Execute a single step: skip if already journaled, otherwise resolve refs,
-   * call executor, and journal on success. Mutates `executedStepIds`,
-   * `skippedStepIds`, and `alreadyCompleted` in place.
+   * Execute a single step: skip if already journaled, otherwise resolve refs
+   * (including any `read` args, via executor.read()), call executor, and
+   * journal on success. Mutates `executedStepIds`, `skippedStepIds`, and
+   * `alreadyCompleted` in place.
+   *
+   * IMPORTANT: the already-journaled check happens BEFORE `buildConfigCall`
+   * is called, so a skipped (already-complete) step's `read` args are NEVER
+   * resolved and `executor.read()` is NEVER invoked for it — resuming a
+   * partially-applied spec performs no reads for the steps it skips.
    */
   async function executeStep(step: ConfigStep): Promise<void> {
     if (alreadyCompleted.has(step.id)) {
-      // Already journaled from a previous run — skip.
+      // Already journaled from a previous run — skip. No ref/read resolution
+      // and no executor call of any kind happens for a skipped step.
       skippedStepIds.push(step.id);
       return;
     }
 
-    // Resolve refs and build the ConfigCall.
-    // UNKNOWN_REF here is defensive (INVALID_SPEC above should catch missing
-    // refs), but we keep it for correctness when deployedAddresses diverges,
-    // and to guard against prototype-key refs that bypassed validation.
-    const call = buildConfigCall(step, safeAddresses);
+    // Resolve refs (and any `read` args, via executor.read()) and build the
+    // ConfigCall. UNKNOWN_REF here is defensive (INVALID_SPEC above should
+    // catch missing refs), but we keep it for correctness when
+    // deployedAddresses diverges, and to guard against prototype-key refs
+    // that bypassed validation. READ_UNSUPPORTED is thrown here if the step
+    // has a `read` arg but the executor has no `read` method.
+    const call = await buildConfigCall(step, safeAddresses, executor);
 
     // Execute the call. If it throws, the error propagates immediately.
     // We do NOT catch it — the journal keeps its current state so the next

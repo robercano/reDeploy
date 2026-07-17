@@ -18,12 +18,20 @@ export type ConfigExecErrorCode =
    */
   | "INVALID_SPEC"
   /**
-   * A ref in a step could not be resolved to an address in deployedAddresses.
-   * This should not normally occur if the spec was validated against the full
-   * set of deployed ids (which applyConfig() does). It is provided as a typed
-   * defensive failure for the resolution path at runtime.
+   * A ref (or a `read` arg's source contract) could not be resolved to an
+   * address in deployedAddresses. This should not normally occur if the spec
+   * was validated against the full set of deployed ids (which applyConfig()
+   * does). It is provided as a typed defensive failure for the resolution
+   * path at runtime.
    */
   | "UNKNOWN_REF"
+  /**
+   * A step's arg tree contains a `read` arg, but the injected `ConfigExecutor`
+   * does not implement the optional `read()` method. Thrown BEFORE any
+   * on-chain call is attempted for the step — `executor.execute()` is never
+   * invoked with unresolved data.
+   */
+  | "READ_UNSUPPORTED"
   /**
    * The config-state journal file exists but could not be read or parsed.
    * The file may be corrupt or inaccessible. The stateDir path is included in

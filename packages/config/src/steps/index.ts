@@ -8,6 +8,8 @@ export type {
   LiteralArg,
   LiteralValue,
   ConfigArg,
+  ReadArg,
+  ReadCallArg,
   AddressRef,
   ConfigArgExtended,
   SetXStep,
@@ -20,6 +22,8 @@ export type {
 export {
   LITERAL_MAX_DEPTH,
   configArgSchema,
+  readArgSchema,
+  readCallArgSchema,
   addressRefSchema,
   configArgExtendedSchema,
   setXStepSchema,

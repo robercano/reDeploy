@@ -7,7 +7,9 @@
  * transaction for each `ConfigCall`, used only by this package's Anvil-backed
  * e2e tests. It is intentionally tiny: it knows how to encode exactly the
  * handful of setter functions the test fixtures expose (Vault.setFeeBps,
- * Vault.setRegistry, Token.grantRole).
+ * Vault.setRegistry, Registry.register, Token.grantRole), plus the optional
+ * `read()` method (a real `eth_call` via viem's `readContract`) needed to
+ * resolve `read` args (e.g. Registry.lookup, Token.decimals).
  */
 
 import {
@@ -23,7 +25,7 @@ import {
 } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
-import type { ConfigCall, ConfigExecutor } from "../../src/index.js";
+import type { ConfigCall, ConfigExecutor, ReadCall, ResolvedArg } from "../../src/index.js";
 
 /** bytes32(0) — OpenZeppelin AccessControl's DEFAULT_ADMIN_ROLE. */
 const DEFAULT_ADMIN_ROLE_HASH = `0x${"0".repeat(64)}` as const;
@@ -51,6 +53,18 @@ const FUNCTION_ABIS: Record<string, Abi> = {
       outputs: [],
     },
   ],
+  register: [
+    {
+      type: "function",
+      name: "register",
+      stateMutability: "nonpayable",
+      inputs: [
+        { name: "key", type: "string" },
+        { name: "addr", type: "address" },
+      ],
+      outputs: [],
+    },
+  ],
   grantRole: [
     {
       type: "function",
@@ -61,6 +75,35 @@ const FUNCTION_ABIS: Record<string, Abi> = {
         { name: "account", type: "address" },
       ],
       outputs: [],
+    },
+  ],
+};
+
+/**
+ * Minimal ABI fragments for the VIEW/PURE functions this e2e suite reads via
+ * `ChainConfigExecutor.read()` (a `read` arg's `function`). Mirrors the
+ * read-only helper ABIs in test/helpers/chainReader.ts — kept separate
+ * because chainReader.ts is a test-assertion helper (independent of the
+ * ConfigExecutor under test), while this map backs the actual `read` arg
+ * resolution path exercised by applyConfig().
+ */
+const READ_FUNCTION_ABIS: Record<string, Abi> = {
+  lookup: [
+    {
+      type: "function",
+      name: "lookup",
+      stateMutability: "view",
+      inputs: [{ name: "key", type: "string" }],
+      outputs: [{ name: "", type: "address" }],
+    },
+  ],
+  decimals: [
+    {
+      type: "function",
+      name: "decimals",
+      stateMutability: "view",
+      inputs: [],
+      outputs: [{ name: "", type: "uint8" }],
     },
   ],
 };
@@ -134,6 +177,36 @@ export class ChainConfigExecutor implements ConfigExecutor {
       );
     }
   }
+
+  /**
+   * Perform a real read-only `eth_call` for a resolved `ReadCall` (a `read`
+   * arg), via viem's `readContract`. Throws if the function has no
+   * registered read ABI fragment.
+   *
+   * bigint results (all Solidity integer types decode to `bigint` in viem)
+   * are converted to a `ResolvedArg`-compatible `number` when safe, else to
+   * a decimal string — `ResolvedArg` has no `bigint` member.
+   */
+  async read(call: ReadCall): Promise<ResolvedArg> {
+    const abi = READ_FUNCTION_ABIS[call.function];
+    if (!abi) {
+      throw new Error(
+        `ChainConfigExecutor: no read ABI fragment registered for function "${call.function}"`,
+      );
+    }
+
+    const value = await this.publicClient.readContract({
+      address: call.target as `0x${string}`,
+      abi,
+      functionName: call.function,
+      args: call.args,
+    });
+
+    if (typeof value === "bigint") {
+      return Number.isSafeInteger(Number(value)) ? Number(value) : value.toString();
+    }
+    return value as ResolvedArg;
+  }
 }
 
 /**
@@ -150,6 +223,8 @@ export class ChainConfigExecutor implements ConfigExecutor {
  */
 export class RecordingExecutor implements ConfigExecutor {
   readonly calls: ConfigCall[] = [];
+  /** Every ReadCall forwarded to the delegate's `read()`, in the order received. */
+  readonly reads: ReadCall[] = [];
   private readonly delegate: ConfigExecutor;
   private readonly throwOnCallNumber: number | undefined;
 
@@ -167,5 +242,23 @@ export class RecordingExecutor implements ConfigExecutor {
     }
     await this.delegate.execute(call);
     this.calls.push(call);
+  }
+
+  /**
+   * Forward a `read` arg's resolved call to the delegate (a real
+   * `ChainConfigExecutor`) and record it. Reads are never interrupted by
+   * `throwOnCallNumber` — that only guards `execute()` — so a `read` that
+   * happens while building the call for a step whose `execute()` is about to
+   * be interrupted still completes; only the on-chain WRITE is prevented.
+   * This mirrors applyConfig's own resolution order (reads resolve before
+   * `executor.execute()` is invoked — see execute/execute.ts).
+   */
+  async read(call: ReadCall): Promise<ResolvedArg> {
+    if (!this.delegate.read) {
+      throw new Error("RecordingExecutor: delegate does not implement read()");
+    }
+    const result = await this.delegate.read(call);
+    this.reads.push(call);
+    return result;
   }
 }

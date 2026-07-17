@@ -32,7 +32,14 @@ export type ConfigVerifyErrorCode =
    * The ConfigSpec itself is malformed: empty step id, missing required fields,
    * or an unknown step kind.
    */
-  | "MALFORMED_SPEC";
+  | "MALFORMED_SPEC"
+  /**
+   * A ConfigArg of a kind that config-drift verification does not (yet)
+   * support was encountered — currently this is `ReadArg` (`{ kind: "read" }`).
+   * Config-drift verification only resolves `ref` and `literal` args; it does
+   * not execute on-chain reads to derive expected/actual values.
+   */
+  | "UNSUPPORTED_ARG";
 
 /**
  * Thrown by verifyConfig() for setup and usage errors that prevent drift

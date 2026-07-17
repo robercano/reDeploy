@@ -11,6 +11,8 @@ import type {
   ConfigCall,
   ConfigExecutor,
   ApplyConfigOptions,
+  ReadCall,
+  ResolvedArg,
 } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,31 @@ class FakeExecutor implements ConfigExecutor {
       throw new Error(`FakeExecutor: simulated failure on call #${callNumber} (step "${call.stepId}")`);
     }
     this.calls.push(call);
+  }
+}
+
+/**
+ * A fake ConfigExecutor that ALSO implements the optional `read()` method —
+ * used to test the `read` arg resolution path. Records every ReadCall it
+ * receives (so tests can assert a resumed/skipped run never invokes it) and
+ * returns a single configurable result for every read.
+ */
+class ReadFakeExecutor implements ConfigExecutor {
+  readonly calls: ConfigCall[] = [];
+  readonly reads: ReadCall[] = [];
+  private readonly readResult: ResolvedArg;
+
+  constructor(readResult: ResolvedArg) {
+    this.readResult = readResult;
+  }
+
+  async execute(call: ConfigCall): Promise<void> {
+    this.calls.push(call);
+  }
+
+  async read(call: ReadCall): Promise<ResolvedArg> {
+    this.reads.push(call);
+    return this.readResult;
   }
 }
 
@@ -904,5 +931,243 @@ describe("applyConfig — journal malformed-line tolerance", () => {
 
     // Object.prototype must NOT have been polluted
     expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: `read` args — resolved via executor.read()
+// ---------------------------------------------------------------------------
+
+describe("applyConfig — read args", () => {
+  it("resolves a no-arg read via executor.read() and passes the result into the consuming call's args", async () => {
+    const stateDir = await makeTempDir();
+    const readResult = "0x9999999999999999999999999999999999999999";
+    const executor = new ReadFakeExecutor(readResult);
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "set-decimals",
+          target: "vault",
+          function: "setDecimalsCache",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    };
+
+    await applyConfig({
+      spec,
+      deployedAddresses: { vault: ADDRESSES.vault, token: ADDRESSES.token },
+      executor,
+      stateDir,
+    });
+
+    // The read was performed against the resolved address of "token".
+    expect(executor.reads).toHaveLength(1);
+    expect(executor.reads[0]).toEqual({
+      target: ADDRESSES.token,
+      function: "decimals",
+      args: [],
+    });
+
+    // The read's result flowed into the consuming call's args unchanged.
+    expect(executor.calls).toHaveLength(1);
+    expect(executor.calls[0].args[0]).toBe(readResult);
+  });
+
+  it("resolves a read with ref/literal args and forwards their resolved values to executor.read()", async () => {
+    const stateDir = await makeTempDir();
+    const readResult = ADDRESSES.minterContract;
+    const executor = new ReadFakeExecutor(readResult);
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "grantRole",
+          id: "grant-minter",
+          target: "token",
+          role: "MINTER_ROLE",
+          account: {
+            kind: "read",
+            contract: "registry",
+            function: "lookup",
+            args: [
+              { kind: "literal", value: "minter" },
+              { kind: "ref", contract: "vault" },
+            ],
+          },
+        },
+      ],
+    };
+
+    await applyConfig({
+      spec,
+      deployedAddresses: {
+        token: ADDRESSES.token,
+        registry: ADDRESSES.feeController,
+        vault: ADDRESSES.vault,
+      },
+      executor,
+      stateDir,
+    });
+
+    expect(executor.reads).toHaveLength(1);
+    expect(executor.reads[0]).toEqual({
+      target: ADDRESSES.feeController,
+      function: "lookup",
+      args: ["minter", ADDRESSES.vault],
+    });
+
+    expect(executor.calls).toHaveLength(1);
+    expect(executor.calls[0].args[0]).toBe(readResult);
+  });
+
+  it("throws ConfigExecError(READ_UNSUPPORTED) when the executor has no read() and the spec has a read arg", async () => {
+    const stateDir = await makeTempDir();
+    const executor = new FakeExecutor(); // no read() method
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "set-decimals",
+          target: "vault",
+          function: "setDecimalsCache",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    };
+
+    await expect(
+      applyConfig({
+        spec,
+        deployedAddresses: { vault: ADDRESSES.vault, token: ADDRESSES.token },
+        executor,
+        stateDir,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) => err instanceof ConfigExecError && err.code === "READ_UNSUPPORTED",
+    );
+
+    // execute() must never have been reached with unresolved/partial data.
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("throws ConfigExecError(READ_UNSUPPORTED) for a read arg inside grantRole.account", async () => {
+    const stateDir = await makeTempDir();
+    const executor = new FakeExecutor(); // no read() method
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "grantRole",
+          id: "grant-minter",
+          target: "token",
+          role: "MINTER_ROLE",
+          account: { kind: "read", contract: "registry", function: "lookup" },
+        },
+      ],
+    };
+
+    await expect(
+      applyConfig({
+        spec,
+        deployedAddresses: { token: ADDRESSES.token, registry: ADDRESSES.feeController },
+        executor,
+        stateDir,
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) => err instanceof ConfigExecError && err.code === "READ_UNSUPPORTED",
+    );
+
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("RESUME: a read-arg step already journaled is skipped and executor.read() is NOT invoked", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "set-decimals",
+          target: "vault",
+          function: "setDecimalsCache",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    };
+    const deployedAddresses = { vault: ADDRESSES.vault, token: ADDRESSES.token };
+
+    // --- First run: the step executes and performs exactly one read. -------
+    const executor1 = new ReadFakeExecutor("18");
+    const result1 = await applyConfig({ spec, deployedAddresses, executor: executor1, stateDir });
+    expect(result1.executedStepIds).toEqual(["set-decimals"]);
+    expect(executor1.reads).toHaveLength(1);
+
+    // --- Second run: SAME stateDir — the step is already journaled, so it -
+    // must be SKIPPED, and executor.read() must NEVER be called.
+    const executor2 = new ReadFakeExecutor("18");
+    const result2 = await applyConfig({ spec, deployedAddresses, executor: executor2, stateDir });
+
+    expect(result2.executedStepIds).toEqual([]);
+    expect(result2.skippedStepIds).toEqual(["set-decimals"]);
+    expect(executor2.reads).toHaveLength(0);
+    expect(executor2.calls).toHaveLength(0);
+  });
+
+  it("RESUME: an interrupted run before a read-arg step does not invoke read() until the resumed run reaches it", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "set-fee",
+          target: "feeController",
+          function: "setFee",
+          args: [{ kind: "literal", value: 500 }],
+        },
+        {
+          kind: "setX",
+          id: "set-decimals",
+          target: "vault",
+          function: "setDecimalsCache",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    };
+    const deployedAddresses = {
+      feeController: ADDRESSES.feeController,
+      vault: ADDRESSES.vault,
+      token: ADDRESSES.token,
+    };
+
+    // First run: crash right after "set-fee" (call #1), before "set-decimals"
+    // is ever reached — its read arg must not be resolved at all.
+    class CrashAfterFirstCall extends ReadFakeExecutor {
+      override async execute(call: ConfigCall): Promise<void> {
+        if (call.stepId === "set-decimals") {
+          throw new Error("simulated crash before set-decimals");
+        }
+        await super.execute(call);
+      }
+    }
+    const executor1 = new CrashAfterFirstCall("18");
+    await expect(
+      applyConfig({ spec, deployedAddresses, executor: executor1, stateDir }),
+    ).rejects.toThrow();
+    // The read WAS attempted for "set-decimals" (its args resolve before
+    // execute() runs) but the call itself failed, so nothing was journaled
+    // for it.
+    expect(executor1.reads).toHaveLength(1);
+
+    // Resume: "set-fee" is skipped, "set-decimals" runs (and reads) again.
+    const executor2 = new ReadFakeExecutor("18");
+    const result2 = await applyConfig({ spec, deployedAddresses, executor: executor2, stateDir });
+    expect(result2.skippedStepIds).toEqual(["set-fee"]);
+    expect(result2.executedStepIds).toEqual(["set-decimals"]);
+    expect(executor2.reads).toHaveLength(1);
   });
 });

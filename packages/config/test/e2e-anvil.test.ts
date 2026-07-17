@@ -397,4 +397,197 @@ describe.skipIf(!foundryAvailable)("applyConfig — e2e against Anvil", () => {
       30_000,
     );
   });
+
+  // -------------------------------------------------------------------------
+  // 4. read args — reading a value from a deployed contract into a later step
+  // -------------------------------------------------------------------------
+
+  describe("4. read args — reading a value written by a prior config step", () => {
+    it(
+      "reads registry.lookup(key) (set by a prior ordered config step) and uses the result as a grantRole.account",
+      async () => {
+        const fixtures = await freshFixtures("read");
+        const stateDir = await makeTempDir("state-read");
+        const executor = new ChainConfigExecutor(anvil.rpcUrl, ANVIL_DEV_PRIVATE_KEY_0);
+
+        // The reading step ("grant-minter-via-read") depends on the EFFECT of
+        // "register-minter" (a prior config step), so — per the ordering rule
+        // documented in steps/types.ts — both live in `orderedSteps`, with the
+        // reading step placed strictly AFTER the step whose effect it reads.
+        const spec: ConfigSpec = {
+          version: 1,
+          steps: [],
+          orderedSteps: [
+            {
+              kind: "setX",
+              id: "register-minter",
+              target: "registry",
+              function: "register",
+              args: [
+                { kind: "literal", value: "minter" },
+                { kind: "literal", value: ANVIL_DEV_ADDRESS_1 },
+              ],
+            },
+            {
+              kind: "grantRole",
+              id: "grant-minter-via-read",
+              target: "token",
+              role: "MINTER_ROLE",
+              account: {
+                kind: "read",
+                contract: "registry",
+                function: "lookup",
+                args: [{ kind: "literal", value: "minter" }],
+              },
+            },
+          ],
+        };
+
+        const result = await applyConfig({
+          spec,
+          deployedAddresses: fixtures.addresses,
+          executor,
+          stateDir,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.executedStepIds).toEqual(["register-minter", "grant-minter-via-read"]);
+
+        // The role was granted to the address READ from the registry — this
+        // only passes if the `read` arg's on-chain result (not a hardcoded
+        // literal) actually drove the grantRole call.
+        expect(
+          await reader.hasRole(fixtures.addresses.token, "MINTER_ROLE", ANVIL_DEV_ADDRESS_1),
+        ).toBe(true);
+
+        expect(await readJournalStepIds(stateDir)).toEqual([
+          "register-minter",
+          "grant-minter-via-read",
+        ]);
+      },
+      30_000,
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // 5. read args — partial + resume (idempotency)
+  // -------------------------------------------------------------------------
+
+  describe("5. read args — partial + resume", () => {
+    it(
+      "an interrupted run before the reading step's on-chain tx leaves it un-journaled; resuming executes it exactly once and applies the correct read result",
+      async () => {
+        const fixtures = await freshFixtures("read-resume");
+        const stateDir = await makeTempDir("state-read-resume");
+        const chainExecutor = new ChainConfigExecutor(anvil.rpcUrl, ANVIL_DEV_PRIVATE_KEY_0);
+        const spec: ConfigSpec = {
+          version: 1,
+          steps: [],
+          orderedSteps: [
+            {
+              kind: "setX",
+              id: "register-minter",
+              target: "registry",
+              function: "register",
+              args: [
+                { kind: "literal", value: "minter" },
+                { kind: "literal", value: ANVIL_DEV_ADDRESS_1 },
+              ],
+            },
+            {
+              kind: "grantRole",
+              id: "grant-minter-via-read",
+              target: "token",
+              role: "MINTER_ROLE",
+              account: {
+                kind: "read",
+                contract: "registry",
+                function: "lookup",
+                args: [{ kind: "literal", value: "minter" }],
+              },
+            },
+          ],
+        };
+
+        // --- First run: interrupted before the 2nd on-chain tx (the reading
+        // step's grantRole call). "register-minter" lands on-chain and is
+        // journaled. The reading step's `read` IS attempted — a `read` arg
+        // resolves as part of building the ConfigCall, BEFORE executor.execute()
+        // is invoked (see execute/execute.ts) — but its on-chain tx never lands.
+        const executor1 = new RecordingExecutor(chainExecutor, 2);
+        await expect(
+          applyConfig({
+            spec,
+            deployedAddresses: fixtures.addresses,
+            executor: executor1,
+            stateDir,
+          }),
+        ).rejects.toThrow("simulated interruption before call #2");
+
+        expect(executor1.calls.map((c) => c.stepId)).toEqual(["register-minter"]);
+        expect(executor1.reads).toHaveLength(1);
+        expect(executor1.reads[0]).toEqual({
+          target: fixtures.addresses.registry,
+          function: "lookup",
+          args: ["minter"],
+        });
+
+        // The grant never landed on-chain.
+        expect(
+          await reader.hasRole(fixtures.addresses.token, "MINTER_ROLE", ANVIL_DEV_ADDRESS_1),
+        ).toBe(false);
+        expect(await readJournalStepIds(stateDir)).toEqual(["register-minter"]);
+
+        // --- Second run: SAME spec, SAME stateDir — resumes and executes ONLY
+        // the reading step. "register-minter" is skipped, so Registry.register
+        // is never invoked a second time (proving idempotency for the
+        // already-completed step).
+        const executor2 = new RecordingExecutor(chainExecutor);
+        const result2 = await applyConfig({
+          spec,
+          deployedAddresses: fixtures.addresses,
+          executor: executor2,
+          stateDir,
+        });
+
+        expect(result2.success).toBe(true);
+        expect(result2.skippedStepIds).toEqual(["register-minter"]);
+        expect(result2.executedStepIds).toEqual(["grant-minter-via-read"]);
+        expect(executor2.calls.map((c) => c.stepId)).toEqual(["grant-minter-via-read"]);
+        expect(executor2.reads).toHaveLength(1);
+
+        // The role is now granted, using the (re-resolved) read result.
+        expect(
+          await reader.hasRole(fixtures.addresses.token, "MINTER_ROLE", ANVIL_DEV_ADDRESS_1),
+        ).toBe(true);
+
+        // Idempotency: "register-minter" ran (landed on-chain) exactly once
+        // across both runs.
+        const allCallIds = [...executor1.calls, ...executor2.calls].map((c) => c.stepId);
+        expect(allCallIds.filter((id) => id === "register-minter")).toHaveLength(1);
+
+        expect(await readJournalStepIds(stateDir)).toEqual([
+          "register-minter",
+          "grant-minter-via-read",
+        ]);
+
+        // --- Third run against the now fully-journaled stateDir: BOTH steps
+        // are skipped and NO reads are performed at all — proving a resumed,
+        // fully-complete run never re-invokes read() for steps it skips.
+        const executor3 = new RecordingExecutor(chainExecutor);
+        const result3 = await applyConfig({
+          spec,
+          deployedAddresses: fixtures.addresses,
+          executor: executor3,
+          stateDir,
+        });
+        expect(result3.success).toBe(true);
+        expect(result3.executedStepIds).toEqual([]);
+        expect(result3.skippedStepIds).toEqual(["register-minter", "grant-minter-via-read"]);
+        expect(executor3.calls).toHaveLength(0);
+        expect(executor3.reads).toHaveLength(0);
+      },
+      60_000,
+    );
+  });
 });

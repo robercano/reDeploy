@@ -7,9 +7,45 @@
  *
  * Argument types: this module reuses `RefArg`, `LiteralArg`, and `LiteralValue`
  * directly from `@redeploy/core` to avoid duplication and honour the declared
- * dependency direction (core → config). The only config-local alias is
- * `ConfigArg`, which is the same discriminated union but named to make step
- * signatures self-documenting.
+ * dependency direction (core → config). `ReadArg` is a config-LOCAL addition
+ * (NOT re-exported from core — core has no notion of post-deployment reads).
+ * `ConfigArg` is the discriminated union of all three (`RefArg | LiteralArg |
+ * ReadArg`), named to make step signatures self-documenting.
+ *
+ * READ ARGS — reading a value from a deployed contract:
+ *
+ *   A `ReadArg` (`{ kind: "read", contract, function, args? }`) lets a step
+ *   argument be the return value of a view/pure function call on an already-
+ *   deployed contract, instead of a literal or a plain address ref. Example:
+ *   read `token.decimals()` and pass the result as an arg to another step.
+ *
+ *   - `contract` is the deploy-id of the SOURCE contract to read FROM
+ *     (resolved to an address exactly like `RefArg.contract`).
+ *   - `function` is the view/pure function name (or canonical signature).
+ *   - `args` are the (optional) positional arguments to the view call, and
+ *     may themselves only be `ref` or `literal` — NOT a nested `read` (v1
+ *     deliberately disallows nested reads to keep resolution a single hop).
+ *
+ *   ORDERING: the read's SOURCE contract is always already deployed by the
+ *   time `applyConfig` runs configuration (all deploys precede all config).
+ *   However, if the value being read depends on the EFFECT of a prior config
+ *   step (e.g. a step that writes state the read later observes), the
+ *   reading step must be placed in `orderedSteps` AFTER that configuring
+ *   step — there is no separate dependency graph for config steps; ordering
+ *   is expressed purely via list placement (`steps` vs. `orderedSteps` array
+ *   order). See `ConfigSpec` below for the ordering model.
+ *
+ *   EXECUTION-TIME SEMANTICS: reads are performed at STEP EXECUTION time (via
+ *   `ConfigExecutor.read`, see execute/types.ts), never at validation time and
+ *   never for a step that is skipped because it is already journaled — so a
+ *   resumed run performs NO reads for already-completed steps.
+ *
+ *   VALIDATION SCOPE: `@redeploy/config` has NO ABI awareness, so it cannot
+ *   check that `function` is actually a view/pure function or that its
+ *   argument/return types match the target contract. That is enforced by
+ *   studio at authoring time (it has the manifest/ABI). At execution time a
+ *   wrong function name or signature simply fails as a read-only `eth_call`
+ *   that reverts cleanly — no on-chain state is mutated by a bad read.
  *
  * Ordered vs. unordered steps:
  *
@@ -27,8 +63,10 @@
  *   Both lists share the same step-id namespace — duplicate ids across the two
  *   lists are rejected by the validator. Steps in both lists reference deployed
  *   contract addresses via `{ kind: "ref", contract: "<deploy-id>" }` in arg
- *   fields; target / source / into fields are plain deploy-id strings resolved
- *   to addresses by the execution engine.
+ *   fields, or read a value off a deployed contract via `{ kind: "read",
+ *   contract: "<deploy-id>", function: "<viewFn>" }`; target / source / into
+ *   fields are plain deploy-id strings resolved to addresses by the execution
+ *   engine.
  */
 
 // Re-export the argument types from core so consumers of @redeploy/config do
@@ -36,17 +74,81 @@
 export type { RefArg, LiteralArg, LiteralValue } from "@redeploy/core";
 import type { RefArg, LiteralArg } from "@redeploy/core";
 
+// ---------------------------------------------------------------------------
+// ReadArg — value read from a deployed contract's view/pure function
+// ---------------------------------------------------------------------------
+
 /**
- * A step argument: either a reference to a deployed contract (resolved to its
- * address at execution time) or a literal JSON-serializable value.
+ * An argument to a `read`-call (the positional args passed to the view/pure
+ * function a `ReadArg` invokes). Restricted to `ref | literal` — nested
+ * `ReadArg`s are NOT allowed in v1, so a read's own resolution is always a
+ * single on-chain call away from its inputs.
+ */
+export type ReadCallArg = RefArg | LiteralArg;
+
+/**
+ * A config-LOCAL argument kind (NOT re-exported from `@redeploy/core`) whose
+ * value is read from a deployed contract's view/pure function at execution
+ * time, rather than supplied as a literal or a plain address reference.
  *
- * Intentionally an alias for `ContractArg` from core — using a config-local
- * name makes step typings self-documenting without introducing new semantics.
+ * See the module-level doc comment above ("READ ARGS") for the full
+ * ordering / execution-time / validation-scope semantics.
+ *
+ * @example Read `token.decimals()` and use it elsewhere:
+ * ```ts
+ * const arg: ReadArg = { kind: "read", contract: "token", function: "decimals" };
+ * ```
+ *
+ * @example Read `registry.lookup("minter")` (a view call with an argument):
+ * ```ts
+ * const arg: ReadArg = {
+ *   kind: "read",
+ *   contract: "registry",
+ *   function: "lookup",
+ *   args: [{ kind: "literal", value: "minter" }],
+ * };
+ * ```
+ */
+export interface ReadArg {
+  /** Discriminant — always `"read"`. */
+  readonly kind: "read";
+  /**
+   * Deploy-id of the SOURCE contract to read FROM. Resolved to an address at
+   * execution time exactly like `RefArg.contract`. Must resolve to a known
+   * deployed contract when a deployment is provided to `validateConfig`.
+   */
+  readonly contract: string;
+  /**
+   * Name (or canonical signature) of the view/pure function to call on
+   * `contract`. Must be a non-empty string.
+   */
+  readonly function: string;
+  /**
+   * Positional arguments to the view call. Each is a `ref` (resolved to an
+   * address) or a `literal` value — never a nested `read`.
+   */
+  readonly args?: ReadCallArg[];
+}
+
+/**
+ * A step argument: a reference to a deployed contract (resolved to its
+ * address at execution time), a literal JSON-serializable value, or a value
+ * read from a deployed contract's view/pure function.
+ *
+ * `RefArg` and `LiteralArg` are re-exports from `@redeploy/core`'s
+ * `ContractArg` union; `ReadArg` is config-local (core has no notion of
+ * post-deployment reads). Using a config-local union name makes step typings
+ * self-documenting without introducing new semantics for the core-derived
+ * members.
  *
  * To pass a deployed contract's address as an argument, use a `RefArg`:
  * `{ kind: "ref", contract: "<deploy-id>" }`.
+ *
+ * To pass a value read from a deployed contract, use a `ReadArg`:
+ * `{ kind: "read", contract: "<deploy-id>", function: "<viewFn>" }`.
  */
-export type ConfigArg = RefArg | LiteralArg;
+export type ConfigArg = RefArg | LiteralArg | ReadArg;
+
 
 // ---------------------------------------------------------------------------
 // AddressRef — explicit address-of-a-deployed-contract reference
@@ -73,7 +175,7 @@ export type ConfigArg = RefArg | LiteralArg;
  *   if (arg.kind === "addressRef") {
  *     return { kind: "ref", contract: arg.deployId };
  *   }
- *   return arg; // RefArg or LiteralArg pass through unchanged
+ *   return arg; // RefArg, LiteralArg, or ReadArg pass through unchanged
  * }
  * ```
  */
@@ -90,19 +192,21 @@ export interface AddressRef {
 
 /**
  * Studio-facing extended argument type that adds `AddressRef` to the
- * validated `ConfigArg` union.
+ * validated `ConfigArg` union (`RefArg | LiteralArg | ReadArg`).
  *
  * IMPORTANT — `ConfigArgExtended` is a studio-internal type only. The
  * validated `ConfigSpec` / `ConfigStep` pipeline (schema, validator, executor)
- * only accepts `ConfigArg` (`RefArg | LiteralArg`). Studio components that
- * work with `ConfigArgExtended` internally MUST normalise any `AddressRef`
- * value to a `RefArg` (`{ kind: "ref", contract: deployId }`) before producing
- * a `ConfigSpec` for validation or execution.
+ * only accepts `ConfigArg` (`RefArg | LiteralArg | ReadArg`). Studio
+ * components that work with `ConfigArgExtended` internally MUST normalise any
+ * `AddressRef` value to a `RefArg` (`{ kind: "ref", contract: deployId }`)
+ * before producing a `ConfigSpec` for validation or execution. `ReadArg`
+ * values already pass straight through — they are part of the validated
+ * union and need no normalisation.
  *
  * Use `configArgExtendedSchema` to validate studio-internal arg values that
  * may contain `AddressRef` before that normalisation step.
  */
-export type ConfigArgExtended = RefArg | LiteralArg | AddressRef;
+export type ConfigArgExtended = RefArg | LiteralArg | ReadArg | AddressRef;
 
 // ---------------------------------------------------------------------------
 // ConfigStep variants
@@ -132,6 +236,17 @@ export type ConfigArgExtended = RefArg | LiteralArg | AddressRef;
  *   args: [{ kind: "ref", contract: "token" }],
  * };
  * ```
+ *
+ * @example Passing a value read from a deployed contract via ReadArg:
+ * ```ts
+ * const step: SetXStep = {
+ *   kind: "setX",
+ *   id: "set-decimals-cache",
+ *   target: "priceOracle",
+ *   function: "setDecimals",
+ *   args: [{ kind: "read", contract: "token", function: "decimals" }],
+ * };
+ * ```
  */
 export interface SetXStep {
   /** Discriminant — always `"setX"`. */
@@ -152,11 +267,15 @@ export interface SetXStep {
    */
   readonly function: string;
   /**
-   * Positional call arguments. Each is either a ref to a deployed contract
-   * (resolved to its address) or a literal value.
+   * Positional call arguments. Each is a ref to a deployed contract (resolved
+   * to its address), a literal value, or a value read from a deployed
+   * contract's view/pure function.
    *
    * To pass a deployed contract's address as an argument, use a `RefArg`:
    * `{ kind: "ref", contract: "<deploy-id>" }`.
+   *
+   * To pass a value read from a deployed contract, use a `ReadArg`:
+   * `{ kind: "read", contract: "<deploy-id>", function: "<viewFn>" }`.
    *
    * Studio tooling may use `AddressRef` (`{ kind: "addressRef", deployId }`)
    * internally; it must normalize to `RefArg` before producing a `ConfigSpec`.
@@ -175,6 +294,22 @@ export interface SetXStep {
  *   target: "token",
  *   role: "MINTER_ROLE",
  *   account: { kind: "ref", contract: "minterContract" },
+ * };
+ * ```
+ *
+ * @example Granting a role to an address read from another deployed contract:
+ * ```ts
+ * const step: GrantRoleStep = {
+ *   kind: "grantRole",
+ *   id: "grant-minter",
+ *   target: "token",
+ *   role: "MINTER_ROLE",
+ *   account: {
+ *     kind: "read",
+ *     contract: "registry",
+ *     function: "lookup",
+ *     args: [{ kind: "literal", value: "minter" }],
+ *   },
  * };
  * ```
  */
@@ -197,7 +332,8 @@ export interface GrantRoleStep {
   readonly role: string;
   /**
    * The account that receives the role. Can be a ref to a deployed contract
-   * (resolved to its address) or a literal address string.
+   * (resolved to its address), a literal address string, or a value read
+   * from a deployed contract's view/pure function.
    *
    * To reference a deployed contract's address, use a `RefArg`:
    * `{ kind: "ref", contract: "<deploy-id>" }`.

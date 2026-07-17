@@ -861,6 +861,113 @@ describe("verifyConfig() — setup errors (ConfigVerifyError thrown)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ReadArg — not supported in config-drift verification (UNSUPPORTED_ARG)
+// ---------------------------------------------------------------------------
+
+describe("verifyConfig() — 'read' ConfigArg is not supported (UNSUPPORTED_ARG)", () => {
+  // A ReadArg derives its value by calling a view/pure function on a deployed
+  // contract. Config-drift verification only resolves `ref` and `literal`
+  // args, so any `read` arg encountered while resolving expected/args values
+  // must throw ConfigVerifyError("UNSUPPORTED_ARG") rather than being
+  // silently mishandled (e.g. returning `undefined` for a missing `.value`).
+
+  it("throws UNSUPPORTED_ARG when a grantRole step's account is a read arg", async () => {
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "grantRole",
+          id: "grant-minter",
+          target: "token",
+          role: "MINTER_ROLE",
+          account: { kind: "read", contract: "minterContract", function: "owner" },
+        },
+      ],
+    };
+
+    await expect(
+      verifyConfig({ spec, deployedAddresses, reader: makeMockReader({}) }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return (
+        err instanceof ConfigVerifyError &&
+        err.code === "UNSUPPORTED_ARG" &&
+        /read.*not supported/i.test(err.message)
+      );
+    });
+  });
+
+  it("throws UNSUPPORTED_ARG when a setX read descriptor's 'expected' is a read arg", async () => {
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [{ kind: "setX", id: "set-fee", target: "feeController", function: "setFee" }],
+    };
+
+    await expect(
+      verifyConfig({
+        spec,
+        deployedAddresses,
+        reader: makeMockReader({}),
+        reads: {
+          "set-fee": {
+            function: "getFee",
+            expected: { kind: "read", contract: "feeController", function: "defaultFee" },
+          },
+        },
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return err instanceof ConfigVerifyError && err.code === "UNSUPPORTED_ARG";
+    });
+  });
+
+  it("throws UNSUPPORTED_ARG when a setX read descriptor's 'args' contains a read arg", async () => {
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [{ kind: "setX", id: "set-fee", target: "feeController", function: "setFee" }],
+    };
+
+    await expect(
+      verifyConfig({
+        spec,
+        deployedAddresses,
+        reader: makeMockReader({}),
+        reads: {
+          "set-fee": {
+            function: "getFee",
+            args: [{ kind: "read", contract: "vault", function: "id" }],
+            expected: { kind: "literal", value: 500 },
+          },
+        },
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return err instanceof ConfigVerifyError && err.code === "UNSUPPORTED_ARG";
+    });
+  });
+
+  it("throws UNSUPPORTED_ARG when a wire read descriptor's 'args' contains a read arg", async () => {
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [{ kind: "wire", id: "wire-token", source: "token", into: "vault", function: "setToken" }],
+    };
+
+    await expect(
+      verifyConfig({
+        spec,
+        deployedAddresses,
+        reader: makeMockReader({}),
+        reads: {
+          "wire-token": {
+            function: "getToken",
+            args: [{ kind: "read", contract: "vault", function: "id" }],
+          },
+        },
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return err instanceof ConfigVerifyError && err.code === "UNSUPPORTED_ARG";
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // grantRole — detailed verification
 // ---------------------------------------------------------------------------
 
