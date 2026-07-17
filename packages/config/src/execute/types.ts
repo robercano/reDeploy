@@ -60,10 +60,35 @@ export interface ConfigCall {
   readonly role?: string;
   /**
    * Resolved positional arguments for the call.
-   * - setX: zero or more resolved values (literals + resolved ref addresses).
-   * - grantRole: exactly one element — the resolved account address.
+   * - setX: zero or more resolved values (literals + resolved ref addresses +
+   *   resolved read results).
+   * - grantRole: exactly one element — the resolved account address (which
+   *   may itself be the result of a `read` arg).
    * - wire: exactly one element — the resolved source contract address.
    */
+  readonly args: ResolvedArg[];
+}
+
+// ---------------------------------------------------------------------------
+// ReadCall — the resolved, chain-agnostic description of a single read arg
+// ---------------------------------------------------------------------------
+
+/**
+ * A resolved, chain-agnostic description of a single `read` arg (see
+ * `ReadArg` in ../steps/types.ts) — a view/pure function call whose result is
+ * used as an argument to a config call.
+ *
+ * All contract references have already been resolved to on-chain addresses
+ * and all positional `args` have already been resolved to `ResolvedArg`
+ * values (each is `ref | literal` by construction — `ReadArg.args` cannot
+ * itself contain a nested `read`).
+ */
+export interface ReadCall {
+  /** Resolved on-chain address of the contract to read FROM. */
+  readonly target: string;
+  /** Name (or canonical signature) of the view/pure function to call. */
+  readonly function: string;
+  /** Resolved positional arguments to the view call. */
   readonly args: ResolvedArg[];
 }
 
@@ -93,6 +118,27 @@ export interface ConfigExecutor {
    *         and NOT record the step as complete.
    */
   execute(call: ConfigCall): Promise<void>;
+
+  /**
+   * Perform a single resolved read-only call (a `read` arg) and return its
+   * result as a `ResolvedArg`.
+   *
+   * OPTIONAL — omitting `read` keeps existing executors (that predate `read`
+   * args) source-compatible. If a spec contains a `read` arg and the injected
+   * executor has no `read` method, `applyConfig` throws
+   * `ConfigExecError("READ_UNSUPPORTED", ...)` before ever attempting the
+   * call — the executor's `execute` is never invoked with unresolved data.
+   *
+   * Called at STEP EXECUTION time only — never during validation, and never
+   * for a step that is skipped because it is already journaled (resuming a
+   * completed run performs NO reads for the steps it skips).
+   *
+   * @param call - The resolved read description (target address, function
+   *   name, resolved positional args).
+   * @throws any error if the read (`eth_call`) fails; propagates like
+   *   `execute()` — the step is NOT recorded as complete.
+   */
+  read?(call: ReadCall): Promise<ResolvedArg>;
 }
 
 // ---------------------------------------------------------------------------
