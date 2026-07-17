@@ -17,7 +17,7 @@ import type { ConfigDriftResponse } from "./verify/run-config-drift.js";
 import { runSourceVerify } from "./verify/run-source-verify.js";
 import type { SourceVerifyResponse } from "./verify/run-source-verify.js";
 import { createRpcChainReader } from "./verify/chain-reader.js";
-import { loadNetworksRegistry, resolveNetwork, DEFAULT_MODULE_ID } from "./networks.js";
+import { loadNetworksRegistry, resolveNetwork, listNetworks, DEFAULT_MODULE_ID } from "./networks.js";
 import type { NetworkConfig } from "./networks.js";
 
 /** Maximum body size for POST requests (1 MiB). */
@@ -675,6 +675,39 @@ function handleGetDeployment(req: IncomingMessage, res: ServerResponse): void {
 }
 
 /**
+ * Handle `GET /api/networks`.
+ *
+ * Lists every registered network so a client (the studio) can populate a
+ * network selector without hardcoding names. This is the ONLY endpoint that
+ * exposes registry contents wholesale (the other three endpoints only ever
+ * echo BACK the client-chosen `?network=` name, never enumerate the
+ * registry) — see `listNetworks()` in networks.ts for the client-safe
+ * projection.
+ *
+ * Responses:
+ *   - 200 `{ networks: [{ name, chainId? }, ...], defaultNetwork: string }`.
+ *   - 500 `{ error: "Failed to load network configuration" }` — a malformed/
+ *     unreadable `NETWORKS_CONFIG` file. SECURITY: the underlying error (may
+ *     embed the config file path) is never forwarded to the client.
+ *
+ * SECURITY: only `name` and (when configured) `chainId` are ever included —
+ * `rpcUrl`, `deployerPrivateKey`, `deploymentDir`, and `deploymentParameters`
+ * are NEVER sent to the client. See `listNetworks()`'s doc comment.
+ */
+function handleListNetworks(_req: IncomingMessage, res: ServerResponse): void {
+  let registry;
+  try {
+    registry = loadNetworksRegistry();
+  } catch {
+    writeJsonResponse(res, 500, { error: "Failed to load network configuration" });
+    process.stderr.write("[deploy-server] failed to load networks configuration\n");
+    return;
+  }
+
+  writeJsonResponse(res, 200, listNetworks(registry));
+}
+
+/**
  * Write a plain JSON response with an explicit Content-Length, mirroring the
  * inline pattern used throughout this file (GET /health, /api/deployment).
  */
@@ -848,6 +881,7 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  *
  * Routes:
  *   GET  /health              → 200 { status: "ok" }
+ *   GET  /api/networks        → 200 { networks, defaultNetwork } (or 500)
  *   GET  /api/deployment      → 200 { contracts, configSteps, warnings } (or 500)
  *   POST /api/simulate        → 200 SSE stream (planned steps or errors)
  *   POST /api/deploy          → 200 SSE stream (deploy progress + result)
@@ -858,6 +892,8 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  * accept an OPTIONAL `?network=<name>` query param (see
  * `resolveNetworkForRequest` / networks.ts) — hence routing matches on
  * `pathname` (query-string-stripped), not the raw `url`, for these three.
+ * `GET /api/networks` takes no query params but is likewise matched on
+ * `pathname` for consistency (harmless if a client appends one anyway).
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
@@ -879,6 +915,11 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       "Content-Length": Buffer.byteLength(body),
     });
     res.end(body);
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/networks") {
+    handleListNetworks(req, res);
     return;
   }
 

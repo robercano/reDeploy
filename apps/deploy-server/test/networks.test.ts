@@ -17,6 +17,7 @@ import * as path from "node:path";
 import {
   loadNetworksRegistry,
   resolveNetwork,
+  listNetworks,
   NetworksConfigError,
   DEFAULT_NETWORK_NAME,
   DEFAULT_MODULE_ID,
@@ -427,5 +428,81 @@ describe("resolveNetwork", () => {
     const registry = loadNetworksRegistry({ env: baseEnv() });
     const resolution = resolveNetwork(registry, "__proto__");
     expect(resolution.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listNetworks
+// ---------------------------------------------------------------------------
+
+describe("listNetworks", () => {
+  it("lists the legacy 'default' network with no chainId when no NETWORKS_CONFIG is set", () => {
+    const registry = loadNetworksRegistry({ env: baseEnv() });
+    const listing = listNetworks(registry);
+
+    expect(listing.defaultNetwork).toBe("default");
+    expect(listing.networks).toEqual([{ name: "default" }]);
+  });
+
+  it("lists every configured network by name, including chainId when set", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        local: { rpcUrl: "http://127.0.0.1:9545" },
+        sepolia: {
+          rpcUrl: "https://sepolia.example.com/v3/KEY",
+          chainId: 11155111,
+          deployerPrivateKey: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      },
+    });
+
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    const listing = listNetworks(registry);
+
+    expect(listing.networks).toHaveLength(3); // default + local + sepolia
+    expect(listing.networks).toContainEqual({ name: "default" });
+    expect(listing.networks).toContainEqual({ name: "local" });
+    expect(listing.networks).toContainEqual({ name: "sepolia", chainId: 11155111 });
+  });
+
+  it("reflects a configured defaultNetwork", () => {
+    const configPath = writeConfigFile({
+      defaultNetwork: "sepolia",
+      networks: { sepolia: { rpcUrl: "https://sepolia.example.com" } },
+    });
+
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    const listing = listNetworks(registry);
+
+    expect(listing.defaultNetwork).toBe("sepolia");
+  });
+
+  it("never includes secret/path fields (rpcUrl, deployerPrivateKey, deploymentDir, deploymentParameters, moduleId)", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        sepolia: {
+          rpcUrl: "https://sepolia.example.com/v3/SECRET_API_KEY",
+          chainId: 11155111,
+          deployerPrivateKey: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+          deploymentDir: "/var/redeploy/secret-path",
+          moduleId: "Deployment",
+          deploymentParameters: { secretParam: "shh" },
+        },
+      },
+    });
+
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    const listing = listNetworks(registry);
+    const serialized = JSON.stringify(listing);
+
+    expect(serialized).not.toContain("SECRET_API_KEY");
+    expect(serialized).not.toContain("deadbeef");
+    expect(serialized).not.toContain("secret-path");
+    expect(serialized).not.toContain("secretParam");
+    expect(serialized).not.toContain("shh");
+
+    const sepolia = listing.networks.find((n) => n.name === "sepolia");
+    expect(sepolia).toEqual({ name: "sepolia", chainId: 11155111 });
+    expect(Object.keys(sepolia as object).sort()).toEqual(["chainId", "name"]);
   });
 });
