@@ -10,7 +10,15 @@
  */
 
 import { z } from "zod";
-import type { AddressRef, ConfigArg, ConfigArgExtended, ConfigSpec, ConfigStep, LiteralValue } from "./types.js";
+import type {
+  AddressRef,
+  ConfigArg,
+  ConfigArgExtended,
+  ConfigSpec,
+  ConfigStep,
+  LiteralValue,
+  ReadCallArg,
+} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Literal value (re-implemented here to avoid importing private internals from
@@ -100,12 +108,41 @@ const literalArgSchema = z.object({
 });
 
 /**
+ * ReadCallArg discriminated union — the positional args passed to a `read`
+ * arg's own view/pure function call. Restricted to `ref | literal`: there is
+ * intentionally no `read` branch in this union, so a nested `read` inside a
+ * read-call's `args` is rejected at the shape level (not merely by
+ * convention). Literal args here still go through `literalArgSchema` /
+ * `literalValueSchema`, so the LITERAL_MAX_DEPTH guard applies to read-call
+ * literal args exactly as it does everywhere else.
+ */
+export const readCallArgSchema: z.ZodType<ReadCallArg> = z.discriminatedUnion("kind", [
+  refArgSchema,
+  literalArgSchema,
+]);
+
+/**
+ * `{ kind: "read", contract: "<non-empty id>", function: "<non-empty name>", args?: ReadCallArg[] }`
+ *
+ * `contract` is the deploy-id of the SOURCE contract to read FROM (resolved
+ * to an address like `RefArg.contract`); `function` is the view/pure
+ * function name to call; `args` are its (optional) positional arguments.
+ */
+export const readArgSchema = z.object({
+  kind: z.literal("read"),
+  contract: z.string().min(1, { message: "read.contract must be a non-empty string" }),
+  function: z.string().min(1, { message: "read.function must be a non-empty string" }),
+  args: z.array(readCallArgSchema).optional(),
+});
+
+/**
  * ConfigArg discriminated union.
  * Unknown `kind` values produce a clear parse error.
  */
 export const configArgSchema: z.ZodType<ConfigArg> = z.discriminatedUnion("kind", [
   refArgSchema,
   literalArgSchema,
+  readArgSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -129,16 +166,18 @@ export const addressRefSchema: z.ZodType<AddressRef> = z.object({
 
 /**
  * Extended arg schema for studio-internal use — accepts `RefArg`, `LiteralArg`,
- * and `AddressRef`.
+ * `ReadArg`, and `AddressRef`.
  *
  * NOTE: this schema is for validating studio-internal arg representations only.
  * It is NOT used by `configStepSchema` or the execution engine. Any `AddressRef`
  * parsed with this schema must be normalised to a `RefArg` before being placed
- * in a `ConfigSpec` for validation or execution.
+ * in a `ConfigSpec` for validation or execution. `ReadArg` values need no
+ * normalisation — they are already part of the validated `ConfigArg` union.
  */
 export const configArgExtendedSchema: z.ZodType<ConfigArgExtended> = z.discriminatedUnion("kind", [
   refArgSchema,
   literalArgSchema,
+  readArgSchema,
   z.object({
     kind: z.literal("addressRef"),
     deployId: z.string().min(1, { message: "addressRef.deployId must be a non-empty string" }),

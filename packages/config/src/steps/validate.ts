@@ -21,8 +21,19 @@
  * Ref resolution against a deployment:
  *   When a second argument (`deployment`) is passed, every ref-like field in
  *   the spec (step `target`, `source`, `into`, and any `account` or `args`
- *   entry of kind `"ref"` or `"addressRef"`) is checked against the set of known
- *   deployed contract ids. Unknown refs produce a MISSING_REF error.
+ *   entry of kind `"ref"`, `"read"`, or `"addressRef"`) is checked against
+ *   the set of known deployed contract ids. Unknown refs produce a
+ *   MISSING_REF error. For a `"read"` arg, both the read's own `contract`
+ *   (the source being read FROM) and any nested `ref` entries in the read's
+ *   `args` are checked (nested `read` entries are impossible — the schema
+ *   already rejects them, see schema.ts's `readCallArgSchema`).
+ *
+ *   NOTE on scope: this package has no ABI/manifest awareness, so it cannot
+ *   verify that a `read` arg's `function` actually exists, is view/pure, or
+ *   that its argument/return types match the target contract. That check is
+ *   the responsibility of studio (which has the manifest) at authoring time.
+ *   At execution time, an incorrect `function` name/signature simply fails as
+ *   a read-only `eth_call` that reverts cleanly — see execute/execute.ts.
  *
  *   Acceptable forms for `deployment`:
  *     - A `DeploymentSpec` (imported from @redeploy/core) — ids are extracted
@@ -117,13 +128,6 @@ function toDeployedIdSet(deployment: DeploymentInput): ReadonlySet<string> {
   return new Set(spec.contracts.map((c) => c.id));
 }
 
-/**
- * Collect all ref strings from a ConfigArg (returns the contract id if the arg
- * is a ref, or nothing if it is a literal).
- */
-function refFromArg(arg: ConfigArg): string | undefined {
-  return arg.kind === "ref" ? arg.contract : undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Cross-field validation
@@ -218,13 +222,41 @@ function collectStepRefErrors(
   }
 
   /**
-   * Helper: check a single ConfigArg if it is a ref.
+   * Helper: check a single ConfigArg if it is a `ref` or a `read`.
+   *
+   * - `ref`  — checks `arg.contract` at `${argBasePath}.contract`.
+   * - `read` — checks the read's own `arg.contract` (the source contract
+   *   being read FROM) at the same `${argBasePath}.contract` path, then
+   *   recurses into `arg.args` (each is `ref | literal` — schema-enforced,
+   *   no nested `read` is possible) to check any nested `ref` entries at
+   *   `${argBasePath}.args[k].contract`.
+   * - `literal` — no ref to check.
+   *
+   * `argBasePath` is the arg's own path WITHOUT a `.contract` suffix (e.g.
+   * `steps[0].args[0]` or `steps[0].account`) so both the top-level ref/read
+   * check and the nested read-args check can append the right suffix.
    */
-  function checkArgRef(arg: ConfigArg, path: string, label: string): void {
-    const ref = refFromArg(arg);
-    if (ref !== undefined) {
-      checkRef(ref, path, label);
+  function checkArgRef(arg: ConfigArg, argBasePath: string, label: string): void {
+    if (arg.kind === "ref") {
+      checkRef(arg.contract, `${argBasePath}.contract`, label);
+      return;
     }
+    if (arg.kind === "read") {
+      checkRef(arg.contract, `${argBasePath}.contract`, `${label} (read source)`);
+      if (arg.args) {
+        for (let k = 0; k < arg.args.length; k++) {
+          const nested = arg.args[k];
+          if (nested.kind === "ref") {
+            checkRef(
+              nested.contract,
+              `${argBasePath}.args[${k}].contract`,
+              `${label} read args[${k}]`,
+            );
+          }
+        }
+      }
+    }
+    // arg.kind === "literal" — nothing to check.
   }
 
   switch (step.kind) {
@@ -234,7 +266,7 @@ function collectStepRefErrors(
         for (let j = 0; j < step.args.length; j++) {
           checkArgRef(
             step.args[j],
-            `${basePath}.args[${j}].contract`,
+            `${basePath}.args[${j}]`,
             `setX step "${step.id}" args[${j}]`,
           );
         }
@@ -246,7 +278,7 @@ function collectStepRefErrors(
       checkRef(step.target, `${basePath}.target`, `grantRole step "${step.id}" target`);
       checkArgRef(
         step.account,
-        `${basePath}.account.contract`,
+        `${basePath}.account`,
         `grantRole step "${step.id}" account`,
       );
       break;
