@@ -106,7 +106,10 @@ describe("App — manifest-drift missing constructor arg is caught by Deploy (si
     });
 
     // The request must never reach the server — validated + rejected locally.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // (fetchSpy may still have recorded the studio's own mount-time
+    // GET /api/networks call for the toolbar's network selector — issue
+    // #139 — so we assert /api/simulate specifically was never called.)
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/simulate", expect.anything());
 
     const nodeEl = document.querySelector('[data-testid^="contract-node-"]') as HTMLElement;
     expect(nodeEl.getAttribute("data-node-invalid")).toBe("true");

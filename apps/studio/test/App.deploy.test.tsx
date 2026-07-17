@@ -142,8 +142,10 @@ describe("App — Deploy (real) confirm gating", () => {
 
     // Modal appears
     expect(screen.queryByTestId("deploy-real-modal")).not.toBeNull();
-    // No POST yet
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // No POST yet. (fetchSpy may still have recorded the studio's own
+    // mount-time GET /api/networks call for the toolbar's network selector —
+    // issue #139 — so we assert /api/deploy specifically was never called.)
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
   });
 
   it("clicking Cancel closes the modal and STILL does NOT POST", async () => {
@@ -156,9 +158,9 @@ describe("App — Deploy (real) confirm gating", () => {
 
     fireEvent.click(screen.getByTestId("deploy-real-cancel"));
 
-    // Modal gone, no fetch
+    // Modal gone, no fetch to /api/deploy specifically (see comment above).
     expect(screen.queryByTestId("deploy-real-modal")).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
   });
 
   it("only clicking Confirm triggers the POST to /api/deploy", async () => {
@@ -172,12 +174,15 @@ describe("App — Deploy (real) confirm gating", () => {
 
     render(<App />);
     fireEvent.click(screen.getByTestId("deploy-real-button"));
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
 
     fireEvent.click(screen.getByTestId("deploy-real-confirm"));
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      // Exactly one call to /api/deploy specifically — fetchSpy's total call
+      // count may also include the studio's own mount-time GET /api/networks
+      // call (issue #139, network selector).
+      expect(fetchSpy.mock.calls.filter((c: unknown[]) => c[0] === "/api/deploy")).toHaveLength(1);
     });
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/deploy",
@@ -498,8 +503,11 @@ describe("App — Deploy (real) local pre-validation: empty constructor args (is
       expect(arg0.getAttribute("aria-invalid")).toBe("true");
     });
 
-    // Short-circuited locally: the server was never contacted.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Short-circuited locally: the server was never contacted for the
+    // deploy request. (fetchSpy may still have recorded the studio's own
+    // mount-time GET /api/networks call for the toolbar's network selector —
+    // issue #139 — so we assert /api/deploy specifically was never called.)
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
 
     const banner = screen.getByTestId("deploy-real-error");
     expect(banner.textContent).toContain("constructor argument must have a value");
@@ -524,7 +532,9 @@ describe("App — Deploy (real) local pre-validation: empty constructor args (is
 
     const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
     expect(arg1.getAttribute("aria-invalid")).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // See the matching comment above — only /api/deploy specifically must
+    // never be called.
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
   });
 
   it("filled constructor args do not block Deploy (real) — request proceeds to the server", async () => {
@@ -541,7 +551,10 @@ describe("App — Deploy (real) local pre-validation: empty constructor args (is
     fireEvent.click(screen.getByTestId("deploy-real-confirm"));
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      // Exactly one call to /api/deploy specifically — fetchSpy's total call
+      // count may also include the studio's own mount-time GET /api/networks
+      // call (issue #139, network selector).
+      expect(fetchSpy.mock.calls.filter((c: unknown[]) => c[0] === "/api/deploy")).toHaveLength(1);
     });
 
     // Success switches to inspector mode — go back to authoring to
@@ -586,6 +599,8 @@ describe("App — Deploy (real) local pre-validation: empty constructor args (is
     expect(tokenArg1.getAttribute("aria-invalid")).toBe("true");
     expect(registryArg0.getAttribute("aria-invalid")).toBe("true");
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // See the matching comment above — only /api/deploy specifically must
+    // never be called.
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/deploy", expect.anything());
   });
 });

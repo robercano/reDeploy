@@ -821,8 +821,11 @@ describe("App — simulate local pre-validation: empty constructor args (issue #
       expect(arg0.getAttribute("aria-invalid")).toBe("true");
     });
 
-    // Short-circuited locally: the server was never contacted.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Short-circuited locally: the server was never contacted for the
+    // simulate request. (fetchSpy may still have recorded the studio's own
+    // mount-time GET /api/networks call for the toolbar's network selector —
+    // issue #139 — so we assert /api/simulate specifically was never called.)
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/simulate", expect.anything());
 
     // The banner fallback is shown alongside the highlight.
     const banner = screen.getByTestId("deploy-simulate-error");
@@ -850,7 +853,9 @@ describe("App — simulate local pre-validation: empty constructor args (issue #
 
     const arg1 = screen.getByLabelText("arg-1") as HTMLInputElement;
     expect(arg1.getAttribute("aria-invalid")).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // See the matching comment above — only /api/simulate specifically must
+    // never be called.
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/simulate", expect.anything());
   });
 
   it("filled constructor args do not block simulate — request proceeds to the server", async () => {
@@ -865,7 +870,10 @@ describe("App — simulate local pre-validation: empty constructor args (issue #
     fireEvent.click(screen.getByTestId("deploy-simulate-button"));
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      // Exactly one call to /api/simulate specifically — fetchSpy's total
+      // call count may also include the studio's own mount-time
+      // GET /api/networks call (issue #139, network selector).
+      expect(fetchSpy.mock.calls.filter((c: unknown[]) => c[0] === "/api/simulate")).toHaveLength(1);
     });
 
     // Success switches to inspector mode — go back to authoring to
@@ -916,6 +924,8 @@ describe("App — simulate local pre-validation: empty constructor args (issue #
     expect(tokenArg1.getAttribute("aria-invalid")).toBe("true");
     expect(registryArg0.getAttribute("aria-invalid")).toBe("true");
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // See the matching comment above — only /api/simulate specifically must
+    // never be called.
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/simulate", expect.anything());
   });
 });
