@@ -371,24 +371,51 @@ export function valuesEqual(expected: unknown, actual: unknown): boolean {
  * Resolve a ConfigArg to a plain JS value.
  * - RefArg → deployedAddresses[contract]
  * - LiteralArg → value
+ * - ReadArg → NOT supported (throws UNSUPPORTED_ARG); see below.
+ *
+ * `ReadArg` (`{ kind: "read", contract, function, args? }`) derives its value
+ * by calling a view/pure function on a deployed contract at execution time.
+ * Config-drift verification (this module) only compares *declared* expected
+ * values against live on-chain state read via `ChainReader`; it does not
+ * execute an additional on-chain read to resolve a `ReadArg` into a concrete
+ * value. Supporting this would require wiring a second on-chain call path
+ * into verify, which is out of scope for this iteration. Callers that used a
+ * `read` arg when producing/consuming a step must resolve it to a `literal`
+ * (or `ref`) before passing the spec to verifyConfig().
  *
  * @throws ConfigVerifyError("UNKNOWN_REF") if the contract id is not in
  *   deployedAddresses.
+ * @throws ConfigVerifyError("UNSUPPORTED_ARG") if `arg.kind === "read"`.
  */
 function resolveArg(arg: ConfigArg, deployedAddresses: Record<string, string>, context: string): unknown {
-  if (arg.kind === "ref") {
-    const address = deployedAddresses[arg.contract];
-    if (address === undefined) {
+  switch (arg.kind) {
+    case "ref": {
+      const address = deployedAddresses[arg.contract];
+      if (address === undefined) {
+        throw new ConfigVerifyError(
+          "UNKNOWN_REF",
+          `${context}: ref to unknown deployment id "${arg.contract}". ` +
+            `Known ids: ${Object.keys(deployedAddresses).join(", ") || "(none)"}`,
+        );
+      }
+      return address;
+    }
+    case "read":
       throw new ConfigVerifyError(
-        "UNKNOWN_REF",
-        `${context}: ref to unknown deployment id "${arg.contract}". ` +
-          `Known ids: ${Object.keys(deployedAddresses).join(", ") || "(none)"}`,
+        "UNSUPPORTED_ARG",
+        `${context}: 'read' args are not supported in config-drift verification yet (arg reads a value ` +
+          `from a deployed contract). Use a literal or ref, or resolve the read value before verification.`,
+      );
+    case "literal":
+      return arg.value;
+    default: {
+      const exhaustive: never = arg;
+      throw new ConfigVerifyError(
+        "MALFORMED_SPEC",
+        `${context}: unknown ConfigArg kind: ${JSON.stringify((exhaustive as ConfigArg).kind)}`,
       );
     }
-    return address;
   }
-  // literal
-  return arg.value;
 }
 
 /**
