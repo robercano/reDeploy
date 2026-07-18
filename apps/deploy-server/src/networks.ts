@@ -58,6 +58,21 @@
  *     }
  *   }
  *
+ * PRECEDENCE: a network's `deploymentParameters` OVERRIDE any value the
+ * request body's `spec.parameters` carries for the same parameter name —
+ * including values the studio baked in from its client-side per-network
+ * `networkOverrides` (the studio emits those as spec.parameters DEFAULTS,
+ * not as deploymentParameters, when it generates the spec — see
+ * `server.ts`'s `handleDeploy` doc block for the wire-level detail). This is
+ * Ignition's own parameter precedence (a module's `m.getParameter(name,
+ * defaultValue)` default loses to a `deploymentParameters` entry for the
+ * same name) — reDeploy does not reimplement it, it only wires this
+ * registry's `deploymentParameters` through to `core.deploy()`. Verified
+ * end-to-end (real two-Anvil chains, no mocks) in
+ * test/e2e/multi-network.e2e.test.ts. Rationale: server config here is
+ * trusted infrastructure (same boundary as `rpcUrl` / `deployerPrivateKey`)
+ * and must not be silently overridable by a client-supplied spec value.
+ *
  * Notes:
  *   - `rpcUrl` is required for every entry.
  *   - `deployerPrivateKeyEnv` (an env var NAME) is preferred over the literal
