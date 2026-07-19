@@ -39,10 +39,11 @@ import type {
   ArgSlotUpdate,
   StudioConfigStep,
   StudioAddressRef,
+  StudioReadRef,
   StudioSetXStep,
   StudioGrantRoleStep,
 } from "../spec/types.js";
-import { getContract, getStateChangingFunctions } from "../manifest/index.js";
+import { getContract, getStateChangingFunctions, getViewFunctions } from "../manifest/index.js";
 import type { ManifestFunction } from "../manifest/types.js";
 import { AddConfigCallMenu } from "./AddConfigCallMenu.js";
 
@@ -442,7 +443,9 @@ const smallSelectStyle: React.CSSProperties = {
 };
 
 /**
- * Renders a single config step arg: either a literal input or an address-ref picker.
+ * Renders a single config step arg: a literal input, an address-ref picker,
+ * or a "read" picker (a value read from a deployed contract's view/pure
+ * function — issue #147).
  */
 function ConfigArgInput({
   value,
@@ -453,16 +456,22 @@ function ConfigArgInput({
   deployTargets,
   onChange,
 }: {
-  value: string | StudioAddressRef;
+  value: string | StudioAddressRef | StudioReadRef;
   index: number;
   stepId: string;
   nodeId: string;
   inputName?: string;
   deployTargets: CanvasDeployTarget[];
-  onChange: (v: string | StudioAddressRef) => void;
+  onChange: (v: string | StudioAddressRef | StudioReadRef) => void;
 }) {
   const isRef = typeof value === "object" && value.kind === "addressRef";
+  const isRead = typeof value === "object" && value.kind === "read";
   const argLabel = `config-arg-${nodeId}-${stepId}-${index}`;
+
+  const readContractName = isRead
+    ? (deployTargets.find((dt) => dt.deployId === (value as StudioReadRef).contract)?.contractName ?? "")
+    : "";
+  const readViewFns = isRead ? getViewFunctions(readContractName) : [];
 
   return (
     <div style={configArgRowStyle}>
@@ -471,13 +480,17 @@ function ConfigArgInput({
           <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{inputName}</span>
         )}
         <div style={{ display: "flex", gap: 4 }}>
-          {/* Kind toggle: literal vs addressRef */}
+          {/* Kind toggle: literal vs addressRef vs read */}
           <select
             style={{ ...smallSelectStyle, width: "auto", minWidth: 60 }}
-            value={isRef ? "ref" : "literal"}
+            value={isRead ? "read" : isRef ? "ref" : "literal"}
             onChange={(e) => {
               if (e.target.value === "ref") {
                 onChange({ kind: "addressRef", deployId: deployTargets[0]?.deployId ?? "" });
+              } else if (e.target.value === "read") {
+                const firstTarget = deployTargets[0];
+                const firstFn = firstTarget ? getViewFunctions(firstTarget.contractName)[0] : undefined;
+                onChange({ kind: "read", contract: firstTarget?.deployId ?? "", function: firstFn?.name ?? "" });
               } else {
                 onChange(typeof value === "object" ? "" : value);
               }
@@ -486,6 +499,7 @@ function ConfigArgInput({
           >
             <option value="literal">literal</option>
             <option value="ref">address ref</option>
+            <option value="read">read</option>
           </select>
           {isRef ? (
             <select
@@ -503,6 +517,44 @@ function ConfigArgInput({
                 </option>
               ))}
             </select>
+          ) : isRead ? (
+            <>
+              <select
+                style={smallSelectStyle}
+                value={(value as StudioReadRef).contract}
+                onChange={(e) => {
+                  const newContract = e.target.value;
+                  const newContractName = deployTargets.find((dt) => dt.deployId === newContract)?.contractName ?? "";
+                  const firstFn = getViewFunctions(newContractName)[0];
+                  onChange({ kind: "read", contract: newContract, function: firstFn?.name ?? "" });
+                }}
+                aria-label={`${argLabel}-read-contract`}
+              >
+                {deployTargets.length === 0 && (
+                  <option value="">— no contracts on canvas —</option>
+                )}
+                {deployTargets.map((dt) => (
+                  <option key={dt.deployId} value={dt.deployId}>
+                    {dt.deployId}
+                  </option>
+                ))}
+              </select>
+              <select
+                style={smallSelectStyle}
+                value={(value as StudioReadRef).function}
+                onChange={(e) => onChange({ ...(value as StudioReadRef), function: e.target.value })}
+                aria-label={`${argLabel}-read-function`}
+              >
+                {readViewFns.length === 0 && (
+                  <option value="">— no view functions —</option>
+                )}
+                {readViewFns.map((fn) => (
+                  <option key={fn.signature} value={fn.name}>
+                    {fn.name}()
+                  </option>
+                ))}
+              </select>
+            </>
           ) : (
             <input
               style={smallInputStyle}
