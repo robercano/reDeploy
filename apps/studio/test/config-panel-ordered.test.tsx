@@ -483,6 +483,28 @@ describe("per-node config section — ConfigArgInput 'read' kind (issue #147)", 
     expect(updates).toHaveLength(1);
     expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "token", function: "totalSupply" });
   });
+
+  it("changing the read source contract re-picks the first view function of the new contract (parity w/ ConfigPanel)", () => {
+    const updates: Array<{ update: { args: unknown[] } }> = [];
+    const step = makeMintStep([{ kind: "read", contract: "token", function: "decimals" }]);
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: (_nodeId: string, _stepId: string, update: { args: unknown[] }) => updates.push({ update }),
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [
+        { deployId: "token", contractName: "Token" },
+        { deployId: "vault", contractName: "Vault" },
+      ],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [step] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const contractSelect = screen.getByLabelText("config-arg-n1-step-mint-0-read-contract");
+    fireEvent.change(contractSelect, { target: { value: "vault" } });
+    expect(updates).toHaveLength(1);
+    // Vault's first view/pure function in manifest order is balanceOf(address).
+    expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "vault", function: "balanceOf" });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1166,10 +1188,9 @@ describe("OrderedConfigPanel — OrderedArgInput 'read' kind (issue #147)", () =
     fireEvent.change(kindSelect, { target: { value: "read" } });
     expect(updates).toHaveLength(1);
     // deployTargets[0] is "reg" (Registry); Registry's first view/pure function
-    // in manifest order is used as the default.
+    // in manifest order is lookup(string), used as the default.
     const newArgs = updates[0].update.args;
-    expect((newArgs[0] as { kind: string; contract: string }).kind).toBe("read");
-    expect((newArgs[0] as { kind: string; contract: string }).contract).toBe("reg");
+    expect(newArgs[0]).toEqual({ kind: "read", contract: "reg", function: "lookup" });
   });
 
   it("renders read-source-contract and read-function pickers once kind is 'read'; switching the view function calls onUpdateStep", () => {

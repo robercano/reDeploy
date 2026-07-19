@@ -705,6 +705,36 @@ describe("stepReferencesDeployId", () => {
     expect(stepReferencesDeployId(setXStep, "")).toBe(false);
     expect(stepReferencesDeployId(grantRoleStep, "")).toBe(false);
   });
+
+  it("matches a setX step with a read arg whose source contract equals the deployId (issue #147)", () => {
+    const step = {
+      kind: "setX" as const,
+      id: "s1",
+      functionName: "setFee",
+      args: [{ kind: "read" as const, contract: "token", function: "decimals" }],
+    };
+    expect(stepReferencesDeployId(step, "token")).toBe(true);
+    expect(stepReferencesDeployId(step, "other")).toBe(false);
+  });
+
+  it("matches a setX step with a read arg whose nested addressRef call-arg equals the deployId (issue #147)", () => {
+    const step = {
+      kind: "setX" as const,
+      id: "s1",
+      functionName: "setFee",
+      args: [
+        {
+          kind: "read" as const,
+          contract: "token",
+          function: "allowance",
+          args: [{ kind: "addressRef" as const, deployId: "oracle" }],
+        },
+      ],
+    };
+    expect(stepReferencesDeployId(step, "oracle")).toBe(true);
+    expect(stepReferencesDeployId(step, "token")).toBe(true);
+    expect(stepReferencesDeployId(step, "other")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -814,6 +844,30 @@ describe("useGraph — node deletion (onNodesChange remove) cleans up dangling r
       result.current.updateSetXStep(n2.id, stepId, {
         functionName: "setRegistry",
         args: [{ kind: "addressRef", deployId: "registryA" }],
+      }),
+    );
+
+    act(() => result.current.onNodesChange([{ id: n1.id, type: "remove" }]));
+
+    expect(result.current.nodes).toHaveLength(1);
+    expect(nd(result.current.nodes[0]).configSteps).toHaveLength(0);
+  });
+
+  it("removes a read-arg step (setX) on a surviving node referencing the deleted contract's deployId (issue #147)", () => {
+    const { result } = renderHook(() => useGraph());
+    act(() => {
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+      result.current.addContractFromManifest(REGISTRY_MANIFEST);
+    });
+    const [n1, n2] = result.current.nodes;
+
+    act(() => nd(result.current.nodes[0]).onUpdateDeployId(n1.id, "registryA"));
+    act(() => result.current.addConfigStep(n2.id, A_WRITE_FN));
+    const stepId = nd(result.current.nodes[1]).configSteps[0].id;
+    act(() =>
+      result.current.updateSetXStep(n2.id, stepId, {
+        functionName: "setRegistry",
+        args: [{ kind: "read", contract: "registryA", function: "owner" }],
       }),
     );
 

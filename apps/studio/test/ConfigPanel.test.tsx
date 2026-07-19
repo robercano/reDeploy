@@ -1145,6 +1145,40 @@ describe("ConfigPanel — setX step arg (read kind: issue #147)", () => {
     fireEvent.change(contractSelect, { target: { value: "vault" } });
     expect(onUpdateSetXStep).toHaveBeenCalledTimes(1);
     const [, , update] = onUpdateSetXStep.mock.calls[0];
-    expect((update.args[0] as { contract: string }).contract).toBe("vault");
+    // Vault's first view/pure function in manifest order is balanceOf(address).
+    expect(update.args[0]).toEqual({ kind: "read", contract: "vault", function: "balanceOf" });
+  });
+
+  it("renders the '— no view functions —' fallback option when the read source contract has none in the manifest", () => {
+    // "Widget" is not in the generated manifest at all, so getViewFunctions
+    // resolves to an empty array (free-text-fallback contract, never crashes).
+    const WIDGET_TARGET: DeployTarget = { deployId: "widget", contractName: "Widget" };
+    const dataWithReadArg = makeData({
+      deployId: "token",
+      contractName: "Token",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-mint",
+          functionName: "mint",
+          functionSignature: "mint(address,uint256)",
+          args: [{ kind: "read", contract: "widget", function: "" }],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithReadArg}
+        deployTargets={[TOKEN_TARGET, WIDGET_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const fnSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-read-function") as HTMLSelectElement;
+    expect(fnSelect.options.length).toBe(1);
+    expect(fnSelect.options[0].textContent).toBe("— no view functions —");
   });
 });
