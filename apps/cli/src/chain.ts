@@ -142,6 +142,14 @@ export interface BuildConfigExecutorOptions {
  * the receipt reports a revert. applyConfig() only journals a step complete
  * if `execute()` resolves without throwing, so this executor deliberately
  * waits for on-chain confirmation rather than resolving on broadcast alone.
+ *
+ * Unlike Ignition-driven deploys (which supply `gas`/fee fields themselves),
+ * this hand-rolled executor is the only source of the transaction params, so
+ * it must fill in a gas limit and a fee itself: `jsonRpcProvider()` (see
+ * core/src/provider/jsonRpc.ts) takes the LEGACY signing branch whenever
+ * `maxFeePerGas` is absent, and that branch reads `gas`/`gasPrice` verbatim
+ * from the params — so both are estimated/queried here via `eth_estimateGas`
+ * and `eth_gasPrice` before broadcasting.
  */
 export function buildConfigExecutor(options: BuildConfigExecutorOptions): ConfigExecutor {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
@@ -167,9 +175,23 @@ export function buildConfigExecutor(options: BuildConfigExecutorOptions): Config
         );
       }
 
+      const callTx = { from, to: call.target, data };
+
+      // Estimate a gas limit and query a legacy gas price so the raw signed
+      // tx (see core/src/provider/jsonRpc.ts) never serializes gas=0 /
+      // gasPrice=0, which real nodes reject.
+      const gas = (await options.provider.request({
+        method: "eth_estimateGas",
+        params: [callTx],
+      })) as string;
+      const gasPrice = (await options.provider.request({
+        method: "eth_gasPrice",
+        params: [],
+      })) as string;
+
       const txHash = (await options.provider.request({
         method: "eth_sendTransaction",
-        params: [{ from, to: call.target, data }],
+        params: [{ ...callTx, gas, gasPrice }],
       })) as string;
 
       for (let attempt = 0; attempt < maxPollAttempts; attempt++) {

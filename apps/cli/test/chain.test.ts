@@ -108,9 +108,14 @@ describe("buildConfigExecutor", () => {
 
   it("sends the transaction and resolves once the receipt confirms success", async () => {
     let receiptCalls = 0;
+    const sendTransaction = vi.fn(() => "0xhash");
+    const estimateGas = vi.fn(() => "0x5208");
+    const gasPrice = vi.fn(() => "0x3b9aca00");
     const provider = fakeProvider({
       eth_accounts: () => ["0xFrom0000000000000000000000000000000000"],
-      eth_sendTransaction: () => "0xhash",
+      eth_estimateGas: estimateGas,
+      eth_gasPrice: gasPrice,
+      eth_sendTransaction: sendTransaction,
       eth_getTransactionReceipt: () => {
         receiptCalls += 1;
         return receiptCalls < 2 ? null : { status: "0x1" };
@@ -129,11 +134,26 @@ describe("buildConfigExecutor", () => {
       executor.execute({ stepId: "set-fee", kind: "setX", target, function: "setFee", args: [500] }),
     ).resolves.toBeUndefined();
     expect(receiptCalls).toBe(2);
+
+    // Gas limit and fee must actually be queried and forwarded so the
+    // provider's legacy signing branch (core/src/provider/jsonRpc.ts) never
+    // serializes gas=0 / gasPrice=0 into the raw signed transaction.
+    expect(estimateGas).toHaveBeenCalledTimes(1);
+    expect(gasPrice).toHaveBeenCalledTimes(1);
+    expect(sendTransaction).toHaveBeenCalledTimes(1);
+    const [sentParams] = sendTransaction.mock.calls[0] as [[{ gas?: string; gasPrice?: string }]];
+    const sentTx = sentParams[0];
+    expect(sentTx.gas).toBe("0x5208");
+    expect(sentTx.gas).not.toBe("0x0");
+    expect(sentTx.gasPrice).toBe("0x3b9aca00");
+    expect(sentTx.gasPrice).not.toBe("0x0");
   });
 
   it("throws when the receipt reports a revert (status 0x0)", async () => {
     const provider = fakeProvider({
       eth_accounts: () => ["0xFrom0000000000000000000000000000000000"],
+      eth_estimateGas: () => "0x5208",
+      eth_gasPrice: () => "0x3b9aca00",
       eth_sendTransaction: () => "0xhash",
       eth_getTransactionReceipt: () => ({ status: "0x0" }),
     });
@@ -148,6 +168,8 @@ describe("buildConfigExecutor", () => {
   it("throws after exhausting poll attempts with no receipt", async () => {
     const provider = fakeProvider({
       eth_accounts: () => ["0xFrom0000000000000000000000000000000000"],
+      eth_estimateGas: () => "0x5208",
+      eth_gasPrice: () => "0x3b9aca00",
       eth_sendTransaction: () => "0xhash",
       eth_getTransactionReceipt: () => null,
     });
@@ -182,5 +204,22 @@ describe("buildConfigExecutor", () => {
     await expect(
       executor.execute({ stepId: "set-fee", kind: "setX", target, function: "setFee", args: [500] }),
     ).rejects.toThrow(/No known contract/);
+  });
+
+  it("surfaces a gas estimation failure as a normal error, without sending the transaction", async () => {
+    const sendTransaction = vi.fn(() => "0xhash");
+    const provider = fakeProvider({
+      eth_accounts: () => ["0xFrom0000000000000000000000000000000000"],
+      eth_estimateGas: () => {
+        throw new Error("execution reverted");
+      },
+      eth_sendTransaction: sendTransaction,
+    });
+    const executor = buildConfigExecutor({ provider, artifactResolver, addressBook, sleep: async () => {} });
+
+    await expect(
+      executor.execute({ stepId: "set-fee", kind: "setX", target, function: "setFee", args: [500] }),
+    ).rejects.toThrow(/execution reverted/);
+    expect(sendTransaction).not.toHaveBeenCalled();
   });
 });
