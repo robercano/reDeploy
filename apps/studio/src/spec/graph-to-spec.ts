@@ -50,6 +50,7 @@ import type {
   ConfigSpec,
   ConfigStep,
   ConfigArg,
+  ReadCallArg,
 } from "@redeploy/config/steps";
 import type {
   StudioEdgeData,
@@ -58,6 +59,7 @@ import type {
   StudioOrderedConfigStep,
   StudioConfigArg,
   StudioAddressRef,
+  StudioReadRef,
   StudioParameter,
 } from "./types.js";
 import { getContract } from "../manifest/index.js";
@@ -136,16 +138,43 @@ function parseLiteralValue(raw: string): LiteralValue {
 }
 
 /**
+ * Normalize a "read" call's OWN positional args (StudioReadRef.args) to
+ * ReadArg.args. Per ReadArg's own restriction these are ref/literal ONLY —
+ * never a nested read — so this is a narrower version of normalizeStudioArg
+ * that never recurses into the "read" branch.
+ */
+function normalizeReadCallArg(arg: string | StudioAddressRef): ReadCallArg {
+  if (typeof arg === "object") {
+    return { kind: "ref", contract: arg.deployId };
+  }
+  return { kind: "literal", value: parseLiteralValue(arg) };
+}
+
+/**
  * Normalize a studio config arg (StudioConfigArg) to a validated ConfigArg.
  *
  * - StudioAddressRef { kind: "addressRef", deployId }
  *     → RefArg { kind: "ref", contract: deployId }
+ * - StudioReadRef { kind: "read", contract, function, args? }
+ *     → ReadArg { kind: "read", contract, function, args? } (same field
+ *       names — passes straight through, only its OWN args are normalized
+ *       via normalizeReadCallArg; nested reads are never emitted)
  * - string (literal value)
  *     → LiteralArg { kind: "literal", value: parseLiteralValue(raw) }
  */
 function normalizeStudioArg(arg: StudioConfigArg): ConfigArg {
   if (typeof arg === "object" && (arg as StudioAddressRef).kind === "addressRef") {
     return { kind: "ref", contract: (arg as StudioAddressRef).deployId };
+  }
+  if (typeof arg === "object" && (arg as StudioReadRef).kind === "read") {
+    const readArg = arg as StudioReadRef;
+    const args = (readArg.args ?? []).map(normalizeReadCallArg);
+    return {
+      kind: "read",
+      contract: readArg.contract,
+      function: readArg.function,
+      ...(args.length > 0 ? { args } : {}),
+    };
   }
   return { kind: "literal", value: parseLiteralValue(arg as string) };
 }

@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import fixtureOutputs from "./fixtures/contracts-build-info.json";
-import { contractManifest, getContract, getStateChangingFunctions } from "../src/manifest/index.js";
+import { contractManifest, getContract, getStateChangingFunctions, getViewFunctions } from "../src/manifest/index.js";
 import type { ContractManifest } from "../src/manifest/types.js";
 import { deriveManifests, derivePackageSegments } from "../src/manifest/derive.js";
 import type { FoundryContractOutput } from "../src/manifest/derive.js";
@@ -331,6 +331,62 @@ describe("getStateChangingFunctions", () => {
       .functions.filter((f) => f.stateMutability === "nonpayable" || f.stateMutability === "payable")
       .map((f) => f.signature);
     expect(getStateChangingFunctions("Token").map((f) => f.signature)).toEqual(manifestOrder);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getViewFunctions — issue #147: the "read" config-call arg kind's view/pure
+// function picker lists a contract's REAL read-only functions.
+// ---------------------------------------------------------------------------
+
+describe("getViewFunctions", () => {
+  it("returns an empty array for a contract not in the manifest (free-text fallback never crashes)", () => {
+    expect(getViewFunctions("NonExistentContract123")).toEqual([]);
+  });
+
+  it("Token: includes real view/pure functions (name, symbol, decimals, totalSupply, balanceOf, allowance, hasRole, getRoleAdmin, supportsInterface)", () => {
+    const names = getViewFunctions("Token").map((f) => f.name);
+    for (const expected of ["name", "symbol", "decimals", "totalSupply", "balanceOf", "allowance", "hasRole", "getRoleAdmin", "supportsInterface"]) {
+      expect(names).toContain(expected);
+    }
+  });
+
+  it("Token: excludes state-changing functions (mint, grantRole, revokeRole, renounceRole, transfer, approve, transferFrom)", () => {
+    const names = getViewFunctions("Token").map((f) => f.name);
+    for (const writeFn of ["mint", "grantRole", "revokeRole", "renounceRole", "transfer", "approve", "transferFrom"]) {
+      expect(names).not.toContain(writeFn);
+    }
+  });
+
+  it("Token: decimals() is a no-arg view function", () => {
+    const decimals = getViewFunctions("Token").find((f) => f.name === "decimals");
+    expect(decimals).toBeDefined();
+    expect(decimals!.stateMutability).toBe("view");
+    expect(decimals!.inputs).toEqual([]);
+  });
+
+  it("returned functions have no duplicate signatures", () => {
+    for (const name of ["Token", "Vault", "Registry", "VaultERC4626"]) {
+      const sigs = getViewFunctions(name).map((f) => f.signature);
+      expect(sigs.length).toBe(new Set(sigs).size);
+    }
+  });
+
+  it("preserves the manifest's declared order", () => {
+    const manifestOrder = getContract("Token")!
+      .functions.filter((f) => f.stateMutability === "view" || f.stateMutability === "pure")
+      .map((f) => f.signature);
+    expect(getViewFunctions("Token").map((f) => f.signature)).toEqual(manifestOrder);
+  });
+
+  it("getStateChangingFunctions and getViewFunctions partition a contract's functions with no overlap", () => {
+    for (const name of ["Token", "Vault", "Registry", "VaultERC4626", "Overloaded"]) {
+      const writeSigs = new Set(getStateChangingFunctions(name).map((f) => f.signature));
+      const viewSigs = new Set(getViewFunctions(name).map((f) => f.signature));
+      for (const sig of viewSigs) {
+        expect(writeSigs.has(sig)).toBe(false);
+      }
+    }
   });
 });
 

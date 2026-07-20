@@ -58,6 +58,7 @@ import type {
   StudioGrantRoleStep,
   StudioOrderedConfigStep,
   StudioParameter,
+  StudioReadRef,
   ArgSlotUpdate,
 } from "../spec/types.js";
 import type { ContractManifest, ManifestFunction } from "../manifest/index.js";
@@ -132,7 +133,9 @@ function bumpCountersForPersistedState(state: PersistedState): void {
 /**
  * True when a config step (per-node or ordered) references the given
  * deployId — either as its explicit `target`, as an address-ref in one of
- * its setX args, or as a `ref`-kind grantRole account.
+ * its setX args, as a `read`-kind arg sourcing FROM that deployId (or one
+ * of the read's own nested addressRef call-args), or as a `ref`-kind
+ * grantRole account.
  *
  * An empty deployId never counts as a match: freshly-added, not-yet-named
  * nodes all start with deployId === "", and an incomplete step referencing
@@ -146,13 +149,24 @@ export function stepReferencesDeployId(
   if (deployId === "") return false;
   if (step.kind === "setX") {
     if (step.target === deployId) return true;
-    return step.args.some(
-      (a) =>
-        typeof a === "object" &&
-        a !== null &&
-        (a as StudioAddressRef).kind === "addressRef" &&
-        (a as StudioAddressRef).deployId === deployId,
-    );
+    return step.args.some((a) => {
+      if (typeof a !== "object" || a === null) return false;
+      if ((a as StudioAddressRef).kind === "addressRef") {
+        return (a as StudioAddressRef).deployId === deployId;
+      }
+      if ((a as StudioReadRef).kind === "read") {
+        const r = a as StudioReadRef;
+        if (r.contract === deployId) return true;
+        return (r.args ?? []).some(
+          (ra) =>
+            typeof ra === "object" &&
+            ra !== null &&
+            (ra as StudioAddressRef).kind === "addressRef" &&
+            (ra as StudioAddressRef).deployId === deployId,
+        );
+      }
+      return false;
+    });
   }
   return step.accountKind === "ref" && step.accountValue === deployId;
 }

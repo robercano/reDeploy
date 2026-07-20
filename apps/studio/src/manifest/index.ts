@@ -54,3 +54,32 @@ export function getStateChangingFunctions(name: string): ManifestFunction[] {
   }
   return result;
 }
+
+/**
+ * Return the READ-ONLY functions (stateMutability "view" or "pure") declared
+ * or inherited by a contract, in manifest order, deduped by canonical
+ * signature (overloads are kept as distinct entries).
+ *
+ * Used by the "read" config-call arg kind (issue #147): a config-call arg can
+ * be filled with a value read from a deployed contract's view/pure function
+ * (e.g. `token.decimals()`) instead of a literal or an address ref. This
+ * helper lists the REAL read-only functions of the selected source contract
+ * so the picker doesn't offer synthetic entries. Mirrors
+ * getStateChangingFunctions's shape/dedup logic exactly, just inverted on
+ * stateMutability. Returns an empty array when the contract isn't in the
+ * manifest (free-text fallback) — callers should treat that as "no functions
+ * available" rather than crashing.
+ */
+export function getViewFunctions(name: string): ManifestFunction[] {
+  const manifest = getContract(name);
+  if (!manifest) return [];
+  const seen = new Set<string>();
+  const result: ManifestFunction[] = [];
+  for (const fn of manifest.functions) {
+    if (fn.stateMutability !== "view" && fn.stateMutability !== "pure") continue;
+    if (seen.has(fn.signature)) continue;
+    seen.add(fn.signature);
+    result.push(fn);
+  }
+  return result;
+}

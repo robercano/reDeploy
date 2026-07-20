@@ -22,6 +22,10 @@
  * - StudioAddressRef { kind: "addressRef", deployId } — studio-facing only.
  *   MUST be normalized to RefArg { kind: "ref", contract: deployId } before
  *   emitting a ConfigSpec (done in graph-to-spec.ts normalizeStudioArg).
+ * - StudioReadRef { kind: "read", contract, function, args? } — a value read
+ *   from a deployed contract's view/pure function (issue #147). Passes
+ *   straight through to ReadArg { kind: "read", contract, function, args? }
+ *   (same field names) at export time.
  *
  * ## Edge types
  *
@@ -196,12 +200,43 @@ export interface StudioAddressRef {
 }
 
 /**
+ * Studio-facing "value read from a deployed contract's view/pure function"
+ * arg (issue #147). Mirrors `@redeploy/config`'s `ReadArg` shape
+ * ({ kind: "read", contract, function, args? }) — this type exists on the
+ * studio side only so the canvas can carry the same field names 1:1 and
+ * graph-to-spec.ts's normalizeStudioArg can pass them straight through
+ * without any renaming.
+ *
+ * - `contract` is the deploy-id of the SOURCE contract to read FROM (picked
+ *   from the same `deployTargets` list used by the addressRef picker).
+ * - `function` is the bare name of the view/pure function to call on it
+ *   (picked via the new `getViewFunctions` manifest helper).
+ * - `args` are the (optional) positional args to the view call itself. v1
+ *   only supports no-arg view functions from the UI (e.g. `token.decimals()`)
+ *   — the picker never populates `args` — but the field is kept so the type
+ *   can carry them once a nested-arg editor is added. Per `ReadArg`'s own
+ *   restriction, entries here are `string | StudioAddressRef` only — never a
+ *   nested `StudioReadRef` (no nested reads, matching `ReadCallArg`).
+ */
+export interface StudioReadRef {
+  kind: "read";
+  /** The deploy-id of the SOURCE contract to read FROM. */
+  contract: string;
+  /** The bare name of the view/pure function to call on `contract`. */
+  function: string;
+  /** Optional positional args to the view call (literal or addressRef only, no nested reads). */
+  args?: (string | StudioAddressRef)[];
+}
+
+/**
  * A config call argument as stored in the studio's in-memory state.
  *
  * - string: a literal value (parseLiteralValue interprets it to bool/number/string/null)
  * - StudioAddressRef: an address-of-contract reference (normalized to RefArg at export)
+ * - StudioReadRef: a value read from a deployed contract's view/pure function
+ *   (normalized to ReadArg at export — see graph-to-spec.ts's normalizeStudioArg)
  */
-export type StudioConfigArg = string | StudioAddressRef;
+export type StudioConfigArg = string | StudioAddressRef | StudioReadRef;
 
 // ---- Config step shapes (studio-internal) ----------------------------------
 

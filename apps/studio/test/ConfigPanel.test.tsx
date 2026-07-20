@@ -1012,3 +1012,173 @@ describe("ConfigPanel — grantRole with ref account", () => {
     expect(screen.getByText("Contract ID")).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// setX step arg — "read" kind (issue #147): a value read from a deployed
+// contract's view/pure function, selectable via the same arg-kind toggle as
+// literal/addressRef.
+// ---------------------------------------------------------------------------
+
+describe("ConfigPanel — setX step arg (read kind: issue #147)", () => {
+  // Vault (the attached node's contract) has no free-text fallback here —
+  // functionSignature "mint(address,uint256)" on Token gives us a real
+  // per-input arg row to toggle to "read".
+  const dataWithMint = makeData({
+    deployId: "token",
+    contractName: "Token",
+    configSteps: [
+      {
+        kind: "setX",
+        id: "step-mint",
+        functionName: "mint",
+        functionSignature: "mint(address,uint256)",
+        args: [],
+      },
+    ],
+  });
+
+  it("offers a 'read' option alongside literal/address ref in the arg-kind toggle", () => {
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithMint}
+        deployTargets={[TOKEN_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const kindSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-kind") as HTMLSelectElement;
+    const optionValues = Array.from(kindSelect.options).map((o) => o.value);
+    expect(optionValues).toEqual(["literal", "ref", "read"]);
+  });
+
+  it("switching arg kind to 'read' defaults to the first deploy target and its first view function", () => {
+    const onUpdateSetXStep = vi.fn();
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithMint}
+        deployTargets={[TOKEN_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={onUpdateSetXStep}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const kindSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-kind");
+    fireEvent.change(kindSelect, { target: { value: "read" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledTimes(1);
+    const [, , update] = onUpdateSetXStep.mock.calls[0];
+    // Token's first view/pure function in manifest order is supportsInterface(bytes4).
+    expect(update.args[0]).toEqual({ kind: "read", contract: "token", function: "supportsInterface" });
+  });
+
+  it("renders read-source-contract and read-function pickers once kind is 'read', and switching the view function updates the arg", () => {
+    const onUpdateSetXStep = vi.fn();
+    const dataWithReadArg = makeData({
+      deployId: "token",
+      contractName: "Token",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-mint",
+          functionName: "mint",
+          functionSignature: "mint(address,uint256)",
+          args: [{ kind: "read", contract: "token", function: "supportsInterface" }],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithReadArg}
+        deployTargets={[TOKEN_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={onUpdateSetXStep}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const contractSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-read-contract") as HTMLSelectElement;
+    expect(contractSelect.value).toBe("token");
+    const fnSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-read-function") as HTMLSelectElement;
+    expect(fnSelect.value).toBe("supportsInterface");
+    expect(fnSelect.innerHTML).toContain("decimals()");
+
+    fireEvent.change(fnSelect, { target: { value: "decimals" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledWith("n1", "step-mint", {
+      args: [{ kind: "read", contract: "token", function: "decimals" }],
+    });
+  });
+
+  it("changing the read source contract re-picks the first view function of the new contract", () => {
+    const onUpdateSetXStep = vi.fn();
+    // Vault.setRegistry(address) — a real manifest function with one input,
+    // so the per-input ConfigArgInput (not the free-text fallback) renders.
+    const dataWithReadArg = makeData({
+      deployId: "vault",
+      contractName: "Vault",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-x",
+          functionName: "setRegistry",
+          functionSignature: "setRegistry(address)",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithReadArg}
+        deployTargets={[TOKEN_TARGET, VAULT_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={onUpdateSetXStep}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const contractSelect = screen.getByLabelText("setx-arg-n1-step-x-0-read-contract") as HTMLSelectElement;
+    fireEvent.change(contractSelect, { target: { value: "vault" } });
+    expect(onUpdateSetXStep).toHaveBeenCalledTimes(1);
+    const [, , update] = onUpdateSetXStep.mock.calls[0];
+    // Vault's first view/pure function in manifest order is balanceOf(address).
+    expect(update.args[0]).toEqual({ kind: "read", contract: "vault", function: "balanceOf" });
+  });
+
+  it("renders the '— no view functions —' fallback option when the read source contract has none in the manifest", () => {
+    // "Widget" is not in the generated manifest at all, so getViewFunctions
+    // resolves to an empty array (free-text-fallback contract, never crashes).
+    const WIDGET_TARGET: DeployTarget = { deployId: "widget", contractName: "Widget" };
+    const dataWithReadArg = makeData({
+      deployId: "token",
+      contractName: "Token",
+      configSteps: [
+        {
+          kind: "setX",
+          id: "step-mint",
+          functionName: "mint",
+          functionSignature: "mint(address,uint256)",
+          args: [{ kind: "read", contract: "widget", function: "" }],
+        },
+      ],
+    });
+    render(
+      <ConfigPanel
+        nodeId="n1"
+        data={dataWithReadArg}
+        deployTargets={[TOKEN_TARGET, WIDGET_TARGET]}
+        onAddStep={() => {}}
+        onRemoveStep={() => {}}
+        onUpdateSetXStep={() => {}}
+        onUpdateGrantRoleStep={() => {}}
+      />,
+    );
+    const fnSelect = screen.getByLabelText("setx-arg-n1-step-mint-0-read-function") as HTMLSelectElement;
+    expect(fnSelect.options.length).toBe(1);
+    expect(fnSelect.options[0].textContent).toBe("— no view functions —");
+  });
+});

@@ -23,7 +23,7 @@ import { useGraph } from "../src/hooks/useGraph.js";
 import { validateConfig } from "@redeploy/config";
 import { validateSpec } from "@redeploy/core";
 import type { GraphNode } from "../src/spec/graph-to-spec.js";
-import type { ContractNodeData, StudioOrderedConfigStep, StudioAddressRef } from "../src/spec/types.js";
+import type { ContractNodeData, StudioOrderedConfigStep, StudioAddressRef, StudioReadRef, StudioSetXStep } from "../src/spec/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -391,6 +391,119 @@ describe("per-node config section — ContractNode with configCallbacks", () => 
     const removeBtn = container.querySelector("[data-testid='node-config-step-remove-s1']") as HTMLElement;
     fireEvent.click(removeBtn);
     expect(removed).toContain("s1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2b. ContractNode's ConfigArgInput — "read" arg kind (issue #147)
+// ---------------------------------------------------------------------------
+
+describe("per-node config section — ConfigArgInput 'read' kind (issue #147)", () => {
+  // Token.mint(address,uint256) — a real manifest function with two inputs,
+  // so the per-input ConfigArgInput (not the free-text fallback) renders.
+  function makeMintStep(args: StudioSetXStep["args"] = []): ContractNodeData["configSteps"][number] {
+    return {
+      kind: "setX",
+      id: "step-mint",
+      functionName: "mint",
+      functionSignature: "mint(address,uint256)",
+      args,
+    };
+  }
+
+  it("offers a 'read' option alongside literal/address ref in the arg-kind toggle", () => {
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [{ deployId: "token", contractName: "Token" }],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [makeMintStep()] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const kindSelect = screen.getByLabelText("config-arg-n1-step-mint-0-kind") as HTMLSelectElement;
+    const optionValues = Array.from(kindSelect.options).map((o) => o.value);
+    expect(optionValues).toEqual(["literal", "ref", "read"]);
+  });
+
+  it("switching arg kind to 'read' defaults to the first deploy target and its first view function, calling onUpdateSetXStep", () => {
+    const updates: Array<{ nodeId: string; stepId: string; update: { args: unknown[] } }> = [];
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: (nodeId: string, stepId: string, update: { args: unknown[] }) =>
+        updates.push({ nodeId, stepId, update }),
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [{ deployId: "token", contractName: "Token" }],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [makeMintStep()] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const kindSelect = screen.getByLabelText("config-arg-n1-step-mint-0-kind");
+    fireEvent.change(kindSelect, { target: { value: "read" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0].nodeId).toBe("n1");
+    expect(updates[0].stepId).toBe("step-mint");
+    // Token's first view/pure function in manifest order is supportsInterface(bytes4).
+    expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "token", function: "supportsInterface" });
+  });
+
+  it("renders read-source-contract and read-function pickers once kind is 'read', listing deployTargets and the source's view functions", () => {
+    const step = makeMintStep([{ kind: "read", contract: "token", function: "decimals" }]);
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: noop,
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [{ deployId: "token", contractName: "Token" }],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [step] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const contractSelect = screen.getByLabelText("config-arg-n1-step-mint-0-read-contract") as HTMLSelectElement;
+    expect(contractSelect.value).toBe("token");
+    expect(contractSelect.innerHTML).toContain("token");
+    const fnSelect = screen.getByLabelText("config-arg-n1-step-mint-0-read-function") as HTMLSelectElement;
+    expect(fnSelect.value).toBe("decimals");
+    expect(fnSelect.innerHTML).toContain("decimals()");
+  });
+
+  it("switching the read view function calls onUpdateSetXStep with the updated function name", () => {
+    const updates: Array<{ update: { args: unknown[] } }> = [];
+    const step = makeMintStep([{ kind: "read", contract: "token", function: "decimals" }]);
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: (_nodeId: string, _stepId: string, update: { args: unknown[] }) => updates.push({ update }),
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [{ deployId: "token", contractName: "Token" }],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [step] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const fnSelect = screen.getByLabelText("config-arg-n1-step-mint-0-read-function");
+    fireEvent.change(fnSelect, { target: { value: "totalSupply" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "token", function: "totalSupply" });
+  });
+
+  it("changing the read source contract re-picks the first view function of the new contract (parity w/ ConfigPanel)", () => {
+    const updates: Array<{ update: { args: unknown[] } }> = [];
+    const step = makeMintStep([{ kind: "read", contract: "token", function: "decimals" }]);
+    const configCallbacks = {
+      onAddConfigStep: noop,
+      onRemoveConfigStep: noop,
+      onUpdateSetXStep: (_nodeId: string, _stepId: string, update: { args: unknown[] }) => updates.push({ update }),
+      onUpdateGrantRoleStep: noop,
+      deployTargets: [
+        { deployId: "token", contractName: "Token" },
+        { deployId: "vault", contractName: "Vault" },
+      ],
+    };
+    const data = { ...makeContractNodeData({ configSteps: [step] }), configCallbacks };
+    renderContractNode(data as unknown as ContractNodeData, "n1");
+    const contractSelect = screen.getByLabelText("config-arg-n1-step-mint-0-read-contract");
+    fireEvent.change(contractSelect, { target: { value: "vault" } });
+    expect(updates).toHaveLength(1);
+    // Vault's first view/pure function in manifest order is balanceOf(address).
+    expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "vault", function: "balanceOf" });
   });
 });
 
@@ -798,6 +911,112 @@ describe("graphToSpec — address ref normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5a-bis. graphToSpec — "read" arg normalization (issue #147)
+// ---------------------------------------------------------------------------
+
+describe("graphToSpec — read arg normalization (issue #147)", () => {
+  it("normalizes a no-arg StudioReadRef to a ReadArg in per-node setX step args", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const node = makeGraphNode("n1", "vault", "Vault", {
+      configSteps: [
+        { kind: "setX", id: "s1", functionName: "setDecimals", args: [readRef] },
+      ],
+    });
+    const { config } = graphToSpec([node], []);
+    const step = config.steps[0] as { kind: "setX"; args?: Array<{ kind: string; contract: string; function: string }> };
+    expect(step.args).toHaveLength(1);
+    expect(step.args![0]).toEqual({ kind: "read", contract: "token", function: "decimals" });
+  });
+
+  it("normalizes a StudioReadRef in ordered step args", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const node = makeGraphNode("n1", "token", "Token");
+    const orderedSteps: StudioOrderedConfigStep[] = [
+      {
+        kind: "setX",
+        id: "os1",
+        functionName: "setDecimals",
+        target: "token",
+        args: [readRef],
+      },
+    ];
+    const { config } = graphToSpec([node], [], orderedSteps);
+    const ordStep = config.orderedSteps![0] as { kind: "setX"; args?: Array<{ kind: string; contract: string; function: string }> };
+    expect(ordStep.args).toHaveLength(1);
+    expect(ordStep.args![0]).toEqual({ kind: "read", contract: "token", function: "decimals" });
+  });
+
+  it("normalizes a StudioReadRef with its own literal/addressRef args (ReadCallArg)", () => {
+    const readRef: StudioReadRef = {
+      kind: "read",
+      contract: "registry",
+      function: "lookup",
+      args: ["minter", { kind: "addressRef", deployId: "token" }],
+    };
+    const node = makeGraphNode("n1", "vault", "Vault", {
+      configSteps: [
+        { kind: "setX", id: "s1", functionName: "setLookup", args: [readRef] },
+      ],
+    });
+    const { config } = graphToSpec([node], []);
+    const step = config.steps[0] as {
+      kind: "setX";
+      args?: Array<{ kind: string; contract: string; function: string; args?: unknown[] }>;
+    };
+    expect(step.args![0]).toEqual({
+      kind: "read",
+      contract: "registry",
+      function: "lookup",
+      args: [
+        { kind: "literal", value: "minter" },
+        { kind: "ref", contract: "token" },
+      ],
+    });
+  });
+
+  it("mixed args: StudioReadRef + literal + addressRef are all normalized correctly", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const addressRef: StudioAddressRef = { kind: "addressRef", deployId: "registry" };
+    const node = makeGraphNode("n1", "vault", "Vault", {
+      configSteps: [
+        { kind: "setX", id: "s1", functionName: "initialize", args: [readRef, "100", addressRef] },
+      ],
+    });
+    const { config } = graphToSpec([node], []);
+    const step = config.steps[0] as { kind: "setX"; args?: Array<Record<string, unknown>> };
+    expect(step.args).toHaveLength(3);
+    expect(step.args![0]).toEqual({ kind: "read", contract: "token", function: "decimals" });
+    expect(step.args![1]).toEqual({ kind: "literal", value: 100 });
+    expect(step.args![2]).toEqual({ kind: "ref", contract: "registry" });
+  });
+
+  it("emitted ReadArg has exactly the ReadArg fields — no leftover studio-only keys (e.g. no empty 'args' when the read call has no args of its own)", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const node = makeGraphNode("n1", "vault", "Vault", {
+      configSteps: [
+        { kind: "setX", id: "s1", functionName: "setDecimals", args: [readRef] },
+      ],
+    });
+    const { config } = graphToSpec([node], []);
+    const step = config.steps[0] as { kind: "setX"; args?: Array<Record<string, unknown>> };
+    expect(Object.keys(step.args![0]).sort()).toEqual(["contract", "function", "kind"]);
+  });
+
+  it("produces a valid ConfigSpec after read-arg normalization", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const token = makeGraphNode("n1", "token", "Token");
+    const vault = makeGraphNode("n2", "vault", "Vault", {
+      configSteps: [
+        { kind: "setX", id: "s1", functionName: "setFeeBps", args: [readRef] },
+      ],
+    });
+    const { deployment, config } = graphToSpec([token, vault], []);
+    expect(validateSpec(deployment).ok).toBe(true);
+    expect(validateConfig(config, deployment).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5b. OrderedArgInput — literal/addressRef toggle in OrderedStepCard
 //
 // Renders an OrderedConfigPanel with a step whose target resolves to a
@@ -911,6 +1130,92 @@ describe("OrderedConfigPanel — OrderedArgInput literal/addressRef toggle", () 
     const newArgs = (updates[0].update as { args: unknown[] }).args;
     // Switching from ref→literal: the value should be empty string (since original was an object)
     expect(newArgs[1]).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b-bis. OrderedArgInput — "read" arg kind (issue #147)
+// ---------------------------------------------------------------------------
+
+describe("OrderedConfigPanel — OrderedArgInput 'read' kind (issue #147)", () => {
+  function makeRegistryStep(id: string, args: StudioOrderedConfigStep["args"] = ["myKey"]): StudioOrderedConfigStep {
+    return {
+      kind: "setX",
+      id,
+      functionName: "register",
+      functionSignature: "register(string,address)",
+      target: "reg",
+      args,
+    };
+  }
+
+  const deployTargets = [
+    { deployId: "reg", contractName: "Registry" },
+    { deployId: "token", contractName: "Token" },
+  ];
+
+  it("offers a 'read' option alongside literal/address ref in the arg-kind toggle", () => {
+    render(
+      <OrderedConfigPanel
+        orderedSteps={[makeRegistryStep("s1")]}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={noop}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+    const kindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-kind" }) as HTMLSelectElement;
+    const optionValues = Array.from(kindSelect.options).map((o) => o.value);
+    expect(optionValues).toEqual(["literal", "ref", "read"]);
+  });
+
+  it("switching arg kind to 'read' defaults to the first deploy target and its first view function", () => {
+    const updates: Array<{ stepId: string; update: { args: unknown[] } }> = [];
+    render(
+      <OrderedConfigPanel
+        orderedSteps={[makeRegistryStep("s1")]}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={(stepId, update) => updates.push({ stepId, update: update as { args: unknown[] } })}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+    const kindSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-kind" });
+    fireEvent.change(kindSelect, { target: { value: "read" } });
+    expect(updates).toHaveLength(1);
+    // deployTargets[0] is "reg" (Registry); Registry's first view/pure function
+    // in manifest order is lookup(string), used as the default.
+    const newArgs = updates[0].update.args;
+    expect(newArgs[0]).toEqual({ kind: "read", contract: "reg", function: "lookup" });
+  });
+
+  it("renders read-source-contract and read-function pickers once kind is 'read'; switching the view function calls onUpdateStep", () => {
+    const readRef: StudioReadRef = { kind: "read", contract: "token", function: "decimals" };
+    const updates: Array<{ stepId: string; update: { args: unknown[] } }> = [];
+    render(
+      <OrderedConfigPanel
+        orderedSteps={[makeRegistryStep("s1", [readRef])]}
+        deployTargets={deployTargets}
+        onAddStep={noop}
+        onRemoveStep={noop}
+        onUpdateStep={(stepId, update) => updates.push({ stepId, update: update as { args: unknown[] } })}
+        onMoveUp={noop}
+        onMoveDown={noop}
+      />
+    );
+    const contractSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-read-contract" }) as HTMLSelectElement;
+    expect(contractSelect.value).toBe("token");
+    const fnSelect = screen.getByRole("combobox", { name: "ordered-arg-s1-0-read-function" }) as HTMLSelectElement;
+    expect(fnSelect.value).toBe("decimals");
+    expect(fnSelect.innerHTML).toContain("decimals()");
+
+    fireEvent.change(fnSelect, { target: { value: "balanceOf" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0].update.args[0]).toEqual({ kind: "read", contract: "token", function: "balanceOf" });
   });
 });
 
