@@ -51,6 +51,12 @@
       "owner": ""
     },
     {
+      "name": "cli",
+      "path": "apps/cli",
+      "description": "@redeploy/cli — thin command-line entry point wrapping core (deploy/simulate), config (apply-config), verify, and reader (status/snapshot). Human-readable + --json output; env contract mirrors deploy-server; never echoes secrets.",
+      "owner": ""
+    },
+    {
       "name": "website",
       "path": "apps/website",
       "description": "@redeploy/website — public marketing site (Vite static build): sells reDeploy's benefits and showcases features with Studio screenshots. No backend.",
