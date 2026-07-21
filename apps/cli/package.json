@@ -1,0 +1,30 @@
+{
+  "name": "@redeploy/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Thin command-line entry point for reDeploy: deploy/simulate (core), apply-config (config), verify (verify), status/snapshot (reader). Wraps existing library APIs — no reimplemented business logic.",
+  "bin": {
+    "redeploy": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@redeploy/core": "workspace:*",
+    "@redeploy/config": "workspace:*",
+    "@redeploy/verify": "workspace:*",
+    "@redeploy/reader": "workspace:*",
+    "viem": "^2.54.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}

@@ -24,6 +24,37 @@ importers:
         specifier: ^8.61.0
         version: 8.61.0(eslint@9.39.4)(typescript@5.9.3)
 
+  apps/cli:
+    dependencies:
+      '@redeploy/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@redeploy/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@redeploy/reader':
+        specifier: workspace:*
+        version: link:../../packages/reader
+      '@redeploy/verify':
+        specifier: workspace:*
+        version: link:../../packages/verify
+      viem:
+        specifier: ^2.54.1
+        version: 2.54.1(typescript@5.9.3)(zod@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.7.5
+        version: 22.7.5
+      '@vitest/coverage-v8':
+        specifier: ^2.1.8
+        version: 2.1.9(vitest@2.1.9(@types/node@22.7.5)(jsdom@26.1.0))
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.7.5)(jsdom@26.1.0)
+
   apps/deploy-server:
     dependencies:
       '@redeploy/config':
