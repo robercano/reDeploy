@@ -318,3 +318,53 @@ describe("Inspector — source-verification badges", () => {
     expect(screen.queryByTestId("inspector-node-vault-verified")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Inspector — apply-config failure badges (issue #151)
+// ---------------------------------------------------------------------------
+
+describe("Inspector — apply-config failure badges", () => {
+  it("renders no apply-status badge for a step when applyConfigResults is absent", () => {
+    render(<Inspector view={view} />);
+    expect(screen.queryByTestId("config-step-setFee-apply-status")).toBeNull();
+  });
+
+  it("renders a 'failed' apply-status badge for a step with status 'failed', carrying the message as its title", () => {
+    render(
+      <Inspector
+        view={view}
+        applyConfigResults={[
+          { stepId: "setFee", kind: "setX", status: "failed", message: "revert: fee too high" },
+        ]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-apply-status");
+    expect(badge.textContent).toBe("failed");
+    expect(badge.title).toBe("revert: fee too high");
+  });
+
+  it("does not render an apply-status badge for a step whose applyConfigResults entry is 'completed' (not 'failed')", () => {
+    render(
+      <Inspector
+        view={view}
+        applyConfigResults={[{ stepId: "setFee", kind: "setX", status: "completed" }]}
+      />,
+    );
+    expect(screen.queryByTestId("config-step-setFee-apply-status")).toBeNull();
+    // The pre-existing completed/pending badge is unaffected by applyConfigResults.
+    expect(screen.getByTestId("config-step-setFee-status").textContent).toBe("completed");
+  });
+
+  it("does not render an apply-status badge for a step absent from applyConfigResults", () => {
+    render(
+      <Inspector
+        view={view}
+        applyConfigResults={[
+          { stepId: "setToken", kind: "wire", status: "failed", message: "boom" },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("config-step-setToken-apply-status")).not.toBeNull();
+    expect(screen.queryByTestId("config-step-setFee-apply-status")).toBeNull();
+  });
+});

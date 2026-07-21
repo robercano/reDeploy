@@ -326,7 +326,16 @@ describe("App — Apply config failure path", () => {
     const banner = screen.getByTestId("apply-config-error");
     expect(banner.textContent).toContain("config step failed");
     expect(banner.textContent).toContain("grant-minter");
-    // App still mounted, nothing crashed.
+
+    // App remains interactive after the failure, not just "didn't crash":
+    // the confirm modal closed (so the user isn't stuck behind it) and the
+    // apply-config button is present, re-enabled, and clickable again —
+    // proving the failure path doesn't leave the UI in a stuck state.
+    expect(screen.queryByTestId("apply-config-modal")).toBeNull();
+    const retryBtn = screen.getByTestId("deploy-apply-config-button") as HTMLButtonElement;
+    expect(retryBtn.disabled).toBe(false);
+    fireEvent.click(retryBtn);
+    expect(screen.queryByTestId("apply-config-modal")).not.toBeNull();
     expect(container.firstChild).not.toBeNull();
   });
 
@@ -345,7 +354,18 @@ describe("App — Apply config failure path", () => {
       expect(screen.queryByTestId("apply-config-error")).not.toBeNull();
     });
 
-    expect(screen.getByTestId("apply-config-error").textContent).toContain("400");
+    const banner = screen.getByTestId("apply-config-error");
+    expect(banner.textContent).toContain("400");
+    expect(banner.textContent).toContain("invalid config format");
+
+    // App remains interactive after a non-200 failure too: the confirm
+    // modal is closed and the apply-config button is present and
+    // re-enabled, so the user can retry rather than being stuck.
+    expect(screen.queryByTestId("apply-config-modal")).toBeNull();
+    const retryBtn = screen.getByTestId("deploy-apply-config-button") as HTMLButtonElement;
+    expect(retryBtn.disabled).toBe(false);
+    fireEvent.click(retryBtn);
+    expect(screen.queryByTestId("apply-config-modal")).not.toBeNull();
     expect(container.firstChild).not.toBeNull();
   });
 });
