@@ -79,6 +79,8 @@ import { fetchNetworks, FALLBACK_NETWORKS_RESULT } from "./deploy/networks-clien
 import type { NetworkSummary } from "./deploy/networks-client.js";
 import { runVerifyConfig, runVerifySource } from "./deploy/verify-client.js";
 import type { ConfigDriftResultEntry, SourceVerifyResponse } from "./deploy/verify-client.js";
+import { runApplyConfig } from "./deploy/apply-config-client.js";
+import type { ApplyConfigStepResult } from "./deploy/apply-config-client.js";
 import { buildNodeFieldErrors, validateConstructorArgs } from "./deploy/field-errors.js";
 import type { NodeFieldErrors } from "./deploy/field-errors.js";
 import type { DeploymentView, DeploymentSnapshot } from "@redeploy/reader";
@@ -576,6 +578,21 @@ export function App() {
   const [driftResults, setDriftResults] = useState<ConfigDriftResultEntry[] | null>(null);
   const [sourceVerifyResult, setSourceVerifyResult] = useState<SourceVerifyResponse | null>(null);
 
+  // "Apply config" action (issue #151): runs the current ConfigSpec's steps
+  // against a REAL chain (POST /api/apply-config), broadcasting on-chain
+  // transactions (grantRole / setX / wire calls) against the server's
+  // existing deployment for the selected network. Like Deploy (real) this is
+  // irreversible and gated behind an explicit confirm modal
+  // (apply-config-modal / apply-config-confirm / apply-config-cancel) —
+  // unlike Verify (which never mutates anything), a successful run DOES
+  // refresh `liveView` (the server re-reads the journal after applying, so
+  // the Inspector's config-step badges flip from pending to completed).
+  const [applying, setApplying] = useState(false);
+  const [showApplyConfigModal, setShowApplyConfigModal] = useState(false);
+  const [applyConfigError, setApplyConfigError] = useState<string | null>(null);
+  const [applyConfigSuccess, setApplyConfigSuccess] = useState<string | null>(null);
+  const [applyConfigSteps, setApplyConfigSteps] = useState<ApplyConfigStepResult[]>([]);
+
   // Provenance of `liveView`, tracked SEPARATELY from `viewKind` (bugfix,
   // issue #101 review). `viewKind` is the RENDER discriminator — it changes
   // to "plan" as soon as the user clicks Plan, even though `liveView` itself
@@ -786,6 +803,21 @@ export function App() {
     }));
     return graphToSpec(graphNodes, graphEdges, orderedSteps, parameters, selectedNetwork);
   }, [nodes, edges, orderedSteps, parameters, selectedNetwork]);
+
+  // Whether the current graph has any config step to apply (issue #151) —
+  // gates the "Apply config" button's enablement (it runs against the
+  // server's existing deployment for the selected network, so it needs no
+  // canvas-side deployment validation, unlike Deploy (real)).
+  const hasConfigSteps = useMemo(
+    () => config.steps.length > 0 || (config.orderedSteps?.length ?? 0) > 0,
+    [config],
+  );
+
+  // Total step count shown in the Apply-config confirm modal (issue #151).
+  const configStepCount = useMemo(
+    () => config.steps.length + (config.orderedSteps?.length ?? 0),
+    [config],
+  );
 
   // Keep ref in sync so the simulate callback is never stale-closed.
   deploymentRef.current = deployment;
@@ -1157,6 +1189,70 @@ export function App() {
     setVerifying(false);
   }, [verifying, config]);
 
+  // "Apply config" opens a confirmation modal — it never POSTs directly
+  // (mirrors onOpenDeployModal above; broadcasts real transactions).
+  const onOpenApplyConfigModal = useCallback(() => {
+    if (applying) return;
+    setShowApplyConfigModal(true);
+  }, [applying]);
+
+  const onCancelApplyConfig = useCallback(() => {
+    setShowApplyConfigModal(false);
+  }, []);
+
+  // "Apply config" (issue #151) — runs the current ConfigSpec's steps against
+  // a REAL chain via POST /api/apply-config. Modeled on handleDeploy (real,
+  // irreversible, confirm-gated) with handleVerify's config-source: the spec
+  // sent is the same `config` (ConfigSpec) already used by Verify, POSTed to
+  // a different endpoint that actually broadcasts. On success, `liveView` is
+  // refreshed from the server's post-apply DeploymentView so the Inspector's
+  // config-step badges immediately reflect completion.
+  const handleApplyConfig = useCallback(async () => {
+    if (applying) return;
+    // Close the confirm modal immediately so a second confirm can't double-fire.
+    setShowApplyConfigModal(false);
+    setApplying(true);
+    setApplyConfigError(null);
+    setApplyConfigSuccess(null);
+    setApplyConfigSteps([]);
+
+    try {
+      const result = await runApplyConfig(config, fetch, selectedNetwork ?? undefined);
+
+      setApplyConfigSteps(result.steps);
+
+      if (result.ok) {
+        if (result.view !== null) {
+          setLiveView(result.view);
+          setViewKind("deploy");
+          setLastResultKind("deploy");
+          setMode("inspector");
+        }
+        const executed = result.executedStepIds.length;
+        const skipped = result.skippedStepIds.length;
+        setApplyConfigSuccess(
+          `Config applied — ${executed} step(s) executed, ${skipped} already up to date (skipped).`,
+        );
+      } else {
+        // Surface the failing step(s)' own message(s), when present, alongside
+        // the generic banner — without breaking the rest of the UI.
+        const failedMessages = result.steps
+          .filter((s) => s.status === "failed" && s.message)
+          .map((s) => `${s.stepId}: ${s.message}`);
+        const detail = failedMessages.length > 0 ? ` (${failedMessages.join("; ")})` : "";
+        setApplyConfigError(`${result.error}${detail}`);
+      }
+    } catch (err) {
+      // Defence in depth: runApplyConfig is expected to resolve with an
+      // ok:false result rather than throw, but if anything unexpected escapes
+      // we still surface it and (via finally) clear the in-flight flag so the
+      // button can never get stuck on "Applying…".
+      setApplyConfigError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApplying(false);
+    }
+  }, [applying, config, selectedNetwork]);
+
   const deployBtnStyle: React.CSSProperties = {
     ...btnStyle,
     background: simulating ? "var(--color-primary-bg-subtle)" : "var(--color-success)",
@@ -1343,6 +1439,15 @@ export function App() {
         >
           {verifying ? "Verifying…" : "Verify"}
         </button>
+        <button
+          style={deployRealBtnStyle}
+          onClick={onOpenApplyConfigModal}
+          disabled={applying || !hasConfigSteps}
+          data-testid="deploy-apply-config-button"
+          title="Broadcast the current config steps (setX / grantRole / wire) against the persisted deployment"
+        >
+          {applying ? "Applying…" : "Apply config"}
+        </button>
         <ThemeToggle mode={themeMode} onChange={setThemeMode} />
       </div>
 
@@ -1412,6 +1517,60 @@ export function App() {
                 data-testid="deploy-real-confirm"
               >
                 Deploy for real
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Apply config confirmation modal (issue #151) — gates the irreversible
+          POST /api/apply-config broadcast, mirroring the Deploy (real) modal
+          above. */}
+      {showApplyConfigModal && (
+        <div style={deployModalOverlayStyle} data-testid="apply-config-modal">
+          <div style={deployModalStyle}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16, color: "var(--color-danger-text)" }}>
+              Confirm apply config
+            </h3>
+            <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+              This will <strong>broadcast real transactions</strong> (setX /
+              grantRole / wire calls) against the persisted deployment on the
+              configured network. It is <strong>irreversible</strong> — gas
+              will be spent. Steps already applied in a previous run are
+              skipped, not re-run.
+            </p>
+            <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
+              Steps: <strong data-testid="apply-config-step-count">{configStepCount}</strong>
+              <br />
+              Network:{" "}
+              <strong data-testid="apply-config-network">
+                {selectedNetwork ?? `Default (${defaultNetworkName})`}
+              </strong>
+              <br />
+              <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                RPC / deployer credentials for this network are resolved
+                server-side — never entered here.
+              </span>
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                style={btnStyle}
+                onClick={onCancelApplyConfig}
+                data-testid="apply-config-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...btnStyle,
+                  background: "var(--color-danger)",
+                  color: "var(--color-text-on-accent)",
+                  border: "1px solid var(--color-danger-border)",
+                }}
+                onClick={() => { void handleApplyConfig(); }}
+                data-testid="apply-config-confirm"
+              >
+                Apply for real
               </button>
             </div>
           </div>
@@ -1496,6 +1655,22 @@ export function App() {
         </div>
       )}
 
+      {/* Apply-config error banner (issue #151) — includes the failing
+          step(s)' own message(s) when present (see handleApplyConfig). */}
+      {applyConfigError !== null && (
+        <div style={errorBannerStyle} data-testid="apply-config-error">
+          {applyConfigError}
+        </div>
+      )}
+
+      {/* Apply-config success banner (issue #151) — summarizes executed vs
+          skipped step counts. */}
+      {applyConfigSuccess !== null && (
+        <div style={successBannerStyle} data-testid="apply-config-success">
+          {applyConfigSuccess}
+        </div>
+      )}
+
       {mode === "authoring" && (
         <ReactFlowProvider>
           <AuthoringCanvas
@@ -1575,6 +1750,7 @@ export function App() {
             themeMode={themeMode}
             driftResults={driftResults ?? undefined}
             sourceVerifyResults={sourceVerifyResult?.results}
+            applyConfigResults={applyConfigSteps.length > 0 ? applyConfigSteps : undefined}
           />
         )}
 

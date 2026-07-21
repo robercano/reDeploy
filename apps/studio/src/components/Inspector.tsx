@@ -30,6 +30,7 @@ import { InspectorContractNode } from "./InspectorContractNode.js";
 import { deploymentViewToFlow } from "../inspector/view-to-flow.js";
 import type { ThemeMode } from "../theme/useTheme.js";
 import type { ConfigDriftResultEntry, SourceVerifyResultEntry } from "../deploy/verify-client.js";
+import type { ApplyConfigStepResult } from "../deploy/apply-config-client.js";
 
 // Register the custom node type once (stable reference required by React Flow).
 const INSPECTOR_NODE_TYPES: NodeTypes = {
@@ -106,6 +107,12 @@ const pendingBadgeStyle: React.CSSProperties = {
   color: "var(--color-warning-text)",
 };
 
+const failedBadgeStyle: React.CSSProperties = {
+  ...badgeBaseStyle,
+  background: "var(--color-danger-bg)",
+  color: "var(--color-danger-text)",
+};
+
 const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
   match: {
     ...badgeBaseStyle,
@@ -133,7 +140,15 @@ const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function ConfigStepCard({ step, drift }: { step: ConfigStepStatus; drift?: ConfigDriftResultEntry }) {
+function ConfigStepCard({
+  step,
+  drift,
+  applyResult,
+}: {
+  step: ConfigStepStatus;
+  drift?: ConfigDriftResultEntry;
+  applyResult?: ApplyConfigStepResult;
+}) {
   const badge = step.completed ? (
     <span
       style={completedBadgeStyle}
@@ -172,6 +187,20 @@ function ConfigStepCard({ step, drift }: { step: ConfigStepStatus; drift?: Confi
               title={drift.message}
             >
               {drift.status}
+            </span>
+          )}
+          {/* Apply-config failure badge (issue #151) — only rendered when the
+              LAST /api/apply-config run reported this step as failed; a
+              completed/skipped step is already reflected by the `badge`
+              above (view.configSteps is re-read from the journal after a
+              successful apply). */}
+          {applyResult !== undefined && applyResult.status === "failed" && (
+            <span
+              style={failedBadgeStyle}
+              data-testid={`config-step-${step.id}-apply-status`}
+              title={applyResult.message}
+            >
+              failed
             </span>
           )}
         </span>
@@ -221,6 +250,15 @@ export interface InspectorProps {
    * rendered for that node.
    */
   sourceVerifyResults?: SourceVerifyResultEntry[];
+  /**
+   * Per-step results from the last `/api/apply-config` run (issue #151),
+   * matched onto ConfigStepCards by step id. Omitted / no result for a given
+   * step id => no apply-failure badge rendered for that step. A completed
+   * step is already reflected by `view.configSteps` (re-read from the
+   * journal after a successful apply) — this prop only ever ADDS a distinct
+   * "failed" badge, it never overrides the completed/pending badge.
+   */
+  applyConfigResults?: ApplyConfigStepResult[];
 }
 
 export function Inspector({
@@ -229,6 +267,7 @@ export function Inspector({
   themeMode = "system",
   driftResults,
   sourceVerifyResults,
+  applyConfigResults,
 }: InspectorProps) {
   const { nodes, edges } = useMemo(
     () => deploymentViewToFlow(view, sourceVerifyResults),
@@ -238,6 +277,14 @@ export function Inspector({
   const driftById = useMemo(
     () => new Map<string, ConfigDriftResultEntry>((driftResults ?? []).map((r) => [r.id, r])),
     [driftResults],
+  );
+
+  const applyResultById = useMemo(
+    () =>
+      new Map<string, ApplyConfigStepResult>(
+        (applyConfigResults ?? []).map((r) => [r.stepId, r]),
+      ),
+    [applyConfigResults],
   );
 
   return (
@@ -272,7 +319,12 @@ export function Inspector({
           <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No config steps.</p>
         ) : (
           view.configSteps.map((step) => (
-            <ConfigStepCard key={step.id} step={step} drift={driftById.get(step.id)} />
+            <ConfigStepCard
+              key={step.id}
+              step={step}
+              drift={driftById.get(step.id)}
+              applyResult={applyResultById.get(step.id)}
+            />
           ))
         )}
         {view.warnings.length > 0 && (

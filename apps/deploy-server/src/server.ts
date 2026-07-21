@@ -10,7 +10,8 @@ import type { PlannedStep, SimulateError, DeploymentSpec } from "@redeploy/core"
 import { DeployError } from "@redeploy/core";
 import { readDeployment, ReadError, buildSnapshot, snapshotRelativePath } from "@redeploy/reader";
 import type { DeploymentView } from "@redeploy/reader";
-import type { ConfigSpec } from "@redeploy/config";
+import { applyConfig, ConfigExecError } from "@redeploy/config";
+import type { ConfigSpec, ConfigCall, ConfigExecutor } from "@redeploy/config";
 import { normalizePrivateKey, readEtherscanConfig } from "./env.js";
 import { runConfigDrift, validateConfigSpecShape } from "./verify/run-config-drift.js";
 import type { ConfigDriftResponse } from "./verify/run-config-drift.js";
@@ -19,6 +20,7 @@ import type { SourceVerifyResponse } from "./verify/run-source-verify.js";
 import { createRpcChainReader } from "./verify/chain-reader.js";
 import { loadNetworksRegistry, resolveNetwork, listNetworks, DEFAULT_MODULE_ID } from "./networks.js";
 import type { NetworkConfig } from "./networks.js";
+import { buildAddressBook, buildChainConfigExecutor } from "./apply-config/chain-executor.js";
 
 /** Maximum body size for POST requests (1 MiB). */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -623,6 +625,237 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   res.end();
 }
 
+/**
+ * Handle `POST /api/apply-config`.
+ *
+ * Reads the JSON body (capped at MAX_BODY_BYTES) as a bare `ConfigSpec` (no
+ * envelope — same style as `/api/deploy`), then executes it via
+ * `@redeploy/config`'s `applyConfig()` against a REAL chain, using a
+ * `ConfigExecutor` built from `./apply-config/chain-executor.js` (adapted
+ * from `apps/cli/src/chain.ts`; see that module's doc comment). Streams
+ * per-step progress and the final result as SSE.
+ *
+ * SSE event sequence:
+ *   1. `step` { stepId, kind, status: "executing" } — before each non-skipped
+ *      step's on-chain call is attempted.
+ *   2. `step` { stepId, kind, status: "completed" } — once that step's call
+ *      resolves without throwing.
+ *      OR
+ *      `step` { stepId, kind, status: "failed", message: "config step failed" }
+ *      — if that step's call throws (a generic message only — see SECURITY
+ *      below).
+ *   3. `done` { success: true, executedStepIds, skippedStepIds,
+ *      completedStepIds, deployment: DeploymentView | null, warning? } — on
+ *      success (steps already journaled from a previous run are skipped, not
+ *      re-executed — see idempotency note below).
+ *      OR
+ *      `done` { success: false, errors: [{code?, message}, ...] } — on
+ *      failure (spec validation, ref resolution, journal error, or an
+ *      on-chain execution failure).
+ *
+ * Network selection: accepts the OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest`), resolved BEFORE the SSE stream opens so an
+ * unknown network name yields a clean 400 (not a 500, not an SSE frame) —
+ * mirroring `handleDeploy`. rpcUrl / deployerPrivateKey / deploymentDir all
+ * come from the resolved network's config (server-side registry only — see
+ * networks.ts), never from client input.
+ *
+ * Idempotency / resumability: `stateDir` is set to the SAME
+ * `deploymentDir` the network's deployment journal lives in, so
+ * `applyConfig()`'s own `config-state.jsonl` journal makes a re-run of an
+ * already-completed spec a no-op — every step comes back in
+ * `skippedStepIds`, none in `executedStepIds`, and `success` is still `true`.
+ *
+ * Error handling around `applyConfig()`:
+ *   - `ConfigExecError` — mapped exactly like `handleDeploy` maps
+ *     `DeployError`: when `code === "INVALID_SPEC"` and `specErrors` is
+ *     non-empty, one `{code, message}` per spec error; otherwise a single
+ *     `{code, message}` from the `ConfigExecError` itself.
+ *   - Any other thrown value (a step's on-chain execution failure, or an
+ *     unexpected error) — a single generic `{message: "config step failed"}`,
+ *     the raw error is NEVER forwarded to the client.
+ *
+ * SECURITY: rpcUrl and the deployer private key are NEVER interpolated into
+ * any SSE frame or stderr log line — mirrors `handleDeploy`'s discipline
+ * exactly (see its doc comment). A step's thrown error (which may embed
+ * rpcUrl, e.g. a viem transport error) is likewise never forwarded — every
+ * `step` "failed" frame and every generic `done{success:false}` error uses a
+ * fixed, non-leaking message.
+ *
+ * Error responses (non-SSE):
+ *   - 413  body exceeds MAX_BODY_BYTES
+ *   - 400  malformed JSON, or an unknown `?network=` name
+ *   - 500  network configuration could not be loaded
+ */
+async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // --- Read / parse body (identical to /api/simulate and /api/deploy) ------
+  const bodyResult = await readAndParseBody(req, res);
+  if (!bodyResult.ok) return;
+  const body = bodyResult.parsed;
+
+  // --- Resolve + validate the target network BEFORE opening the SSE stream -
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
+
+  // --- Open SSE stream first so all outcomes flow through it ---------------
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  // --- Validate private key presence BEFORE building the provider ----------
+  // SECURITY: never include the key value in any message or log.
+  const rawPrivateKey = network.config.deployerPrivateKey;
+  if (!rawPrivateKey || rawPrivateKey.trim() === "") {
+    writeSseEvent(res, "done", {
+      success: false,
+      errors: [{ message: "deployer private key is not configured" }],
+    });
+    res.end();
+    return;
+  }
+
+  // Accept the key with or without a "0x" prefix, mirroring handleDeploy.
+  const privateKey = normalizePrivateKey(rawPrivateKey);
+
+  // --- Build network-driven inputs -----------------------------------------
+  // SECURITY: rpcUrl and privateKey are NEVER interpolated into any log or
+  // response message — only passed to jsonRpcProvider(), which is
+  // responsible for not leaking them.
+  const rpcUrl = network.config.rpcUrl;
+  const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
+  const deploymentDir = network.config.deploymentDir;
+
+  // Wrap provider/artifact-resolver construction in a try/catch — a
+  // malformed deployer private key causes privateKeyToAccount (inside
+  // jsonRpcProvider) to throw synchronously. We must catch it here — AFTER
+  // the SSE stream is already open — and emit a terminal done frame so the
+  // client always receives a well-formed response.
+  // SECURITY: the caught error is NOT forwarded — it may embed key material.
+  let provider: ReturnType<typeof core.jsonRpcProvider>;
+  let artifactResolver: ReturnType<typeof core.foundryArtifactResolver>;
+  try {
+    provider = core.jsonRpcProvider({ rpcUrl, privateKey });
+    artifactResolver = core.foundryArtifactResolver(outDir);
+  } catch {
+    writeSseEvent(res, "done", {
+      success: false,
+      errors: [{ message: "Invalid deployer configuration" }],
+    });
+    res.end();
+    return;
+  }
+
+  // --- Read the existing deployment (required: config resolves refs against
+  // its deployed addresses) --------------------------------------------------
+  let deployment: DeploymentView;
+  try {
+    deployment = readDeployment({ deploymentDir });
+  } catch {
+    // Covers ReadError("DEPLOYMENT_DIR_NOT_FOUND") (no deployment exists yet)
+    // and any other read failure — config cannot proceed without a
+    // deployment to resolve refs against.
+    writeSseEvent(res, "done", {
+      success: false,
+      errors: [{ message: "no deployment found for the selected network" }],
+    });
+    res.end();
+    return;
+  }
+
+  const deployedAddresses: Record<string, string> = {};
+  for (const c of deployment.contracts) {
+    if (c.address !== null) {
+      deployedAddresses[c.id] = c.address;
+    }
+  }
+  const addressBook = buildAddressBook(deployment.contracts);
+
+  // --- Build the real chain executor, wrapped to emit per-step SSE frames --
+  const chainExecutor = buildChainConfigExecutor({ provider, artifactResolver, addressBook });
+
+  const wrappedExecutor: ConfigExecutor = {
+    async execute(call: ConfigCall): Promise<void> {
+      writeSseEvent(res, "step", { stepId: call.stepId, kind: call.kind, status: "executing" });
+      try {
+        await chainExecutor.execute(call);
+      } catch {
+        // SECURITY: never forward the raw error — it may embed rpcUrl/key
+        // material (e.g. a viem transport error).
+        writeSseEvent(res, "step", {
+          stepId: call.stepId,
+          kind: call.kind,
+          status: "failed",
+          message: "config step failed",
+        });
+        throw new Error("config step failed");
+      }
+      writeSseEvent(res, "step", { stepId: call.stepId, kind: call.kind, status: "completed" });
+    },
+  };
+
+  // --- Run applyConfig ------------------------------------------------------
+  let result: Awaited<ReturnType<typeof applyConfig>>;
+  try {
+    result = await applyConfig({
+      spec: body,
+      deployedAddresses,
+      executor: wrappedExecutor,
+      stateDir: deploymentDir,
+    });
+  } catch (caughtErr) {
+    if (caughtErr instanceof ConfigExecError) {
+      const execErr = caughtErr;
+      const errors: Array<{ code?: string; message: string }> =
+        execErr.code === "INVALID_SPEC" && execErr.specErrors != null && execErr.specErrors.length > 0
+          ? execErr.specErrors.map((se) => ({ code: execErr.code, message: se.message }))
+          : [{ code: execErr.code, message: execErr.message }];
+      writeSseEvent(res, "done", { success: false, errors });
+      res.end();
+      return;
+    }
+    // A step's on-chain execution failure (rethrown, generic, by
+    // wrappedExecutor above) or any other unexpected error.
+    // SECURITY: never forward the raw error to the client or to stderr.
+    writeSseEvent(res, "done", {
+      success: false,
+      errors: [{ message: "config step failed" }],
+    });
+    res.end();
+    process.stderr.write("[deploy-server] unexpected apply-config error\n");
+    return;
+  }
+
+  // --- Success: best-effort re-read of the deployment view for updated -----
+  // config-step status. A read failure must not turn a successful apply into
+  // a hard failure — mirrors handleDeploy's readDeployment-after-success
+  // pattern.
+  let freshDeployment: DeploymentView | null = null;
+  let warning: string | undefined;
+  try {
+    freshDeployment = readDeployment({ deploymentDir });
+  } catch (readErr) {
+    if (readErr instanceof ReadError) {
+      warning = "could not read journal";
+    } else {
+      warning = "could not read journal";
+      const errMsg = readErr instanceof Error ? readErr.message : String(readErr);
+      process.stderr.write(`[deploy-server] unexpected readDeployment error after apply-config: ${errMsg}\n`);
+    }
+  }
+
+  writeSseEvent(res, "done", {
+    success: true,
+    executedStepIds: result.executedStepIds,
+    skippedStepIds: result.skippedStepIds,
+    completedStepIds: result.completedStepIds,
+    deployment: freshDeployment,
+    ...(warning !== undefined ? { warning } : {}),
+  });
+  res.end();
+}
+
 /** Empty DeploymentView returned for a fresh / never-deployed deploymentDir. */
 const EMPTY_DEPLOYMENT_VIEW: DeploymentView = { contracts: [], configSteps: [], warnings: [] };
 
@@ -900,15 +1133,17 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  *   GET  /api/deployment      → 200 { contracts, configSteps, warnings } (or 500)
  *   POST /api/simulate        → 200 SSE stream (planned steps or errors)
  *   POST /api/deploy          → 200 SSE stream (deploy progress + result)
+ *   POST /api/apply-config    → 200 SSE stream (per-step progress + result)
  *   POST /api/verify/config   → 200 JSON { clean, results } (config-drift check)
  *   POST /api/verify/source   → 200 JSON { success, skipped, reason?, results } (Etherscan source verification)
  *
- * `GET /api/deployment`, `POST /api/simulate`, and `POST /api/deploy` all
- * accept an OPTIONAL `?network=<name>` query param (see
- * `resolveNetworkForRequest` / networks.ts) — hence routing matches on
- * `pathname` (query-string-stripped), not the raw `url`, for these three.
- * `GET /api/networks` takes no query params but is likewise matched on
- * `pathname` for consistency (harmless if a client appends one anyway).
+ * `GET /api/deployment`, `POST /api/simulate`, `POST /api/deploy`, and
+ * `POST /api/apply-config` all accept an OPTIONAL `?network=<name>` query
+ * param (see `resolveNetworkForRequest` / networks.ts) — hence routing
+ * matches on `pathname` (query-string-stripped), not the raw `url`, for
+ * these four. `GET /api/networks` takes no query params but is likewise
+ * matched on `pathname` for consistency (harmless if a client appends one
+ * anyway).
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
@@ -982,6 +1217,30 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       // Generic log line only — never the error value which may embed the URL/key.
       process.stderr.write("[deploy-server] unhandled deploy error\n");
+    });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/apply-config") {
+    // handleApplyConfig is async; fire-and-forget — errors are handled internally.
+    handleApplyConfig(req, res).catch(() => {
+      // Unexpected error escaping handleApplyConfig (should not happen in
+      // normal operation — all paths inside handleApplyConfig have their own
+      // catch).
+      // SECURITY: do NOT log or forward the error — it may embed RPC_URL or
+      // other sensitive values from the environment.
+      if (!res.headersSent) {
+        const body = JSON.stringify({ error: "Internal Server Error" });
+        res.writeHead(500, {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        });
+        res.end(body);
+      } else {
+        res.end();
+      }
+      // Generic log line only — never the error value which may embed the URL/key.
+      process.stderr.write("[deploy-server] unhandled apply-config error\n");
     });
     return;
   }
