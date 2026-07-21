@@ -37,3 +37,13 @@ export type {
   BuildSnapshotOptions,
   SnapshotVersion,
 } from "./snapshot/snapshot.js";
+
+// Public address book API
+export { exportAddressBook } from "./address-book/address-book.js";
+
+export type {
+  ExportAddressBookOptions,
+  AddressBookArtifact,
+  AddressBookEntry,
+  AddressBookData,
+} from "./address-book/address-book.js";
