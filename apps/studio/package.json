@@ -1,6 +1,7 @@
 {
   "name": "@redeploy/studio",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Visual tool: drag-and-drop authoring of contract connections and configuration (emits spec files) plus a deployment inspector. React + React Flow.",

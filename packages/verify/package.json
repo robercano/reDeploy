@@ -1,6 +1,7 @@
 {
   "name": "@redeploy/verify",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Verification: source/bytecode verification (Etherscan/Sourcify) and on-chain assertion that live configuration matches the declared spec.",
