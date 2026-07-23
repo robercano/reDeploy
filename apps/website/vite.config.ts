@@ -8,6 +8,10 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
 
+  // Relative asset paths so the static build works unmodified when served
+  // from a custom domain root on GitHub Pages (see public/CNAME).
+  base: "./",
+
   server: { port: 5180, strictPort: true },
   preview: { port: 5180, strictPort: true },
 

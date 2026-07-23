@@ -1,17 +1,25 @@
 import Hero from "./components/Hero.js";
-import Benefits from "./components/Benefits.js";
-import Features from "./components/Features.js";
 import Footer from "./components/Footer.js";
+import Packages from "./components/Packages.js";
+import Pipeline from "./components/Pipeline.js";
+import SpecGraphSection from "./components/SpecGraphSection.js";
+import Studio from "./components/Studio.js";
+import Topbar from "./components/Topbar.js";
 
 export default function App() {
   return (
     <div className="page">
-      <main>
-        <Hero />
-        <Benefits />
-        <Features />
-      </main>
-      <Footer />
+      <Topbar />
+      <div className="wrap">
+        <main>
+          <Hero />
+          <SpecGraphSection />
+          <Pipeline />
+          <Studio />
+          <Packages />
+        </main>
+        <Footer />
+      </div>
     </div>
   );
 }
