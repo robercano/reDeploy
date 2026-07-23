@@ -1,6 +1,7 @@
 {
   "name": "@redeploy/core",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Deployment engine on top of Hardhat Ignition: declarative deployment spec, dependency resolution and ordering, idempotent journal-based resume.",

@@ -1,6 +1,7 @@
 {
   "name": "redeploy",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Hardhat Ignition-based deployment system: declarative deploy/config, idempotent resume, verification, reader library, and a visual authoring/inspection studio.",
   "type": "module",
@@ -23,6 +24,8 @@
     "solhint": "^5.2.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

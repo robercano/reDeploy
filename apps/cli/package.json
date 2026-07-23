@@ -1,9 +1,10 @@
 {
   "name": "@redeploy/cli",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "Thin command-line entry point for reDeploy: deploy/simulate (core), apply-config (config), verify (verify), status/snapshot (reader). Wraps existing library APIs — no reimplemented business logic.",
+  "description": "Thin command-line entry point for reDeploy: deploy/simulate (core), apply-config (config), verify (verify), status/snapshot (reader). Wraps existing library APIs \u2014 no reimplemented business logic.",
   "bin": {
     "redeploy": "dist/index.js"
   },

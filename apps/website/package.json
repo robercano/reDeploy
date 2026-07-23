@@ -1,6 +1,7 @@
 {
   "name": "@redeploy/website",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Public marketing site for reDeploy: sells its benefits and showcases Studio features. Static Vite build, no backend.",

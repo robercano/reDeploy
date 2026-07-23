@@ -1,6 +1,7 @@
 {
   "name": "@redeploy/config",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Post-deployment configuration: declarative config steps, resumable partial configuration, config-state idempotency.",
