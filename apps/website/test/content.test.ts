@@ -13,6 +13,7 @@ import {
   SPLIT_CAPTION,
   STUDIO_SECTION,
   STUDIO_URL,
+  TOPBAR,
   type RichSegment,
 } from "../src/content.js";
 
@@ -83,6 +84,12 @@ describe("content", () => {
     for (const pkg of PACKAGES) {
       expect(pkg.description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("has a short, non-empty topbar glyph and tagline for the shared header's product row", () => {
+    expect(TOPBAR.glyph).toBe("^^");
+    expect(TOPBAR.tagline.length).toBeGreaterThan(0);
+    expect(TOPBAR.tagline.length).toBeLessThan(80);
   });
 
   it("has a footer prompt line and a three-entry family strip with exactly one current item", () => {

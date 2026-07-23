@@ -133,9 +133,8 @@ body {
   font-size: 12px;
 }
 
-.topbar .mark {
-  width: 30px;
-  height: 30px;
+.topbar .chev {
+  font-weight: 700;
 }
 
 .topbar b {
@@ -146,6 +145,10 @@ body {
 .topbar b .re {
   color: var(--dim);
   font-weight: 500;
+}
+
+.topbar .tagline {
+  color: var(--dim);
 }
 
 .topbar nav {

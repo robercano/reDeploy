@@ -29,6 +29,13 @@ export const NAV_LINKS: NavLink[] = [
   { label: "github", href: REPO_URL },
 ];
 
+// Product row (brand book §08): glyph + bold product name + short context, ahead of the
+// site's own nav anchors. Kept short — this is a strip, not the hero subhead.
+export const TOPBAR = {
+  glyph: "^^",
+  tagline: "declarative, idempotent, verifiable deploys",
+};
+
 export const HERO = {
   headline: [{ text: "One spec. One graph. " }, { text: "One truth.", as: "hl" }] as RichSegment[],
   subhead: [
