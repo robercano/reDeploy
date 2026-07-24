@@ -195,8 +195,8 @@ export const FOOTER = {
   promptUser: "roberto@thesolidchain:~$",
   promptRest: "a product of The Solid Chain",
   family: [
-    { label: "reCode </>", href: "#" },
-    { label: "reDeploy ^^", current: true },
-    { label: "reDeFi <=>", href: "#" },
+    { label: "reCode </>", href: "https://recode.thesolidchain.com" },
+    { label: "reDeploy ^^", current: true, href: "https://redeploy.thesolidchain.com" },
+    { label: "reDeFi <=>", href: "https://redefi.thesolidchain.com" },
   ] as FamilyLink[],
 };

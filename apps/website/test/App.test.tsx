@@ -70,8 +70,14 @@ describe("App", () => {
 
     expect(screen.getByText("roberto@thesolidchain:~$")).toBeInTheDocument();
     expect(screen.getByText("reDeploy ^^")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "reCode </>" })).toHaveAttribute("href", "#");
-    expect(screen.getByRole("link", { name: "reDeFi <=>" })).toHaveAttribute("href", "#");
+    expect(screen.getByRole("link", { name: "reCode </>" })).toHaveAttribute(
+      "href",
+      "https://recode.thesolidchain.com",
+    );
+    expect(screen.getByRole("link", { name: "reDeFi <=>" })).toHaveAttribute(
+      "href",
+      "https://redefi.thesolidchain.com",
+    );
   });
 
   it("links to the real GitHub repo from the topbar", () => {
