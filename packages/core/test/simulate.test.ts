@@ -598,3 +598,105 @@ describe("simulate — ResolverArg pass-through", () => {
     expect(vault.dependsOn).toEqual(["registry"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Upgradeable proxies — PlannedStep.upgradeable marker (issue #155)
+// ---------------------------------------------------------------------------
+
+describe("simulate — upgradeable marker", () => {
+  it("does NOT include an `upgradeable` key for a non-upgradeable entry (byte-for-byte compatible)", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [{ id: "token", contract: "Token" }],
+    });
+    const steps = assertOk(result);
+    expect(steps[0]).not.toHaveProperty("upgradeable");
+  });
+
+  it("surfaces kind:\"uups\" and hasInitializer:false when no initializer is declared", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", upgradeable: { kind: "uups" } }],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.upgradeable).toEqual({ kind: "uups", hasInitializer: false });
+  });
+
+  it("surfaces hasInitializer:true when an initializer is declared", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: { kind: "uups", initializer: { function: "initialize" } },
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.upgradeable).toEqual({ kind: "uups", hasInitializer: true });
+  });
+
+  it("surfaces kind:\"transparent\" for a transparent entry", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "literal", value: "0x0000000000000000000000000000000000000002" },
+          },
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.upgradeable).toEqual({ kind: "transparent", hasInitializer: false });
+  });
+
+  it("includes refs from initializer.args and proxyAdminOwner in dependsOn", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        { id: "admin", contract: "Admin" },
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "ref", contract: "admin" },
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+          },
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.dependsOn).toEqual(["registry", "admin"]);
+  });
+
+  it("places dependencies contributed only via initializer/proxyAdminOwner refs before the dependent step", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+          },
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    });
+    const steps = assertOk(result);
+    const ids = steps.map((s) => s.id);
+    expect(ids.indexOf("registry")).toBeLessThan(ids.indexOf("vault"));
+  });
+});

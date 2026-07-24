@@ -8,8 +8,8 @@
  * All errors are COLLECTED and returned together (never fail-fast).
  */
 
-import type { DeploymentSpec } from "./types.js";
-import { deploymentSpecSchema } from "./schema.js";
+import type { ContractArg, ContractEntry, DeploymentSpec } from "./types.js";
+import { deploymentSpecSchema, VALID_CONTRACT_NAME_RE } from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // SpecError — structured validation error
@@ -22,7 +22,13 @@ export type SpecErrorCode =
   | "MISSING_REF"
   | "SELF_REFERENCE"
   | "CYCLE"
-  | "UNKNOWN_PARAM";
+  | "UNKNOWN_PARAM"
+  /** `upgradeable.initializer.function` is not a valid Solidity identifier. */
+  | "INVALID_IDENTIFIER"
+  /** `upgradeable.kind === "transparent"` but `proxyAdminOwner` is absent. */
+  | "MISSING_PROXY_ADMIN_OWNER"
+  /** `upgradeable.kind === "uups"` but `proxyAdminOwner` was set anyway. */
+  | "UNUSED_PROXY_ADMIN_OWNER";
 
 /**
  * A single structured validation error.
@@ -65,6 +71,55 @@ function zodPathToString(path: (string | number)[]): string {
 // Cross-field validation
 // ---------------------------------------------------------------------------
 
+/**
+ * Check a single `ContractArg` for a "ref" self-reference / missing target,
+ * or a "param" reference to an undeclared parameter. Shared by constructor
+ * `args`, `upgradeable.initializer.args`, and `upgradeable.proxyAdminOwner`
+ * so all three are held to EXACTLY the same ref/param rules.
+ *
+ * @param argBasePath  Path to the arg itself (WITHOUT a trailing `.contract`/
+ *   `.name` — that suffix is appended here per error kind), e.g.
+ *   `contracts[2].args[0]` or `contracts[2].upgradeable.proxyAdminOwner`.
+ * @param locationDescription  Human-readable phrase describing where the arg
+ *   lives, used in the error message, e.g. `args[0]` or
+ *   `upgradeable.proxyAdminOwner`.
+ */
+function checkArgRefAndParam(
+  arg: ContractArg,
+  argBasePath: string,
+  locationDescription: string,
+  entry: ContractEntry,
+  allIds: ReadonlySet<string>,
+  declaredParams: ReadonlySet<string>,
+  errors: SpecError[],
+): void {
+  if (arg.kind === "ref") {
+    const argPath = `${argBasePath}.contract`;
+    if (arg.contract === entry.id) {
+      errors.push({
+        path: argPath,
+        code: "SELF_REFERENCE",
+        message: `Contract "${entry.id}" references itself in ${locationDescription}`,
+      });
+    } else if (!allIds.has(arg.contract)) {
+      // Missing ref — Set.has() is pollution-safe; no extra own-key guard needed.
+      errors.push({
+        path: argPath,
+        code: "MISSING_REF",
+        message: `Contract "${entry.id}" ${locationDescription} references unknown id "${arg.contract}"`,
+      });
+    }
+  } else if (arg.kind === "param" && !declaredParams.has(arg.name)) {
+    // Unknown parameter — Set.has() is pollution-safe.
+    const argPath = `${argBasePath}.name`;
+    errors.push({
+      path: argPath,
+      code: "UNKNOWN_PARAM",
+      message: `Contract "${entry.id}" ${locationDescription} references undeclared parameter "${arg.name}" — add it to DeploymentSpec.parameters`,
+    });
+  }
+}
+
 function collectCrossFieldErrors(spec: DeploymentSpec): SpecError[] {
   const errors: SpecError[] = [];
 
@@ -105,32 +160,77 @@ function collectCrossFieldErrors(spec: DeploymentSpec): SpecError[] {
     // Check args refs
     if (entry.args) {
       for (let j = 0; j < entry.args.length; j++) {
-        const arg = entry.args[j];
-        if (arg.kind === "ref") {
-          const argPath = `${basePath}.args[${j}].contract`;
-          // Self-reference
-          if (arg.contract === entry.id) {
-            errors.push({
-              path: argPath,
-              code: "SELF_REFERENCE",
-              message: `Contract "${entry.id}" references itself in args`,
-            });
-          } else if (!allIds.has(arg.contract)) {
-            // Missing ref — Set.has() is pollution-safe; no extra own-key guard needed.
-            errors.push({
-              path: argPath,
-              code: "MISSING_REF",
-              message: `Contract "${entry.id}" args[${j}] references unknown id "${arg.contract}"`,
-            });
-          }
-        } else if (arg.kind === "param" && !declaredParams.has(arg.name)) {
-          // Unknown parameter — Set.has() is pollution-safe.
-          const argPath = `${basePath}.args[${j}].name`;
+        checkArgRefAndParam(
+          entry.args[j],
+          `${basePath}.args[${j}]`,
+          `args[${j}]`,
+          entry,
+          allIds,
+          declaredParams,
+          errors,
+        );
+      }
+    }
+
+    // Check upgradeable proxy configuration ----------------------------------
+    if (entry.upgradeable) {
+      const upgradeable = entry.upgradeable;
+      const upgradeablePath = `${basePath}.upgradeable`;
+
+      // proxyAdminOwner is REQUIRED for transparent proxies (never defaulted —
+      // see UpgradeableConfig's docs for the access-control rationale) and
+      // must be ABSENT for uups proxies (flagged rather than silently
+      // ignored, since setting it signals likely author confusion about
+      // which proxy pattern is in use).
+      if (upgradeable.kind === "transparent" && upgradeable.proxyAdminOwner === undefined) {
+        errors.push({
+          path: `${upgradeablePath}.proxyAdminOwner`,
+          code: "MISSING_PROXY_ADMIN_OWNER",
+          message: `Contract "${entry.id}" declares a transparent proxy but has no proxyAdminOwner — the initial ProxyAdmin owner must be explicit (no default is applied for access-control safety)`,
+        });
+      } else if (upgradeable.kind === "uups" && upgradeable.proxyAdminOwner !== undefined) {
+        errors.push({
+          path: `${upgradeablePath}.proxyAdminOwner`,
+          code: "UNUSED_PROXY_ADMIN_OWNER",
+          message: `Contract "${entry.id}" declares a uups proxy but also sets proxyAdminOwner, which only applies to transparent proxies — remove it or change kind to "transparent"`,
+        });
+      }
+
+      if (upgradeable.proxyAdminOwner !== undefined) {
+        checkArgRefAndParam(
+          upgradeable.proxyAdminOwner,
+          `${upgradeablePath}.proxyAdminOwner`,
+          "upgradeable.proxyAdminOwner",
+          entry,
+          allIds,
+          declaredParams,
+          errors,
+        );
+      }
+
+      if (upgradeable.initializer !== undefined) {
+        // initializer.function flows directly into on-chain calldata
+        // (compile.ts's m.encodeFunctionCall) — must be a plain Solidity
+        // identifier, never validated by string interpolation.
+        if (!VALID_CONTRACT_NAME_RE.test(upgradeable.initializer.function)) {
           errors.push({
-            path: argPath,
-            code: "UNKNOWN_PARAM",
-            message: `Contract "${entry.id}" args[${j}] references undeclared parameter "${arg.name}" — add it to DeploymentSpec.parameters`,
+            path: `${upgradeablePath}.initializer.function`,
+            code: "INVALID_IDENTIFIER",
+            message: `Contract "${entry.id}" upgradeable.initializer.function "${upgradeable.initializer.function}" is not a valid Solidity identifier`,
           });
+        }
+
+        const initArgs = upgradeable.initializer.args ?? [];
+        for (let j = 0; j < initArgs.length; j++) {
+          checkArgRefAndParam(
+            initArgs[j],
+            `${upgradeablePath}.initializer.args[${j}]`,
+            `upgradeable.initializer.args[${j}]`,
+            entry,
+            allIds,
+            declaredParams,
+            errors,
+          );
         }
       }
     }
@@ -219,14 +319,21 @@ function detectCycles(spec: DeploymentSpec): SpecError[] {
     // Collect all unique dependency ids for this entry
     const deps = new Set<string>();
 
-    if (entry.args) {
-      for (const arg of entry.args) {
-        if (arg.kind === "ref") {
-          const toId = arg.contract;
-          // Skip unknown ids and self-refs
-          if (!allIds.has(toId) || toId === fromId) continue;
-          deps.add(toId);
-        }
+    // Ref args participate in ordering/cycle checks — from constructor
+    // `args` AND (identically) from `upgradeable.initializer.args` /
+    // `upgradeable.proxyAdminOwner`, since both flow into real Ignition
+    // future dependencies once compiled (see compile.ts's buildCreationOrder).
+    const refSources: ContractArg[] = [
+      ...(entry.args ?? []),
+      ...(entry.upgradeable?.initializer?.args ?? []),
+      ...(entry.upgradeable?.proxyAdminOwner !== undefined ? [entry.upgradeable.proxyAdminOwner] : []),
+    ];
+    for (const arg of refSources) {
+      if (arg.kind === "ref") {
+        const toId = arg.contract;
+        // Skip unknown ids and self-refs
+        if (!allIds.has(toId) || toId === fromId) continue;
+        deps.add(toId);
       }
     }
 

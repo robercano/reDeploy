@@ -98,12 +98,32 @@ export interface PlannedStep {
   readonly after?: string[];
   /**
    * Combined set of dependency ids for this step: the union of all ref-arg
-   * targets and all after-constraint ids. This mirrors the set of ids that
-   * Ignition would receive as dependency edges when building the module.
+   * targets (from `args`, `upgradeable.initializer.args`, and
+   * `upgradeable.proxyAdminOwner`) and all after-constraint ids. This mirrors
+   * the set of ids that Ignition would receive as dependency edges when
+   * building the module.
    *
-   * Listed in the order they appear in the spec (refs first, then after).
+   * Listed in the order they appear in the spec (args refs, then upgradeable
+   * refs, then after).
    */
   readonly dependsOn: string[];
+  /**
+   * Present iff this entry declares `ContractEntry.upgradeable` — surfaces
+   * the proxy shape WITHOUT compiling a real Ignition module (this stays a
+   * byte-for-byte-compatible superset: entries with no `upgradeable` produce
+   * NO `upgradeable` key at all, exactly as before #155).
+   *
+   * `compileSpec()` (compile/compile.ts) expands a step like this into THREE
+   * Ignition futures (impl/proxy/contractAt) under this one spec id — this
+   * marker just tells a plan consumer "this id resolves to a proxy", not the
+   * literal future breakdown.
+   */
+  readonly upgradeable?: {
+    /** The proxy pattern — see `UpgradeableConfig.kind`'s doc comment. */
+    readonly kind: "uups" | "transparent";
+    /** True iff the entry declares an `initializer` call. */
+    readonly hasInitializer: boolean;
+  };
 }
 
 /**
@@ -187,11 +207,24 @@ export function simulate(spec: unknown): SimulateResult {
     const seenDeps = new Set<string>();
     const dependsOn: string[] = [];
 
-    for (const arg of entry.args ?? []) {
+    const addRefDep = (arg: ContractArg): void => {
       if (arg.kind === "ref" && !seenDeps.has(arg.contract)) {
         seenDeps.add(arg.contract);
         dependsOn.push(arg.contract);
       }
+    };
+
+    for (const arg of entry.args ?? []) {
+      addRefDep(arg);
+    }
+    // upgradeable refs participate in dependsOn identically to constructor
+    // args — see compile.ts's buildCreationOrder (same treatment applied
+    // there for real Ignition dependency edges).
+    for (const arg of entry.upgradeable?.initializer?.args ?? []) {
+      addRefDep(arg);
+    }
+    if (entry.upgradeable?.proxyAdminOwner !== undefined) {
+      addRefDep(entry.upgradeable.proxyAdminOwner);
     }
     for (const afterId of entry.after ?? []) {
       if (!seenDeps.has(afterId)) {
@@ -206,6 +239,14 @@ export function simulate(spec: unknown): SimulateResult {
       ...(entry.args !== undefined ? { args: entry.args } : {}),
       ...(entry.after !== undefined ? { after: entry.after } : {}),
       dependsOn,
+      ...(entry.upgradeable !== undefined
+        ? {
+            upgradeable: {
+              kind: entry.upgradeable.kind,
+              hasInitializer: entry.upgradeable.initializer !== undefined,
+            },
+          }
+        : {}),
     };
   });
 
