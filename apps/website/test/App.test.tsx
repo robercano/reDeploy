@@ -19,6 +19,14 @@ describe("App", () => {
     expect(screen.getByText(/Built on Hardhat Ignition\./)).toBeInTheDocument();
   });
 
+  it("renders the full reDeploy brand mark in the hero", () => {
+    render(<App />);
+
+    const mark = screen.getByRole("img", { name: "reDeploy logo" });
+    expect(mark).toBeInTheDocument();
+    expect(mark).toHaveClass("heroMark");
+  });
+
   it("renders the spec pane with the example contracts and the dependency graph", () => {
     render(<App />);
 
