@@ -909,3 +909,387 @@ describe("validateSpec — ResolverArg shape rejection", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Upgradeable proxies (issue #155)
+// ---------------------------------------------------------------------------
+
+const OWNER_ADDR = "0x0000000000000000000000000000000000000002";
+
+describe("validateSpec — upgradeable: happy paths", () => {
+  it("accepts a uups entry with no initializer and no proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "vault", contract: "Vault", upgradeable: { kind: "uups" } },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a uups entry with an initializer", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "literal", value: 1 }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a transparent entry with proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "literal", value: OWNER_ADDR },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a ref inside initializer.args that resolves to a known id", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a ref inside proxyAdminOwner that resolves to a known id", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "admin", contract: "Admin" },
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "ref", contract: "admin" },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a param inside initializer.args that is declared in parameters", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { initialOwner: OWNER_ADDR },
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "param", name: "initialOwner" }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("leaves non-upgradeable specs fully unaffected (backward compatibility)", () => {
+    const result = validateSpec(happySpec);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — upgradeable: MISSING_PROXY_ADMIN_OWNER", () => {
+  it("rejects a transparent entry with no proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", upgradeable: { kind: "transparent" } }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "MISSING_PROXY_ADMIN_OWNER");
+      expect(e).toBeDefined();
+      expect(e?.message).toContain("vault");
+      expect(e?.path).toBe("contracts[0].upgradeable.proxyAdminOwner");
+    }
+  });
+});
+
+describe("validateSpec — upgradeable: UNUSED_PROXY_ADMIN_OWNER", () => {
+  it("rejects a uups entry that also sets proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            proxyAdminOwner: { kind: "literal", value: OWNER_ADDR },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "UNUSED_PROXY_ADMIN_OWNER");
+      expect(e).toBeDefined();
+      expect(e?.message).toContain("vault");
+    }
+  });
+});
+
+describe("validateSpec — upgradeable: INVALID_IDENTIFIER", () => {
+  it("rejects an initializer.function that is not a valid Solidity identifier", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "not a function()" },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "INVALID_IDENTIFIER");
+      expect(e).toBeDefined();
+      expect(e?.path).toBe("contracts[0].upgradeable.initializer.function");
+    }
+  });
+
+  it("accepts a valid identifier with underscores and digits", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: { kind: "uups", initializer: { function: "_initialize_v2" } },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — upgradeable: MISSING_REF / SELF_REFERENCE in initializer.args", () => {
+  it("rejects a ref inside initializer.args pointing at an unknown id", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "ghost" }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "MISSING_REF");
+      expect(e).toBeDefined();
+      expect(e?.message).toContain("ghost");
+      expect(e?.path).toBe("contracts[0].upgradeable.initializer.args[0].contract");
+    }
+  });
+
+  it("rejects a self-reference inside initializer.args", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "vault" }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "SELF_REFERENCE");
+      expect(e).toBeDefined();
+    }
+  });
+
+  it("rejects a ref inside proxyAdminOwner pointing at an unknown id", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "ref", contract: "ghostAdmin" },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "MISSING_REF");
+      expect(e).toBeDefined();
+      expect(e?.message).toContain("ghostAdmin");
+      expect(e?.path).toBe("contracts[0].upgradeable.proxyAdminOwner.contract");
+    }
+  });
+
+  it("rejects an undeclared param inside initializer.args", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "param", name: "unknownParam" }] },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const e = result.errors.find((e) => e.code === "UNKNOWN_PARAM");
+      expect(e).toBeDefined();
+      expect(e?.message).toContain("unknownParam");
+      expect(e?.path).toBe("contracts[0].upgradeable.initializer.args[0].name");
+    }
+  });
+});
+
+describe("validateSpec — upgradeable: ordering and cycles", () => {
+  it("accepts a ref inside initializer.args to an id declared LATER in the array", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+          },
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("detects a cycle formed through initializer.args", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "a",
+          contract: "A",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "b" }] },
+          },
+        },
+        { id: "b", contract: "B", args: [{ kind: "ref", contract: "a" }] },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "CYCLE")).toBe(true);
+    }
+  });
+
+  it("detects a cycle formed through proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "a",
+          contract: "A",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "ref", contract: "b" },
+          },
+        },
+        { id: "b", contract: "B", args: [{ kind: "ref", contract: "a" }] },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "CYCLE")).toBe(true);
+    }
+  });
+});
+
+describe("validateSpec — upgradeable: schema-level shape checks", () => {
+  it("rejects an unknown upgradeable.kind value", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", upgradeable: { kind: "bogus" } }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects an upgradeable entry missing the kind field", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", upgradeable: {} }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects an initializer with an empty function name", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: { kind: "uups", initializer: { function: "" } },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+});

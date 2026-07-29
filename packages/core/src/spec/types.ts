@@ -130,6 +130,87 @@ export interface ResolverArg {
 export type ContractArg = RefArg | LiteralArg | ParamArg | ExprArg | ResolverArg;
 
 /**
+ * Configuration for an upgrade-time "initializer" call — the function invoked
+ * atomically with proxy deployment (UUPS: as `ERC1967Proxy`'s constructor
+ * `_data` argument; Transparent: as `TransparentUpgradeableProxy`'s
+ * constructor `_data` argument). This is typically an OZ `Initializable`
+ * contract's `initialize(...)` function, called via `delegatecall` through
+ * the proxy so storage is set on the PROXY, not the implementation.
+ *
+ * SECURITY: `function` and `args` flow directly into on-chain calldata
+ * (`compile/compile.ts` uses Ignition's `m.encodeFunctionCall`). `function`
+ * is validated as a plain Solidity identifier (`validateSpec` — see
+ * `SpecErrorCode` "INVALID_IDENTIFIER") and `args` go through the SAME
+ * validated arg-mapping as constructor `args` (ref/literal/param/expr/
+ * resolver) — never raw string interpolation.
+ */
+export interface UpgradeableInitializer {
+  /** The initializer function name (e.g. "initialize"). Must be a plain Solidity identifier. */
+  readonly function: string;
+  /** Arguments to the initializer function, in order. */
+  readonly args?: ContractArg[];
+}
+
+/**
+ * Marks a `ContractEntry` as deployed behind an upgradeable proxy instead of
+ * directly. See `compile/compile.ts`'s module doc for the exact Ignition
+ * primitives used to build the proxy (ignition-core 0.15.15 has no built-in
+ * `m.proxy` helper, so we compose `m.contract` + `m.encodeFunctionCall` +
+ * `m.contractAt` by hand, following the standard OpenZeppelin proxy pattern).
+ *
+ * Regardless of `kind`, the entry's `id` always resolves (for downstream
+ * `ref`s AND in `DeployResult.deployedAddresses`) to the PROXY's address,
+ * never the implementation's — that's the whole point of a proxy: callers
+ * interact with the stable proxy address across upgrades. The implementation
+ * is deployed under future id `${id}_impl` and the proxy under `${id}_proxy`.
+ *
+ * STORAGE-LAYOUT SAFETY IS OUT OF SCOPE (v1): this library does NOT validate
+ * that a new implementation's storage layout is compatible with the previous
+ * one. Run your own storage-layout check before deploying a new
+ * implementation for an existing proxy (e.g. the `@openzeppelin/upgrades-core`
+ * / `hardhat-upgrades` plugin's validator, or `forge inspect --pretty
+ * storage-layout`). Deploying an incompatible implementation WILL corrupt
+ * proxy storage — reDeploy does not (and cannot, without a storage-layout
+ * database) protect you from this.
+ */
+export interface UpgradeableConfig {
+  /**
+   * The proxy pattern to use.
+   *   - `"uups"`: the implementation itself controls upgrades (must inherit
+   *     OZ's `UUPSUpgradeable` and implement `_authorizeUpgrade`). Proxy
+   *     artifact: `ERC1967Proxy`.
+   *   - `"transparent"`: a separate `ProxyAdmin` contract (deployed
+   *     internally by OZ v5's `TransparentUpgradeableProxy`) controls
+   *     upgrades. Proxy artifact: `TransparentUpgradeableProxy`.
+   */
+  readonly kind: "uups" | "transparent";
+  /**
+   * Optional initializer call, executed atomically with proxy deployment.
+   * If omitted, the proxy's constructor `_data` argument is `"0x"` (no call)
+   * — the implementation must then be initialized separately (e.g. via a
+   * later `config` step) or not require initialization at all.
+   */
+  readonly initializer?: UpgradeableInitializer;
+  /**
+   * The INITIAL owner of the proxy's `ProxyAdmin` (transparent proxies
+   * only — OZ v5's `TransparentUpgradeableProxy` deploys its own
+   * `ProxyAdmin`, owned by this address; only that owner may later call
+   * `ProxyAdmin.upgradeAndCall`). NOT used for `"uups"` (uups proxies have
+   * no separate ProxyAdmin — upgrade rights live in the implementation's
+   * `_authorizeUpgrade` override).
+   *
+   * SECURITY: REQUIRED for `kind: "transparent"` — `validateSpec` reports a
+   * `MISSING_PROXY_ADMIN_OWNER` error if it is absent. There is deliberately
+   * NO fallback default (e.g. `address(0)` or the deployer account) — an
+   * unset proxy-admin owner is an access-control footgun, not a convenience
+   * default. Declaring `proxyAdminOwner` on a `"uups"` entry is flagged as
+   * `UNUSED_PROXY_ADMIN_OWNER` (rejected, not silently ignored) since it
+   * signals likely author confusion about which proxy pattern is in use.
+   */
+  readonly proxyAdminOwner?: ContractArg;
+}
+
+/**
  * A single contract entry in a deployment spec.
  */
 export interface ContractEntry {
@@ -156,6 +237,14 @@ export interface ContractEntry {
    * by `args` refs.
    */
   readonly after?: string[];
+  /**
+   * Deploy this entry behind an upgradeable proxy (UUPS or Transparent)
+   * instead of directly. Optional — omitting it is fully backward compatible
+   * with pre-upgradeable specs (the entry deploys exactly as before). See
+   * `UpgradeableConfig`'s docs for the full behavior, including which
+   * address `id` resolves to and the storage-layout-safety scope boundary.
+   */
+  readonly upgradeable?: UpgradeableConfig;
 }
 
 /**

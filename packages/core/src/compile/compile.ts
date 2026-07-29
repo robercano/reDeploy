@@ -25,9 +25,13 @@
  *
  * Map vs. plain object for id→future lookup
  * ------------------------------------------
- * We use Map<string, NamedArtifactContractDeploymentFuture<string>> rather
- * than a plain object for the id→future index. Spec-derived strings must
- * never index a plain object (prototype-pollution risk).
+ * We use Map<string, ContractFuture<string>> rather than a plain object for
+ * the id→future index. Spec-derived strings must never index a plain object
+ * (prototype-pollution risk). `ContractFuture<string>` (rather than the
+ * narrower `NamedArtifactContractDeploymentFuture<string>`) is the value type
+ * because upgradeable entries store a `contractAt` future (the proxy exposed
+ * with the implementation's ABI) here instead of a plain deployment future —
+ * see "Upgradeable proxies" below.
  *
  * Literal mapping
  * ---------------
@@ -37,17 +41,57 @@
  * `{ __bigint: "..." }` encoding mentioned in some doc comments is a future
  * extension. If a runtime value falls outside these shapes, CompileError
  * UNSUPPORTED_LITERAL is thrown.
+ *
+ * Upgradeable proxies (UUPS / Transparent)
+ * -----------------------------------------
+ * ignition-core 0.15.15 has NO built-in `m.proxy` helper, so an
+ * `entry.upgradeable` entry is compiled by hand-composing the standard
+ * OpenZeppelin proxy pattern from Ignition primitives:
+ *
+ *   1. `impl   = m.contract(entry.contract, ctorArgs, { id: "<id>_impl" })`
+ *   2. `data   = m.encodeFunctionCall(impl, initializer.function, initArgs)`
+ *      (or `"0x"` if no initializer is declared)
+ *   3. `proxy  = m.contract("ERC1967Proxy", [impl, data], { id: "<id>_proxy" })`
+ *      (uups) or
+ *      `m.contract("TransparentUpgradeableProxy", [impl, proxyAdminOwner, data], { id: "<id>_proxy" })`
+ *      (transparent — OZ v5's TransparentUpgradeableProxy deploys its own
+ *      ProxyAdmin internally, owned by `proxyAdminOwner`)
+ *   4. `handle = m.contractAt(entry.contract, proxy, { id: entry.id })`
+ *
+ * `handle` (NOT `impl` or `proxy` directly) is what gets stored in
+ * `futureByEntryId` under `entry.id` — so every downstream `ref` to this
+ * entry, and the final `IgnitionModuleResult`, resolve to the PROXY's
+ * address with the IMPLEMENTATION's ABI. That is the entire point of a
+ * proxy: callers always talk to the stable proxy address.
+ *
+ * The proxy artifact names (`"ERC1967Proxy"` / `"TransparentUpgradeableProxy"`)
+ * are overridable via `CompileOptions.proxyArtifacts` for consumers whose
+ * Foundry/Hardhat project vendors OpenZeppelin under different artifact
+ * names; both must be resolvable by the `ArtifactResolver` passed to
+ * `deploy()` (they exist in `openzeppelin-contracts` v5 and must be
+ * compiled/available in the consuming project — reDeploy does not vendor
+ * OZ's Solidity sources itself).
+ *
+ * STORAGE-LAYOUT SAFETY IS OUT OF SCOPE (v1) — see `UpgradeableConfig`'s
+ * doc comment in spec/types.ts. `compileUpgrade()` (below) documents the
+ * same caveat for the upgrade-call path.
  */
 
 import { buildModule } from "@nomicfoundation/ignition-core";
 import type {
   ArgumentType,
+  ContractFuture,
   IgnitionModule,
+  IgnitionModuleBuilder,
   IgnitionModuleResult,
   ModuleParameterType,
-  NamedArtifactContractDeploymentFuture,
 } from "@nomicfoundation/ignition-core";
-import type { DeploymentSpec, LiteralValue, ContractEntry } from "../spec/types.js";
+import type {
+  ContractArg,
+  ContractEntry,
+  DeploymentSpec,
+  LiteralValue,
+} from "../spec/types.js";
 import {
   evaluateExpression,
   EvaluationError,
@@ -70,6 +114,22 @@ export interface CompileOptions {
    * Must be a non-empty string (Ignition constraint).
    */
   moduleId?: string;
+  /**
+   * Override the default artifact names used for the proxy contracts
+   * deployed for `upgradeable` entries. Both artifacts must be
+   * compiled/available to the `ArtifactResolver` passed to `deploy()` — they
+   * ship as part of `openzeppelin-contracts` v5
+   * (`@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol` and
+   * `@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol`).
+   * reDeploy does not vendor these sources itself — the consuming
+   * Foundry/Hardhat project must have them available.
+   */
+  proxyArtifacts?: {
+    /** Defaults to `"ERC1967Proxy"`. */
+    uups?: string;
+    /** Defaults to `"TransparentUpgradeableProxy"`. */
+    transparent?: string;
+  };
 }
 
 /**
@@ -132,8 +192,16 @@ export function buildCreationOrder(entries: readonly ContractEntry[]): ContractE
   // special-casing needed.
   for (const entry of entries) {
     const deps = new Set<string>();
-    // Ref args
-    for (const arg of entry.args ?? []) {
+    // Ref args — from constructor `args` AND (identically) from
+    // `upgradeable.initializer.args` / `upgradeable.proxyAdminOwner`, since
+    // both flow into real Ignition future dependencies once compiled (see
+    // the impl/proxy/contractAt futures built in compileSpec below).
+    const argSources: ContractArg[] = [
+      ...(entry.args ?? []),
+      ...(entry.upgradeable?.initializer?.args ?? []),
+      ...(entry.upgradeable?.proxyAdminOwner !== undefined ? [entry.upgradeable.proxyAdminOwner] : []),
+    ];
+    for (const arg of argSources) {
       if (arg.kind === "ref") {
         deps.add(arg.contract);
       } else if (arg.kind === "expr") {
@@ -254,6 +322,160 @@ function mapLiteralValue(value: LiteralValue, path: string): ArgumentType {
 }
 
 // ---------------------------------------------------------------------------
+// Contract argument mapping (ref/literal/param/expr/resolver)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a single `ContractArg` to an Ignition `ArgumentType`, handling every
+ * arg kind (ref/literal/param/expr/resolver) identically to how constructor
+ * `args` have always been mapped. Shared by constructor `args`,
+ * `upgradeable.initializer.args`, and `upgradeable.proxyAdminOwner` so all
+ * three go through the SAME validated arg-mapping — no bespoke handling, no
+ * string interpolation into calldata.
+ *
+ * @param m               The Ignition module builder (for `m.getParameter`).
+ * @param arg             The arg to map.
+ * @param argPath         JSON-pointer-ish path for error messages.
+ * @param spec            The full spec (for `spec.parameters` defaults/expr context).
+ * @param futureByEntryId Build-time id→future index (for `ref` resolution).
+ */
+function mapContractArg(
+  m: IgnitionModuleBuilder,
+  arg: ContractArg,
+  argPath: string,
+  spec: DeploymentSpec,
+  futureByEntryId: ReadonlyMap<string, ContractFuture<string>>,
+): ArgumentType {
+  if (arg.kind === "ref") {
+    // Resolve the referenced future. Build-time ordering guarantees the
+    // target was already created. If not, validateSpec was bypassed.
+    const refFuture = futureByEntryId.get(arg.contract);
+    if (refFuture === undefined) {
+      throw new CompileError(
+        "INTERNAL_INVARIANT",
+        `ref target "${arg.contract}" has not been registered as a future — was validateSpec called?`,
+        argPath,
+      );
+    }
+    // ContractFuture<string> is assignable to ArgumentType, so passing
+    // the future here creates a real Ignition dependency edge.
+    return refFuture;
+  }
+  if (arg.kind === "param") {
+    // Resolve via Ignition's m.getParameter(). This is the seam that
+    // lets the SAME compiled module receive different values per
+    // network/environment: the caller supplies the actual value at
+    // deploy time via DeployOptions.deploymentParameters (keyed by this
+    // module's id and this parameter's name; see deploy/deploy.ts). We
+    // do NOT bake a fixed value into the module here — that would
+    // defeat the whole point of per-network overrides.
+    //
+    // If the spec declares a value for this parameter under
+    // `spec.parameters[arg.name]`, we pass it as Ignition's
+    // `defaultValue` — used only when deploymentParameters does NOT
+    // supply an override for this name. validateSpec guarantees
+    // `arg.name` is a declared key of `spec.parameters` before compile
+    // is ever reached (SpecErrorCode "UNKNOWN_PARAM").
+    const declaredDefault = spec.parameters?.[arg.name];
+    const defaultValue =
+      declaredDefault !== undefined
+        ? // Ignition's ModuleParameterType (like ArgumentType) does not
+          // include `null` in its TypeScript union, but null passes
+          // through at runtime — same rationale as mapLiteralValue's
+          // null handling above.
+          (mapLiteralValue(declaredDefault, argPath) as unknown as ModuleParameterType)
+        : undefined;
+    return m.getParameter(arg.name, defaultValue);
+  }
+  if (arg.kind === "expr") {
+    // Evaluate the expression with parameter values and contract references
+    try {
+      const context: EvaluationContext = {
+        params: {},
+        contractAddresses: {},
+      };
+
+      // Populate parameter values (convert LiteralValue to bigint for parameters)
+      if (spec.parameters) {
+        for (const [paramName, paramValue] of Object.entries(spec.parameters)) {
+          // For now, we only support bigint parameters in expressions
+          // Parse literal values as bigint if possible
+          if (typeof paramValue === "number" || typeof paramValue === "string") {
+            try {
+              context.params[paramName] = BigInt(paramValue);
+            } catch {
+              throw new CompileError(
+                "EXPRESSION_EVAL_ERROR",
+                `Parameter "${paramName}" value is not convertible to BigInt for expressions`,
+                argPath,
+              );
+            }
+          } else if (paramValue === null) {
+            context.params[paramName] = 0n;
+          } else {
+            throw new CompileError(
+              "EXPRESSION_EVAL_ERROR",
+              `Parameter "${paramName}" has unsupported type for expressions: ${typeof paramValue}`,
+              argPath,
+            );
+          }
+        }
+      }
+
+      // Populate contract addresses/futures for ${contractId} references
+      for (const [contractId, future] of futureByEntryId) {
+        context.contractAddresses[contractId] = future;
+      }
+
+      const result = evaluateExpression(arg.expression, context);
+
+      // If the result is a Future (from a contract reference), return it directly
+      if (typeof result === "object" && result !== null && "address" in result) {
+        // This is a Future-like object from Ignition
+        return result as ArgumentType;
+      }
+
+      // Otherwise, map the result as a literal value
+      // BigInt results are mapped as numbers (or strings for large values)
+      if (typeof result === "bigint") {
+        return result as unknown as ArgumentType;
+      }
+
+      // String results (hex hashes, addresses, etc.)
+      return result as ArgumentType;
+    } catch (err) {
+      if (err instanceof EvaluationError) {
+        throw new CompileError(
+          "EXPRESSION_EVAL_ERROR",
+          `Expression evaluation failed: ${err.message}`,
+          argPath,
+        );
+      }
+      throw err;
+    }
+  }
+  if (arg.kind === "resolver") {
+    // compileSpec() never invokes resolvers itself — see
+    // resolve/registry.ts and this error code's doc comment
+    // (compile/errors.ts). deploy() always pre-resolves resolver args
+    // via resolve/resolveSpec.ts BEFORE calling compileSpec(), so this
+    // should be unreachable through the normal deploy() pipeline. It
+    // fires only if compileSpec() is called directly with a spec that
+    // still contains unresolved resolver args.
+    throw new CompileError(
+      "UNRESOLVED_RESOLVER_ARG",
+      `Resolver arg "${arg.name}" was not pre-resolved before compileSpec() was called. ` +
+        `Resolver args must be resolved to concrete literals first — deploy() does this ` +
+        `automatically via its pre-resolution pass (resolve/resolveSpec.ts). If you are ` +
+        `calling compileSpec() directly, call resolveSpecResolverArgs() on the spec first.`,
+      argPath,
+    );
+  }
+  // arg.kind === "literal"
+  return mapLiteralValue(arg.value, argPath);
+}
+
+// ---------------------------------------------------------------------------
 // Main public API
 // ---------------------------------------------------------------------------
 
@@ -286,152 +508,27 @@ export function compileSpec(
 
   // Map from spec entry id to the Ignition future created for it.
   // We use Map (not a plain object) for prototype-pollution safety.
-  const futureByEntryId = new Map<
-    string,
-    NamedArtifactContractDeploymentFuture<string>
-  >();
+  // ContractFuture<string> (not the narrower NamedArtifactContractDeploymentFuture)
+  // because upgradeable entries store a contractAt future here — see this
+  // file's module doc, "Upgradeable proxies".
+  const futureByEntryId = new Map<string, ContractFuture<string>>();
+
+  const uupsProxyArtifact = options?.proxyArtifacts?.uups ?? "ERC1967Proxy";
+  const transparentProxyArtifact =
+    options?.proxyArtifacts?.transparent ?? "TransparentUpgradeableProxy";
 
   // IgnitionModuleResult<string> is the correct result type when we return a
-  // record of named-artifact contract deployment futures.
+  // record of contract futures.
   const module = buildModule(moduleId, (m) => {
     for (const entry of orderedEntries) {
       const entryPath = `contracts[id=${entry.id}]`;
 
-      // Map constructor arguments
-      const mappedArgs: ArgumentType[] = ((entry.args ?? []).map((arg, argIdx) => {
-        const argPath = `${entryPath}.args[${argIdx}]`;
-        if (arg.kind === "ref") {
-          // Resolve the referenced future. Build-time ordering guarantees the
-          // target was already created. If not, validateSpec was bypassed.
-          const refFuture = futureByEntryId.get(arg.contract);
-          if (refFuture === undefined) {
-            throw new CompileError(
-              "INTERNAL_INVARIANT",
-              `ref target "${arg.contract}" has not been registered as a future — was validateSpec called?`,
-              argPath,
-            );
-          }
-          // ContractFuture<string> is assignable to ArgumentType, so passing
-          // the future here creates a real Ignition dependency edge.
-          return refFuture;
-        }
-        if (arg.kind === "param") {
-          // Resolve via Ignition's m.getParameter(). This is the seam that
-          // lets the SAME compiled module receive different values per
-          // network/environment: the caller supplies the actual value at
-          // deploy time via DeployOptions.deploymentParameters (keyed by this
-          // module's id and this parameter's name; see deploy/deploy.ts). We
-          // do NOT bake a fixed value into the module here — that would
-          // defeat the whole point of per-network overrides.
-          //
-          // If the spec declares a value for this parameter under
-          // `spec.parameters[arg.name]`, we pass it as Ignition's
-          // `defaultValue` — used only when deploymentParameters does NOT
-          // supply an override for this name. validateSpec guarantees
-          // `arg.name` is a declared key of `spec.parameters` before compile
-          // is ever reached (SpecErrorCode "UNKNOWN_PARAM").
-          const declaredDefault = spec.parameters?.[arg.name];
-          const defaultValue =
-            declaredDefault !== undefined
-              ? // Ignition's ModuleParameterType (like ArgumentType) does not
-                // include `null` in its TypeScript union, but null passes
-                // through at runtime — same rationale as mapLiteralValue's
-                // null handling above.
-                (mapLiteralValue(declaredDefault, argPath) as unknown as ModuleParameterType)
-              : undefined;
-          return m.getParameter(arg.name, defaultValue);
-        }
-        if (arg.kind === "expr") {
-          // Evaluate the expression with parameter values and contract references
-          try {
-            const context: EvaluationContext = {
-              params: {},
-              contractAddresses: {},
-            };
-
-            // Populate parameter values (convert LiteralValue to bigint for parameters)
-            if (spec.parameters) {
-              for (const [paramName, paramValue] of Object.entries(spec.parameters)) {
-                // For now, we only support bigint parameters in expressions
-                // Parse literal values as bigint if possible
-                if (typeof paramValue === "number" || typeof paramValue === "string") {
-                  try {
-                    context.params[paramName] = BigInt(paramValue);
-                  } catch {
-                    throw new CompileError(
-                      "EXPRESSION_EVAL_ERROR",
-                      `Parameter "${paramName}" value is not convertible to BigInt for expressions`,
-                      argPath,
-                    );
-                  }
-                } else if (paramValue === null) {
-                  context.params[paramName] = 0n;
-                } else {
-                  throw new CompileError(
-                    "EXPRESSION_EVAL_ERROR",
-                    `Parameter "${paramName}" has unsupported type for expressions: ${typeof paramValue}`,
-                    argPath,
-                  );
-                }
-              }
-            }
-
-            // Populate contract addresses/futures for ${contractId} references
-            for (const [contractId, future] of futureByEntryId) {
-              context.contractAddresses[contractId] = future;
-            }
-
-            const result = evaluateExpression(arg.expression, context);
-
-            // If the result is a Future (from a contract reference), return it directly
-            if (
-              typeof result === "object" &&
-              result !== null &&
-              "address" in result
-            ) {
-              // This is a Future-like object from Ignition
-              return result as ArgumentType;
-            }
-
-            // Otherwise, map the result as a literal value
-            // BigInt results are mapped as numbers (or strings for large values)
-            if (typeof result === "bigint") {
-              return result as unknown as ArgumentType;
-            }
-
-            // String results (hex hashes, addresses, etc.)
-            return result;
-          } catch (err) {
-            if (err instanceof EvaluationError) {
-              throw new CompileError(
-                "EXPRESSION_EVAL_ERROR",
-                `Expression evaluation failed: ${err.message}`,
-                argPath,
-              );
-            }
-            throw err;
-          }
-        }
-        if (arg.kind === "resolver") {
-          // compileSpec() never invokes resolvers itself — see
-          // resolve/registry.ts and this error code's doc comment
-          // (compile/errors.ts). deploy() always pre-resolves resolver args
-          // via resolve/resolveSpec.ts BEFORE calling compileSpec(), so this
-          // should be unreachable through the normal deploy() pipeline. It
-          // fires only if compileSpec() is called directly with a spec that
-          // still contains unresolved resolver args.
-          throw new CompileError(
-            "UNRESOLVED_RESOLVER_ARG",
-            `Resolver arg "${arg.name}" was not pre-resolved before compileSpec() was called. ` +
-              `Resolver args must be resolved to concrete literals first — deploy() does this ` +
-              `automatically via its pre-resolution pass (resolve/resolveSpec.ts). If you are ` +
-              `calling compileSpec() directly, call resolveSpecResolverArgs() on the spec first.`,
-            argPath,
-          );
-        }
-        // arg.kind === "literal"
-        return mapLiteralValue(arg.value, argPath);
-      }) as unknown[]) as ArgumentType[];
+      // Map constructor arguments — shared helper so ctorArgs, initializer
+      // args, and proxyAdminOwner (below) all go through identical
+      // ref/literal/param/expr/resolver handling.
+      const mappedArgs: ArgumentType[] = (entry.args ?? []).map((arg, argIdx) =>
+        mapContractArg(m, arg, `${entryPath}.args[${argIdx}]`, spec, futureByEntryId),
+      );
 
       // Map `after` constraints to futures
       const afterFutures = (entry.after ?? []).map((afterId, afterIdx) => {
@@ -447,17 +544,90 @@ export function compileSpec(
         return afterFuture;
       });
 
-      // Create the future. We use the overload:
-      //   m.contract(contractName, args?, options?)
-      // where contractName is the Solidity artifact name (entry.contract) and
-      // the `id` option lets us use entry.id as the Ignition future id (to
-      // avoid clashes when the same artifact is deployed multiple times).
-      const future = m.contract(entry.contract, mappedArgs, {
-        id: entry.id,
+      if (entry.upgradeable === undefined) {
+        // Non-upgradeable path — unchanged from pre-#155 behavior.
+        // Create the future. We use the overload:
+        //   m.contract(contractName, args?, options?)
+        // where contractName is the Solidity artifact name (entry.contract) and
+        // the `id` option lets us use entry.id as the Ignition future id (to
+        // avoid clashes when the same artifact is deployed multiple times).
+        const future = m.contract(entry.contract, mappedArgs, {
+          id: entry.id,
+          ...(afterFutures.length > 0 ? { after: afterFutures } : {}),
+        });
+
+        futureByEntryId.set(entry.id, future);
+        continue;
+      }
+
+      // Upgradeable path (UUPS / Transparent) — see this file's module doc,
+      // "Upgradeable proxies", for the full design rationale.
+      const { kind, initializer, proxyAdminOwner } = entry.upgradeable;
+      const upgradeablePath = `${entryPath}.upgradeable`;
+
+      // 1. Deploy the implementation contract. `after` applies here — every
+      // future built below (proxy, contractAt) transitively depends on this
+      // one, so the after-ordering constraint holds for the whole entry.
+      const implFuture = m.contract(entry.contract, mappedArgs, {
+        id: `${entry.id}_impl`,
         ...(afterFutures.length > 0 ? { after: afterFutures } : {}),
       });
 
-      futureByEntryId.set(entry.id, future);
+      // 2. Encode the initializer call (or "0x" — no call) for the proxy's
+      // constructor `_data` argument. Executed via delegatecall through the
+      // proxy, so it initializes PROXY storage, not the implementation's.
+      let initData: ArgumentType = "0x";
+      if (initializer !== undefined) {
+        const initArgs = (initializer.args ?? []).map((arg, argIdx) =>
+          mapContractArg(
+            m,
+            arg,
+            `${upgradeablePath}.initializer.args[${argIdx}]`,
+            spec,
+            futureByEntryId,
+          ),
+        );
+        initData = m.encodeFunctionCall(implFuture, initializer.function, initArgs, {
+          id: `${entry.id}_initData`,
+        });
+      }
+
+      // 3. Deploy the proxy itself.
+      let proxyFuture;
+      if (kind === "uups") {
+        proxyFuture = m.contract(uupsProxyArtifact, [implFuture, initData], {
+          id: `${entry.id}_proxy`,
+        });
+      } else {
+        // kind === "transparent"
+        if (proxyAdminOwner === undefined) {
+          // validateSpec's "MISSING_PROXY_ADMIN_OWNER" rejects this before
+          // compileSpec() is ever reached in the normal pipeline — this is a
+          // defensive last resort for direct callers who bypass validateSpec.
+          throw new CompileError(
+            "INTERNAL_INVARIANT",
+            `transparent proxy entry "${entry.id}" has no proxyAdminOwner — was validateSpec called?`,
+            `${upgradeablePath}.proxyAdminOwner`,
+          );
+        }
+        const ownerArg = mapContractArg(
+          m,
+          proxyAdminOwner,
+          `${upgradeablePath}.proxyAdminOwner`,
+          spec,
+          futureByEntryId,
+        );
+        proxyFuture = m.contract(transparentProxyArtifact, [implFuture, ownerArg, initData], {
+          id: `${entry.id}_proxy`,
+        });
+      }
+
+      // 4. Expose the entry at the proxy address, using the IMPLEMENTATION's
+      // ABI. This — not implFuture or proxyFuture — is what downstream refs
+      // (and the final IgnitionModuleResult) resolve to under entry.id.
+      const handle = m.contractAt(entry.contract, proxyFuture, { id: entry.id });
+
+      futureByEntryId.set(entry.id, handle);
     }
 
     // Return all futures keyed by entry.id for Ignition's result tracking.
@@ -467,4 +637,184 @@ export function compileSpec(
   });
 
   return module;
+}
+
+// ---------------------------------------------------------------------------
+// Upgrade flow — compiling an upgrade call for an already-deployed proxy
+// ---------------------------------------------------------------------------
+//
+// DESIGN (issue #155, v1 scope)
+// ==============================
+//
+// Automatic bytecode-diff-driven upgrade detection is EXPLICITLY out of
+// scope (it would require the compiler to fetch on-chain bytecode and diff
+// artifacts — heavy, and orthogonal to the declarative-spec model). v1
+// upgrades are represented as an EXPLICIT, separate compile step:
+// `compileUpgrade()` builds a standalone Ignition module — run against the
+// SAME `deploymentDir`/journal as the original deployment, but under its OWN
+// module id — that deploys a NEW implementation and calls the appropriate
+// on-chain upgrade function:
+//
+//   - UUPS:        `proxy.upgradeToAndCall(newImpl, initData)` — the
+//     implementation contract's own ABI (inherited from OZ's
+//     `UUPSUpgradeable`) already exposes this, so we simply `m.contractAt`
+//     the existing proxy address using the (new) implementation's contract
+//     name and `m.call` it directly.
+//   - Transparent: `ProxyAdmin.upgradeAndCall(proxy, newImpl, initData)` —
+//     OZ v5's `TransparentUpgradeableProxy` deploys its OWN `ProxyAdmin`
+//     internally, so its address is NOT derivable from the proxy address
+//     alone. The caller MUST supply `proxyAdminAddress` explicitly (e.g.
+//     read from chain state, or — once built — a `@redeploy/reader`
+//     integration on top of `ProxyImplementationHistory`, see
+//     `deploy/proxyHistory.ts`). `compileUpgrade()` refuses to guess.
+//
+// Reusing the SAME implementation future id as the original deploy (e.g.
+// `${id}_impl`) would NOT trigger a redeploy on a subsequent run against the
+// same journal — Ignition's journal keys futures by id, not by bytecode
+// content, so an unchanged id is replayed from the journal and skipped
+// regardless of source changes. `compileUpgrade()` therefore requires the
+// CALLER to supply a fresh, distinct `id` for the new implementation (e.g.
+// include a version suffix: "token_impl_v2") — this is how "a changed
+// implementation artifact naturally produces a new impl future/deployment"
+// in practice: a NEW id, not a mutated old one.
+//
+// `compileUpgrade()`'s constructor/initializer args are intentionally typed
+// as `LiteralValue[]` (not the full `ContractArg` union) — there is no
+// sibling multi-contract spec in this standalone context, so `ref` args
+// (which resolve against a spec's other entries) don't make sense here.
+// Args still go through `mapLiteralValue` — the SAME validated literal
+// mapping used everywhere else, never raw string interpolation.
+//
+// STORAGE-LAYOUT SAFETY IS OUT OF SCOPE (v1) — see spec/types.ts's
+// `UpgradeableConfig` doc comment. Run your own storage-layout check (e.g.
+// the `@openzeppelin/upgrades-core` / `hardhat-upgrades` plugin's validator)
+// before compiling an upgrade for a new implementation.
+
+/** An initializer/reinitializer call to run atomically with an upgrade. */
+export interface UpgradeInitializer {
+  /** The function name (e.g. "reinitialize"). Should be a plain Solidity identifier. */
+  readonly function: string;
+  /** Positional arguments — literal values only (see module doc above). */
+  readonly args?: LiteralValue[];
+}
+
+/** Options for `compileUpgrade()`. */
+export interface UpgradeOptions {
+  /**
+   * The future id to use for the NEW implementation deployment. MUST be
+   * different from any future id already recorded in the target
+   * `deploymentDir`'s journal (e.g. append a version suffix) — reusing an
+   * existing id causes Ignition to treat it as already-complete and skip
+   * deploying it. See this section's module doc for the full rationale.
+   */
+  readonly id: string;
+  /** The Solidity artifact/contract name of the NEW implementation. */
+  readonly contract: string;
+  /** Constructor arguments for the new implementation (literal values only). */
+  readonly args?: LiteralValue[];
+  /**
+   * The address of the ALREADY-DEPLOYED proxy being upgraded (e.g. from a
+   * previous `DeployResult.deployedAddresses[proxyId]`, or
+   * `ProxyImplementationHistory.proxyAddress` — see `deploy/proxyHistory.ts`).
+   */
+  readonly proxyAddress: string;
+  /**
+   * Must match how the proxy was originally deployed (`UpgradeableConfig.kind`).
+   * A mismatch will fail on-chain (wrong function selector / wrong caller).
+   */
+  readonly kind: "uups" | "transparent";
+  /** Optional re-initializer call, executed atomically with the upgrade. */
+  readonly initializer?: UpgradeInitializer;
+  /**
+   * REQUIRED for `kind: "transparent"` — the address of the `ProxyAdmin`
+   * contract that owns upgrade rights over the proxy. `compileUpgrade()`
+   * throws `CompileError("MISSING_PROXY_ADMIN_ADDRESS")` if this is absent;
+   * there is deliberately no fallback (see this section's module doc).
+   */
+  readonly proxyAdminAddress?: string;
+  /**
+   * The artifact name for the `ProxyAdmin` contract (transparent only).
+   * Defaults to `"ProxyAdmin"` (OpenZeppelin v5's artifact name).
+   */
+  readonly proxyAdminArtifact?: string;
+  /**
+   * The Ignition module id for this upgrade run. Defaults to `${id}Upgrade`.
+   * Must be consistent across repeated runs of the SAME upgrade (for
+   * idempotency/resume, exactly like `DeployOptions.moduleId`).
+   */
+  readonly moduleId?: string;
+}
+
+/**
+ * Compiles a standalone Ignition module that upgrades an already-deployed
+ * proxy to a new implementation. Intended to be run (via `deploy()` or
+ * directly via Ignition's own `deploy()`) against the SAME `deploymentDir`
+ * as the original deployment, but as a SEPARATE module/run — see this
+ * section's module doc for the full v1 upgrade-flow design and its
+ * scope boundary (no automatic bytecode-diff detection, no storage-layout
+ * validation).
+ *
+ * @throws CompileError with code MISSING_PROXY_ADMIN_ADDRESS if
+ *   `kind: "transparent"` and `proxyAdminAddress` is not supplied.
+ * @throws CompileError with code UNSUPPORTED_LITERAL if an arg value falls
+ *   outside the supported LiteralValue shape.
+ */
+export function compileUpgrade(options: UpgradeOptions): CompiledModule {
+  const moduleId = options.moduleId ?? `${options.id}Upgrade`;
+  const upgradePath = `upgrade[id=${options.id}]`;
+
+  if (options.kind === "transparent" && options.proxyAdminAddress === undefined) {
+    throw new CompileError(
+      "MISSING_PROXY_ADMIN_ADDRESS",
+      `Upgrade for transparent proxy "${options.id}" requires proxyAdminAddress ` +
+        `(the ProxyAdmin contract that owns upgrade rights) — refusing to guess an owner.`,
+      `${upgradePath}.proxyAdminAddress`,
+    );
+  }
+
+  const module = buildModule(moduleId, (m) => {
+    const mappedArgs: ArgumentType[] = (options.args ?? []).map((value, i) =>
+      mapLiteralValue(value, `${upgradePath}.args[${i}]`),
+    );
+
+    const newImpl = m.contract(options.contract, mappedArgs, { id: options.id });
+
+    let initData: ArgumentType = "0x";
+    if (options.initializer !== undefined) {
+      const initArgs = (options.initializer.args ?? []).map((value, i) =>
+        mapLiteralValue(value, `${upgradePath}.initializer.args[${i}]`),
+      );
+      initData = m.encodeFunctionCall(newImpl, options.initializer.function, initArgs, {
+        id: `${options.id}_initData`,
+      });
+    }
+
+    if (options.kind === "uups") {
+      // UUPSUpgradeable exposes upgradeToAndCall(address,bytes) — the new
+      // implementation contract's own ABI (inherited from UUPSUpgradeable)
+      // must include it for this call to succeed on-chain.
+      const proxyAsImpl = m.contractAt(options.contract, options.proxyAddress, {
+        id: `${options.id}_proxyAt`,
+      });
+      m.call(proxyAsImpl, "upgradeToAndCall", [newImpl, initData], {
+        id: `${options.id}_upgrade`,
+      });
+    } else {
+      // kind === "transparent" — must go through the ProxyAdmin; the proxy
+      // itself rejects admin-only calls from anything but its linked
+      // ProxyAdmin (OZ's TransparentUpgradeableProxy access-control design).
+      const proxyAdminArtifactName = options.proxyAdminArtifact ?? "ProxyAdmin";
+      // options.proxyAdminAddress is guaranteed defined here (checked above).
+      const proxyAdmin = m.contractAt(proxyAdminArtifactName, options.proxyAdminAddress as string, {
+        id: `${options.id}_admin`,
+      });
+      m.call(proxyAdmin, "upgradeAndCall", [options.proxyAddress, newImpl, initData], {
+        id: `${options.id}_upgrade`,
+      });
+    }
+
+    return { [options.id]: newImpl };
+  });
+
+  return module as CompiledModule;
 }

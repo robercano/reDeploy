@@ -10,6 +10,8 @@ export type {
   ContractArg,
   ContractEntry,
   DeploymentSpec,
+  UpgradeableConfig,
+  UpgradeableInitializer,
 } from "./spec/types.js";
 
 export {
@@ -17,14 +19,15 @@ export {
   contractEntrySchema,
   deploymentSpecSchema,
   resolverArgSchema,
+  upgradeableConfigSchema,
 } from "./spec/schema.js";
 
 export type { SpecError, SpecErrorCode, ValidateResult } from "./spec/validate.js";
 export { validateSpec } from "./spec/validate.js";
 
 // Spec compiler — converts a validated DeploymentSpec into an Ignition module
-export type { CompileOptions, CompiledModule } from "./compile/compile.js";
-export { compileSpec, buildCreationOrder } from "./compile/compile.js";
+export type { CompileOptions, CompiledModule, UpgradeOptions, UpgradeInitializer } from "./compile/compile.js";
+export { compileSpec, buildCreationOrder, compileUpgrade } from "./compile/compile.js";
 export type { CompileErrorCode } from "./compile/errors.js";
 export { CompileError } from "./compile/errors.js";
 
@@ -33,6 +36,19 @@ export type { DeployOptions, DeployResult } from "./deploy/deploy.js";
 export { deploy } from "./deploy/deploy.js";
 export type { DeployErrorCode } from "./deploy/errors.js";
 export { DeployError } from "./deploy/errors.js";
+
+// Upgradeable proxy implementation-history data model — types + pure helpers
+// only (v1 scope; see deploy/proxyHistory.ts's module doc). NOT wired into
+// any reader/verify package — that is explicit follow-up work.
+export type {
+  ProxyImplementationRecord,
+  ProxyImplementationHistory,
+} from "./deploy/proxyHistory.js";
+export {
+  deriveInitialProxyHistory,
+  deriveProxyHistoriesFromSpec,
+  appendProxyImplementationRecord,
+} from "./deploy/proxyHistory.js";
 
 // Dry-run / plan-only simulation — no chain, no provider, no journal
 export type {

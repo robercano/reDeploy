@@ -26,7 +26,15 @@ export type CompileErrorCode =
    * An internal invariant was violated — e.g. a ref whose target id was not
    * registered as a future (which implies the caller bypassed validateSpec).
    */
-  | "INTERNAL_INVARIANT";
+  | "INTERNAL_INVARIANT"
+  /**
+   * `compileUpgrade()` was called with `kind: "transparent"` but no
+   * `proxyAdminAddress`. Unlike `proxyAdminOwner` on the INITIAL deployment
+   * (validated by `validateSpec`'s "MISSING_PROXY_ADMIN_OWNER"), an upgrade
+   * call is not spec-validated — `compileUpgrade()` enforces this itself,
+   * since silently guessing a ProxyAdmin address would be unsafe.
+   */
+  | "MISSING_PROXY_ADMIN_ADDRESS";
 
 /**
  * Thrown by compileSpec when an unrecoverable condition is detected at

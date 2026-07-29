@@ -6,7 +6,14 @@
  */
 
 import { z } from "zod";
-import type { ContractArg, ContractEntry, DeploymentSpec, LiteralValue } from "./types.js";
+import type {
+  ContractArg,
+  ContractEntry,
+  DeploymentSpec,
+  LiteralValue,
+  UpgradeableConfig,
+  UpgradeableInitializer,
+} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Literal value (recursive JSON-serializable scalar / array)
@@ -149,6 +156,38 @@ export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("k
  */
 export const VALID_CONTRACT_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+// ---------------------------------------------------------------------------
+// Upgradeable proxy configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * `{ function: "<non-empty>", args?: ContractArg[] }`
+ *
+ * Shape validation only. `function` non-emptiness is checked here; whether it
+ * is a VALID Solidity identifier (it flows into on-chain calldata via
+ * `m.encodeFunctionCall`) is a cross-field rule enforced by validate.ts's
+ * `SpecErrorCode` "INVALID_IDENTIFIER" — kept out of this zod layer so
+ * validateSpec can attach a precise, dedicated error code instead of a
+ * generic INVALID_SHAPE one.
+ */
+const upgradeableInitializerSchema: z.ZodType<UpgradeableInitializer> = z.object({
+  function: z.string().min(1, { message: "upgradeable.initializer.function must be a non-empty string" }),
+  args: z.array(contractArgSchema).optional(),
+});
+
+/**
+ * `{ kind: "uups" | "transparent", initializer?: {...}, proxyAdminOwner?: ContractArg }`
+ *
+ * Shape validation only. Cross-field rules (proxyAdminOwner REQUIRED for
+ * "transparent", rejected for "uups"; ref/param resolution inside
+ * initializer.args/proxyAdminOwner) are enforced by validate.ts.
+ */
+export const upgradeableConfigSchema: z.ZodType<UpgradeableConfig> = z.object({
+  kind: z.enum(["uups", "transparent"]),
+  initializer: upgradeableInitializerSchema.optional(),
+  proxyAdminOwner: contractArgSchema.optional(),
+});
+
 export const contractEntrySchema: z.ZodType<ContractEntry> = z.object({
   id: z.string().min(1, { message: "contract entry id must be a non-empty string" }),
   contract: z
@@ -159,6 +198,7 @@ export const contractEntrySchema: z.ZodType<ContractEntry> = z.object({
     }),
   args: z.array(contractArgSchema).optional(),
   after: z.array(z.string().min(1, { message: "after entry must be a non-empty string" })).optional(),
+  upgradeable: upgradeableConfigSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

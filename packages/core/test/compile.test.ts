@@ -4,8 +4,11 @@ import {
   RuntimeValueType,
   type ModuleParameterRuntimeValue,
   type NamedArtifactContractDeploymentFuture,
+  type NamedArtifactContractAtFuture,
+  type EncodeFunctionCallFuture,
+  type ContractCallFuture,
 } from "@nomicfoundation/ignition-core";
-import { compileSpec, CompileError, buildCreationOrder } from "../src/index.js";
+import { compileSpec, compileUpgrade, CompileError, buildCreationOrder } from "../src/index.js";
 import type { DeploymentSpec } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +35,38 @@ function asModuleParameterRuntimeValue(
     throw new Error(`Expected MODULE_PARAMETER runtime value, got ${String(v.type)}`);
   }
   return v;
+}
+
+/** Cast a future to the named-artifact contractAt shape for assertions. */
+function asContractAtFuture(future: unknown): NamedArtifactContractAtFuture<string> {
+  const f = future as NamedArtifactContractAtFuture<string>;
+  if (f.type !== FutureType.NAMED_ARTIFACT_CONTRACT_AT) {
+    throw new Error(`Expected NAMED_ARTIFACT_CONTRACT_AT, got ${f.type}`);
+  }
+  return f;
+}
+
+/** Cast a future to the encode-function-call shape for assertions. */
+function asEncodeFunctionCallFuture(future: unknown): EncodeFunctionCallFuture<string, string> {
+  const f = future as EncodeFunctionCallFuture<string, string>;
+  if (f.type !== FutureType.ENCODE_FUNCTION_CALL) {
+    throw new Error(`Expected ENCODE_FUNCTION_CALL, got ${f.type}`);
+  }
+  return f;
+}
+
+/** Cast a future to the contract-call shape for assertions. */
+function asContractCallFuture(future: unknown): ContractCallFuture<string, string> {
+  const f = future as ContractCallFuture<string, string>;
+  if (f.type !== FutureType.CONTRACT_CALL) {
+    throw new Error(`Expected CONTRACT_CALL, got ${f.type}`);
+  }
+  return f;
+}
+
+/** Find a future by its exact bare (moduleId-stripped) id, e.g. "vault" or "vault_impl". */
+function findFutureByBareId(mod: { futures: Set<{ id: string }> }, bareId: string) {
+  return [...mod.futures].find((f) => f.id.endsWith(`#${bareId}`));
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,5 +1110,466 @@ describe("compileSpec — UNRESOLVED_RESOLVER_ARG error (unresolved ResolverArg)
     // Declaration order is preserved exactly (no reordering forced by a
     // phantom dependency edge).
     expect(ordered.map((e) => e.id)).toEqual(["vault", "registry"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. Upgradeable proxies — UUPS (issue #155)
+// ---------------------------------------------------------------------------
+
+const OWNER_ADDR = "0x0000000000000000000000000000000000000002";
+// Valid EIP-55 checksummed addresses — required by m.contractAt()'s address
+// validation (used in compileUpgrade() below); a non-checksummed / arbitrary
+// hex string is rejected by Ignition at module-construction time.
+const PROXY_ADDR = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+const PROXY_ADMIN_ADDR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+
+describe("compileSpec — upgradeable: uups (no initializer)", () => {
+  const spec: DeploymentSpec = {
+    version: 1,
+    contracts: [{ id: "vault", contract: "Vault", upgradeable: { kind: "uups" } }],
+  };
+
+  it("creates exactly 3 futures (impl, proxy, contractAt)", () => {
+    const mod = compileSpec(spec);
+    expect(mod.futures.size).toBe(3);
+  });
+
+  it("impl future is a NAMED_ARTIFACT_CONTRACT_DEPLOYMENT for the entry's contract", () => {
+    const mod = compileSpec(spec);
+    const impl = asContractFuture(findFutureByBareId(mod, "vault_impl"));
+    expect(impl.contractName).toBe("Vault");
+    expect(impl.constructorArgs).toEqual([]);
+  });
+
+  it("proxy future deploys ERC1967Proxy with [impl, \"0x\"]", () => {
+    const mod = compileSpec(spec);
+    const impl = findFutureByBareId(mod, "vault_impl");
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.contractName).toBe("ERC1967Proxy");
+    expect(proxy.constructorArgs[0]).toBe(impl);
+    expect(proxy.constructorArgs[1]).toBe("0x");
+  });
+
+  it("the entry's own id resolves to a contractAt future at the proxy, with the impl's ABI", () => {
+    const mod = compileSpec(spec);
+    const proxy = findFutureByBareId(mod, "vault_proxy");
+    const handle = asContractAtFuture(findFutureByBareId(mod, "vault"));
+    expect(handle.contractName).toBe("Vault");
+    expect(handle.address).toBe(proxy);
+  });
+});
+
+describe("compileSpec — upgradeable: uups (with initializer)", () => {
+  const spec: DeploymentSpec = {
+    version: 1,
+    contracts: [
+      { id: "registry", contract: "Registry" },
+      {
+        id: "vault",
+        contract: "Vault",
+        upgradeable: {
+          kind: "uups",
+          initializer: {
+            function: "initialize",
+            args: [
+              { kind: "ref", contract: "registry" },
+              { kind: "literal", value: 42 },
+            ],
+          },
+        },
+      },
+    ],
+  };
+
+  it("creates 4 futures (registry, impl, initData, proxy) + the contractAt handle = 5 total", () => {
+    const mod = compileSpec(spec);
+    // registry(1) + vault_impl(1) + vault_initData(1) + vault_proxy(1) + vault handle(1)
+    expect(mod.futures.size).toBe(5);
+  });
+
+  it("encodes the initializer call against the impl future with mapped args", () => {
+    const mod = compileSpec(spec);
+    const impl = findFutureByBareId(mod, "vault_impl");
+    const registryFuture = findFutureByBareId(mod, "registry");
+    const initData = asEncodeFunctionCallFuture(findFutureByBareId(mod, "vault_initData"));
+    expect(initData.contract).toBe(impl);
+    expect(initData.functionName).toBe("initialize");
+    expect(initData.args[0]).toBe(registryFuture);
+    expect(initData.args[1]).toBe(42);
+  });
+
+  it("the proxy's constructorArgs[1] is the initData future (not a literal \"0x\")", () => {
+    const mod = compileSpec(spec);
+    const initData = findFutureByBareId(mod, "vault_initData");
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.constructorArgs[1]).toBe(initData);
+  });
+
+  it("a downstream ref to the upgradeable entry resolves to the proxy handle, not impl/proxy", () => {
+    const specWithConsumer: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        ...spec.contracts,
+        { id: "consumer", contract: "Consumer", args: [{ kind: "ref", contract: "vault" }] },
+      ],
+    };
+    const mod = compileSpec(specWithConsumer);
+    const handle = findFutureByBareId(mod, "vault");
+    const impl = findFutureByBareId(mod, "vault_impl");
+    const proxy = findFutureByBareId(mod, "vault_proxy");
+    const consumer = asContractFuture(findFutureByBareId(mod, "consumer"));
+    expect(consumer.constructorArgs[0]).toBe(handle);
+    expect(consumer.constructorArgs[0]).not.toBe(impl);
+    expect(consumer.constructorArgs[0]).not.toBe(proxy);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. Upgradeable proxies — Transparent
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — upgradeable: transparent", () => {
+  const spec: DeploymentSpec = {
+    version: 1,
+    contracts: [
+      {
+        id: "vault",
+        contract: "Vault",
+        upgradeable: {
+          kind: "transparent",
+          proxyAdminOwner: { kind: "literal", value: OWNER_ADDR },
+          initializer: { function: "initialize" },
+        },
+      },
+    ],
+  };
+
+  it("proxy future deploys TransparentUpgradeableProxy with [impl, proxyAdminOwner, initData]", () => {
+    const mod = compileSpec(spec);
+    const impl = findFutureByBareId(mod, "vault_impl");
+    const initData = findFutureByBareId(mod, "vault_initData");
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.contractName).toBe("TransparentUpgradeableProxy");
+    expect(proxy.constructorArgs[0]).toBe(impl);
+    expect(proxy.constructorArgs[1]).toBe(OWNER_ADDR);
+    expect(proxy.constructorArgs[2]).toBe(initData);
+  });
+
+  it("initData defaults to \"0x\" when initializer has no args", () => {
+    const mod = compileSpec(spec);
+    const initData = asEncodeFunctionCallFuture(findFutureByBareId(mod, "vault_initData"));
+    expect(initData.args).toEqual([]);
+  });
+
+  it("the entry resolves to a contractAt handle at the proxy", () => {
+    const mod = compileSpec(spec);
+    const proxy = findFutureByBareId(mod, "vault_proxy");
+    const handle = asContractAtFuture(findFutureByBareId(mod, "vault"));
+    expect(handle.address).toBe(proxy);
+  });
+
+  it("proxyAdminOwner can itself be a ref (mapped through the same arg-mapping helper)", () => {
+    const specWithRefOwner: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "admin", contract: "Admin" },
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: { kind: "transparent", proxyAdminOwner: { kind: "ref", contract: "admin" } },
+        },
+      ],
+    };
+    const mod = compileSpec(specWithRefOwner);
+    const adminFuture = findFutureByBareId(mod, "admin");
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.constructorArgs[1]).toBe(adminFuture);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. Upgradeable proxies — custom proxy artifact names
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — upgradeable: custom proxyArtifacts override", () => {
+  it("uses a custom uups proxy artifact name when provided", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "vault", contract: "Vault", upgradeable: { kind: "uups" } }],
+    };
+    const mod = compileSpec(spec, { proxyArtifacts: { uups: "MyERC1967Proxy" } });
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.contractName).toBe("MyERC1967Proxy");
+  });
+
+  it("uses a custom transparent proxy artifact name when provided", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "literal", value: OWNER_ADDR },
+          },
+        },
+      ],
+    };
+    const mod = compileSpec(spec, { proxyArtifacts: { transparent: "MyTransparentProxy" } });
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.contractName).toBe("MyTransparentProxy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Upgradeable proxies — ordering via initializer.args / proxyAdminOwner
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — upgradeable: build-time ordering through initializer/proxyAdminOwner refs", () => {
+  it("compiles when initializer.args refs a contract declared LATER in the array", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+          },
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const registryFuture = findFutureByBareId(mod, "registry");
+    const initData = asEncodeFunctionCallFuture(findFutureByBareId(mod, "vault_initData"));
+    expect(initData.args[0]).toBe(registryFuture);
+  });
+
+  it("compiles when proxyAdminOwner refs a contract declared LATER in the array", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: { kind: "transparent", proxyAdminOwner: { kind: "ref", contract: "admin" } },
+        },
+        { id: "admin", contract: "Admin" },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const adminFuture = findFutureByBareId(mod, "admin");
+    const proxy = asContractFuture(findFutureByBareId(mod, "vault_proxy"));
+    expect(proxy.constructorArgs[1]).toBe(adminFuture);
+  });
+
+  it("buildCreationOrder places a proxyAdminOwner ref target before the dependent entry", () => {
+    const entries: DeploymentSpec["contracts"] = [
+      {
+        id: "vault",
+        contract: "Vault",
+        upgradeable: { kind: "transparent", proxyAdminOwner: { kind: "ref", contract: "admin" } },
+      },
+      { id: "admin", contract: "Admin" },
+    ];
+    const ordered = buildCreationOrder(entries);
+    expect(ordered.map((e) => e.id)).toEqual(["admin", "vault"]);
+  });
+
+  it("buildCreationOrder places an initializer.args ref target before the dependent entry", () => {
+    const entries: DeploymentSpec["contracts"] = [
+      {
+        id: "vault",
+        contract: "Vault",
+        upgradeable: {
+          kind: "uups",
+          initializer: { function: "initialize", args: [{ kind: "ref", contract: "registry" }] },
+        },
+      },
+      { id: "registry", contract: "Registry" },
+    ];
+    const ordered = buildCreationOrder(entries);
+    expect(ordered.map((e) => e.id)).toEqual(["registry", "vault"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 19. Upgradeable proxies — backward compatibility
+// ---------------------------------------------------------------------------
+
+describe("compileSpec — upgradeable: non-upgradeable entries are byte-for-byte unaffected", () => {
+  it("an entry with no upgradeable field compiles to exactly one NAMED_ARTIFACT_CONTRACT_DEPLOYMENT future", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [{ id: "token", contract: "Token" }],
+    };
+    const mod = compileSpec(spec);
+    expect(mod.futures.size).toBe(1);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.type).toBe(FutureType.NAMED_ARTIFACT_CONTRACT_DEPLOYMENT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20. compileUpgrade() — the v1 upgrade-flow compiler (issue #155)
+// ---------------------------------------------------------------------------
+
+describe("compileUpgrade — uups", () => {
+  it("defaults moduleId to '<id>Upgrade'", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+    });
+    expect(mod.id).toBe("vault_impl_v2Upgrade");
+  });
+
+  it("respects a custom moduleId", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+      moduleId: "CustomUpgrade",
+    });
+    expect(mod.id).toBe("CustomUpgrade");
+  });
+
+  it("creates the new implementation future under the given id", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      args: ["ctor-arg"],
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+    });
+    const newImpl = asContractFuture(findFutureByBareId(mod, "vault_impl_v2"));
+    expect(newImpl.contractName).toBe("VaultV2");
+    expect(newImpl.constructorArgs[0]).toBe("ctor-arg");
+  });
+
+  it("calls upgradeToAndCall on a contractAt-wrapped proxy, with data \"0x\" when no initializer", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+    });
+    const newImpl = findFutureByBareId(mod, "vault_impl_v2");
+    const proxyAt = asContractAtFuture(findFutureByBareId(mod, "vault_impl_v2_proxyAt"));
+    expect(proxyAt.address).toBe(PROXY_ADDR);
+    const upgradeCall = asContractCallFuture(findFutureByBareId(mod, "vault_impl_v2_upgrade"));
+    expect(upgradeCall.functionName).toBe("upgradeToAndCall");
+    expect(upgradeCall.args[0]).toBe(newImpl);
+    expect(upgradeCall.args[1]).toBe("0x");
+  });
+
+  it("encodes an initializer call and passes it as upgradeToAndCall's data arg", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+      initializer: { function: "reinitialize", args: [2] },
+    });
+    const initData = asEncodeFunctionCallFuture(findFutureByBareId(mod, "vault_impl_v2_initData"));
+    expect(initData.functionName).toBe("reinitialize");
+    expect(initData.args[0]).toBe(2);
+    const upgradeCall = asContractCallFuture(findFutureByBareId(mod, "vault_impl_v2_upgrade"));
+    expect(upgradeCall.args[1]).toBe(initData);
+  });
+
+  it("exports the new implementation future keyed by the given id", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "uups",
+    });
+    const newImpl = findFutureByBareId(mod, "vault_impl_v2");
+    expect(mod.results["vault_impl_v2"]).toBe(newImpl);
+  });
+});
+
+describe("compileSpec — upgradeable: defensive INTERNAL_INVARIANT (validateSpec bypassed)", () => {
+  it("throws CompileError(INTERNAL_INVARIANT) for a transparent entry with no proxyAdminOwner", () => {
+    // validateSpec's MISSING_PROXY_ADMIN_OWNER rejects this in the normal
+    // pipeline — this exercises compileSpec()'s own defensive last-resort
+    // guard for direct callers who bypass validateSpec (compileSpec's
+    // documented contract: it does NOT re-validate).
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "vault", contract: "Vault", upgradeable: { kind: "transparent" } },
+      ],
+    };
+    expect(() => compileSpec(spec)).toThrowError(CompileError);
+    try {
+      compileSpec(spec);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("INTERNAL_INVARIANT");
+      expect((err as CompileError).path).toBe("contracts[id=vault].upgradeable.proxyAdminOwner");
+    }
+  });
+});
+
+describe("compileUpgrade — transparent", () => {
+  it("throws CompileError(MISSING_PROXY_ADMIN_ADDRESS) when proxyAdminAddress is absent", () => {
+    expect(() =>
+      compileUpgrade({
+        id: "vault_impl_v2",
+        contract: "VaultV2",
+        proxyAddress: PROXY_ADDR,
+        kind: "transparent",
+      }),
+    ).toThrowError(CompileError);
+    try {
+      compileUpgrade({
+        id: "vault_impl_v2",
+        contract: "VaultV2",
+        proxyAddress: PROXY_ADDR,
+        kind: "transparent",
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("MISSING_PROXY_ADMIN_ADDRESS");
+    }
+  });
+
+  it("calls ProxyAdmin.upgradeAndCall with [proxyAddress, newImpl, initData]", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "transparent",
+      proxyAdminAddress: PROXY_ADMIN_ADDR,
+    });
+    const newImpl = findFutureByBareId(mod, "vault_impl_v2");
+    const admin = asContractAtFuture(findFutureByBareId(mod, "vault_impl_v2_admin"));
+    expect(admin.contractName).toBe("ProxyAdmin");
+    expect(admin.address).toBe(PROXY_ADMIN_ADDR);
+    const upgradeCall = asContractCallFuture(findFutureByBareId(mod, "vault_impl_v2_upgrade"));
+    expect(upgradeCall.functionName).toBe("upgradeAndCall");
+    expect(upgradeCall.args[0]).toBe(PROXY_ADDR);
+    expect(upgradeCall.args[1]).toBe(newImpl);
+  });
+
+  it("uses a custom proxyAdminArtifact name when provided", () => {
+    const mod = compileUpgrade({
+      id: "vault_impl_v2",
+      contract: "VaultV2",
+      proxyAddress: PROXY_ADDR,
+      kind: "transparent",
+      proxyAdminAddress: PROXY_ADMIN_ADDR,
+      proxyAdminArtifact: "MyProxyAdmin",
+    });
+    const admin = asContractAtFuture(findFutureByBareId(mod, "vault_impl_v2_admin"));
+    expect(admin.contractName).toBe("MyProxyAdmin");
   });
 });
