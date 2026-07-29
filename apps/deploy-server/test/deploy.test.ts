@@ -1268,3 +1268,351 @@ describe("POST /api/deploy — snapshot records the selected network label", () 
     expect(readerMod.buildSnapshot).toHaveBeenCalledWith(expect.objectContaining({ network: "default" }));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Simulate-first interlock (issue #156) — requireSimulate: true
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — simulate-first interlock (requireSimulate)", () => {
+  let tmpDir: string;
+  let journalDir: string;
+  let savedNetworksConfig: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-interlock-test-"));
+    journalDir = path.join(tmpDir, "alpha-journal");
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+  });
+
+  function writeRequireSimulateConfig(): void {
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        networks: {
+          alpha: {
+            rpcUrl: "http://alpha.example.com",
+            deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            deploymentDir: journalDir,
+            requireSimulate: true,
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+  }
+
+  it("refuses to deploy a not-yet-simulated spec: done{success:false, errors:[{code:'SIMULATE_REQUIRED'}]}, core.deploy never called", async () => {
+    writeRequireSimulateConfig();
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0]!["code"]).toBe("SIMULATE_REQUIRED");
+
+    // No deploy must have been attempted — not even provider construction.
+    expect(coreMod.deploy).not.toHaveBeenCalled();
+    expect(coreMod.jsonRpcProvider).not.toHaveBeenCalled();
+  });
+
+  it("allows the deploy to proceed after a successful simulate for the exact same spec", async () => {
+    writeRequireSimulateConfig();
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    // First, a successful simulate for the exact spec on the same network.
+    const simRes = await doRequest(port, "POST", "/api/simulate?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(simRes.statusCode).toBe(200);
+    const simEvents = parseSse(simRes.body);
+    const simDone = simEvents.find((e) => e.event === "done");
+    expect((simDone!.data as Record<string, unknown>)["success"]).toBe(true);
+
+    // Now the deploy for the SAME spec must proceed past the interlock.
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(true);
+
+    expect(coreMod.deploy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a simulate for a DIFFERENT spec does not satisfy the interlock for a not-yet-simulated spec", async () => {
+    writeRequireSimulateConfig();
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const otherSpec = {
+      version: 1,
+      contracts: [{ id: "different", contract: "Different" }],
+    };
+    const simRes = await doRequest(port, "POST", "/api/simulate?network=alpha", JSON.stringify(otherSpec));
+    expect(simRes.statusCode).toBe(200);
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors[0]!["code"]).toBe("SIMULATE_REQUIRED");
+    expect(coreMod.deploy).not.toHaveBeenCalled();
+  });
+
+  it("a spec that is structurally identical but with reordered keys still satisfies the interlock (stable hash)", async () => {
+    writeRequireSimulateConfig();
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const reorderedSpec = {
+      contracts: VALID_SPEC.contracts,
+      version: VALID_SPEC.version,
+    };
+
+    const simRes = await doRequest(port, "POST", "/api/simulate?network=alpha", JSON.stringify(VALID_SPEC));
+    expect(simRes.statusCode).toBe(200);
+
+    const res = await doRequest(
+      port,
+      "POST",
+      "/api/deploy?network=alpha",
+      JSON.stringify(reorderedSpec),
+    );
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(true);
+    expect(coreMod.deploy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not affect deploys when requireSimulate is false", async () => {
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        networks: {
+          alpha: {
+            rpcUrl: "http://alpha.example.com",
+            deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            deploymentDir: journalDir,
+            requireSimulate: false,
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect((doneEvent!.data as Record<string, unknown>)["success"]).toBe(true);
+    expect(coreMod.deploy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not affect deploys when requireSimulate is absent (backward compat)", async () => {
+    const configPath = path.join(tmpDir, "networks.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        networks: {
+          alpha: {
+            rpcUrl: "http://alpha.example.com",
+            deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            deploymentDir: journalDir,
+          },
+        },
+      }),
+      "utf8",
+    );
+    process.env["NETWORKS_CONFIG"] = configPath;
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect((doneEvent!.data as Record<string, unknown>)["success"]).toBe(true);
+    expect(coreMod.deploy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preflight SSE surfacing (issue #156)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/deploy — preflight failure surfacing (issue #156)", () => {
+  it("maps a thrown DeployError(PREFLIGHT_FAILED) into structured done{success:false} errors", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const { DeployError } = await import("@redeploy/core");
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const preflightFailures = [
+      {
+        check: "chainId" as const,
+        expected: "11155111",
+        actual: "1",
+        message:
+          "Expected chain id 11155111 but the RPC reports chain id 1 — refusing to deploy to the wrong network",
+      },
+    ];
+    coreMod.deploy.mockRejectedValueOnce(
+      new DeployError(
+        "PREFLIGHT_FAILED",
+        "Preflight checks failed with 1 failure(s)",
+        undefined,
+        preflightFailures,
+      ),
+    );
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.statusCode).toBe(200);
+
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    expect(doneEvent).toBeDefined();
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toEqual({
+      code: "PREFLIGHT_FAILED",
+      message: preflightFailures[0]!.message,
+      check: "chainId",
+      expected: "11155111",
+      actual: "1",
+    });
+  });
+
+  it("maps multiple preflightFailures into multiple structured errors, one per failed check", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const { DeployError } = await import("@redeploy/core");
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    const preflightFailures = [
+      { check: "chainId" as const, expected: "1", actual: "31337", message: "wrong chain" },
+      { check: "balance" as const, expected: "1000", actual: "0", message: "insufficient balance" },
+    ];
+    coreMod.deploy.mockRejectedValueOnce(
+      new DeployError("PREFLIGHT_FAILED", "Preflight failed", undefined, preflightFailures),
+    );
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    const events = parseSse(res.body);
+    const doneEvent = events.find((e) => e.event === "done");
+    const done = doneEvent!.data as Record<string, unknown>;
+    expect(done["success"]).toBe(false);
+    const errors = done["errors"] as Array<Record<string, unknown>>;
+    expect(errors).toHaveLength(2);
+    expect(errors[0]!["check"]).toBe("chainId");
+    expect(errors[1]!["check"]).toBe("balance");
+  });
+
+  it("passes the network's configured preflight policy through to core.deploy()'s preflight option", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-preflight-config-test-"));
+    const savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+    try {
+      const configPath = path.join(tmpDir, "networks.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          networks: {
+            alpha: {
+              rpcUrl: "http://alpha.example.com",
+              deployerPrivateKey: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              deploymentDir: path.join(tmpDir, "alpha-journal"),
+              preflight: { expectedChainId: 11155111 },
+            },
+          },
+        }),
+        "utf8",
+      );
+      process.env["NETWORKS_CONFIG"] = configPath;
+
+      const coreMod = vi.mocked(await import("@redeploy/core"));
+
+      const res = await doRequest(port, "POST", "/api/deploy?network=alpha", JSON.stringify(VALID_SPEC));
+      expect(res.statusCode).toBe(200);
+
+      expect(coreMod.deploy).toHaveBeenCalledWith(
+        expect.objectContaining({ preflight: { expectedChainId: 11155111 } }),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      if (savedNetworksConfig === undefined) {
+        delete process.env["NETWORKS_CONFIG"];
+      } else {
+        process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+      }
+    }
+  });
+
+  it("omits the preflight option entirely when the network has no configured preflight policy", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+
+    const callArgs = coreMod.deploy.mock.calls[0]![0] as Record<string, unknown>;
+    expect(callArgs["preflight"]).toBeUndefined();
+  });
+
+  it("SECURITY: preflight error fields (chain id / wei / address) never leak the deployer private key or rpcUrl", async () => {
+    const SENTINEL_KEY =
+      "0xfacefacefacefacefacefacefacefacefacefacefacefacefacefacefaceface";
+    const SENTINEL_RPC = "http://secret-rpc.preflight-test.example.com";
+    process.env["DEPLOYER_PRIVATE_KEY"] = SENTINEL_KEY;
+    process.env["RPC_URL"] = SENTINEL_RPC;
+
+    const { DeployError } = await import("@redeploy/core");
+    const coreMod = vi.mocked(await import("@redeploy/core"));
+
+    coreMod.deploy.mockRejectedValueOnce(
+      new DeployError("PREFLIGHT_FAILED", "Preflight failed", undefined, [
+        {
+          check: "balance",
+          expected: "1000000000000000000",
+          actual: "0",
+          message: "Deployer account 0xDeployer0000000000000000000000000000000001 has balance 0 wei",
+        },
+      ]),
+    );
+
+    const res = await doRequest(port, "POST", "/api/deploy", JSON.stringify(VALID_SPEC));
+    expect(res.body).not.toContain(SENTINEL_KEY);
+    expect(res.body).not.toContain(SENTINEL_RPC);
+  });
+});

@@ -241,6 +241,142 @@ describe("loadNetworksRegistry — NETWORKS_CONFIG file", () => {
 });
 
 // ---------------------------------------------------------------------------
+// requireSimulate / preflight (issue #156)
+// ---------------------------------------------------------------------------
+
+describe("loadNetworksRegistry — requireSimulate (issue #156)", () => {
+  it("parses requireSimulate: true", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com", requireSimulate: true } },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.requireSimulate).toBe(true);
+  });
+
+  it("parses requireSimulate: false", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com", requireSimulate: false } },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.requireSimulate).toBe(false);
+  });
+
+  it("backward compat: omitting requireSimulate leaves it undefined", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com" } },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.requireSimulate).toBeUndefined();
+  });
+
+  it("the legacy synthesized 'default' network never has requireSimulate set", () => {
+    const registry = loadNetworksRegistry({ env: baseEnv() });
+    expect(registry.networks.get("default")?.requireSimulate).toBeUndefined();
+  });
+
+  it("throws NetworksConfigError for a non-boolean requireSimulate", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com", requireSimulate: "yes" } },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+});
+
+describe("loadNetworksRegistry — preflight policy (issue #156)", () => {
+  it("parses a full preflight policy object", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        alpha: {
+          rpcUrl: "http://alpha.example.com",
+          preflight: {
+            expectedChainId: 11155111,
+            minBalanceWei: "1000000000000000000",
+            maxGasPriceWei: "50000000000",
+          },
+        },
+      },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.preflight).toEqual({
+      expectedChainId: 11155111,
+      minBalanceWei: "1000000000000000000",
+      maxGasPriceWei: "50000000000",
+    });
+  });
+
+  it("parses a partial preflight policy (only one field set)", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        alpha: { rpcUrl: "http://alpha.example.com", preflight: { expectedChainId: 1 } },
+      },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.preflight).toEqual({ expectedChainId: 1 });
+  });
+
+  it("backward compat: omitting preflight leaves it undefined", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com" } },
+    });
+    const registry = loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) });
+    expect(registry.networks.get("alpha")?.preflight).toBeUndefined();
+  });
+
+  it("throws NetworksConfigError when preflight is not an object", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com", preflight: "nope" } },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+
+  it("throws NetworksConfigError when preflight is an array", () => {
+    const configPath = writeConfigFile({
+      networks: { alpha: { rpcUrl: "http://alpha.example.com", preflight: [] } },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+
+  it("throws NetworksConfigError for a non-numeric preflight.expectedChainId", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        alpha: { rpcUrl: "http://alpha.example.com", preflight: { expectedChainId: "1" } },
+      },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+
+  it("throws NetworksConfigError for a non-string preflight.minBalanceWei", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        alpha: { rpcUrl: "http://alpha.example.com", preflight: { minBalanceWei: 123 } },
+      },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+
+  it("throws NetworksConfigError for a non-string preflight.maxGasPriceWei", () => {
+    const configPath = writeConfigFile({
+      networks: {
+        alpha: { rpcUrl: "http://alpha.example.com", preflight: { maxGasPriceWei: 123 } },
+      },
+    });
+    expect(() => loadNetworksRegistry({ env: baseEnv({ NETWORKS_CONFIG: configPath }) })).toThrow(
+      NetworksConfigError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // loadNetworksRegistry — schema validation errors
 // ---------------------------------------------------------------------------
 
