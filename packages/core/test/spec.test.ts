@@ -1293,3 +1293,166 @@ describe("validateSpec — upgradeable: schema-level shape checks", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// PREFLIGHT policy — declarative pre-broadcast safety checks (issue #156)
+// ---------------------------------------------------------------------------
+
+describe("validateSpec — preflight: happy paths", () => {
+  it("accepts a spec with no preflight block at all (backward compatible)", () => {
+    const result = validateSpec(happySpec);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts an empty preflight object", () => {
+    const result = validateSpec({ version: 1, contracts: [], preflight: {} });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a preflight block with only expectedChainId set", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { expectedChainId: 1 },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a preflight block with only minBalanceWei set", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: "1000000000000000000" },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a preflight block with only maxGasPriceWei set", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { maxGasPriceWei: "50000000000" },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a preflight block with all three fields set", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "registry", contract: "Registry" }],
+      preflight: {
+        expectedChainId: 1,
+        minBalanceWei: "1000000000000000000",
+        maxGasPriceWei: "50000000000",
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts minBalanceWei / maxGasPriceWei of "0" (boundary — zero is a valid non-negative bigint string)', () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: "0", maxGasPriceWei: "0" },
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — preflight: INVALID_SHAPE rejections", () => {
+  it("rejects a non-positive expectedChainId (zero)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { expectedChainId: 0 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a negative expectedChainId", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { expectedChainId: -1 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a non-integer expectedChainId", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { expectedChainId: 1.5 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a minBalanceWei that is not a decimal digit string (hex-prefixed)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: "0x10" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a minBalanceWei with a leading zero (e.g. '007')", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: "007" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a negative minBalanceWei string", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: "-1" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a maxGasPriceWei that is not numeric at all", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { maxGasPriceWei: "not-a-number" },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a preflight value where minBalanceWei is a number instead of a string", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [],
+      preflight: { minBalanceWei: 1000000000000000000 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+});

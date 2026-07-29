@@ -12,6 +12,7 @@ export type {
   DeploymentSpec,
   UpgradeableConfig,
   UpgradeableInitializer,
+  PreflightPolicy,
 } from "./spec/types.js";
 
 export {
@@ -20,6 +21,7 @@ export {
   deploymentSpecSchema,
   resolverArgSchema,
   upgradeableConfigSchema,
+  preflightPolicySchema,
 } from "./spec/schema.js";
 
 export type { SpecError, SpecErrorCode, ValidateResult } from "./spec/validate.js";
@@ -36,6 +38,13 @@ export type { DeployOptions, DeployResult } from "./deploy/deploy.js";
 export { deploy } from "./deploy/deploy.js";
 export type { DeployErrorCode } from "./deploy/errors.js";
 export { DeployError } from "./deploy/errors.js";
+
+// PREFLIGHT phase — declarative pre-broadcast safety checks (chain id,
+// deployer balance, gas price ceiling), run BEFORE any transaction is
+// broadcast. See deploy/preflight.ts for the full design; DeployOptions.preflight
+// and DeploymentSpec.preflight (spec/types.js) feed the effective merged policy.
+export type { PreflightFailure, PreflightCheck } from "./deploy/preflight.js";
+export { runPreflight } from "./deploy/preflight.js";
 
 // Upgradeable proxy implementation-history data model — types + pure helpers
 // only (v1 scope; see deploy/proxyHistory.ts's module doc). NOT wired into
