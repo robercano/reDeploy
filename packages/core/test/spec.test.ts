@@ -911,6 +911,215 @@ describe("validateSpec — ResolverArg shape rejection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// CrossRefArg — cross-chain dependency refs (issue #159)
+// ---------------------------------------------------------------------------
+//
+// crossRef is shape-only at this layer: `network`/`contract` reference a
+// DIFFERENT network's deployment entirely, so validateSpec must NOT check
+// `contract` against this spec's own id set (no MISSING_REF/SELF_REFERENCE),
+// and must NOT contribute a cycle/build-order edge (see detectCycles below).
+// Real resolution happens at deploy time (resolve/crossRef.ts).
+
+describe("validateSpec — CrossRefArg happy path", () => {
+  it("accepts a crossRef arg", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a crossRef whose contract id happens to equal the entry's own id (not a SELF_REFERENCE — different network)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "vault" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a crossRef whose contract id does not exist anywhere in this spec (not a MISSING_REF — different network)", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "totallyUnknownElsewhere" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a crossRef arg inside upgradeable.initializer.args", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "uups",
+            initializer: {
+              function: "initialize",
+              args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+            },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a crossRef arg as upgradeable.proxyAdminOwner", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          upgradeable: {
+            kind: "transparent",
+            proxyAdminOwner: { kind: "crossRef", network: "mainnet", contract: "registry" },
+          },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts a mix of literal, ref, param, expr, resolver, and crossRef args in the same contract", () => {
+    const result = validateSpec({
+      version: 1,
+      parameters: { threshold: 3 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "Vault Name" },
+            { kind: "param", name: "threshold" },
+            { kind: "expr", expression: "1n + 1n" },
+            { kind: "resolver", name: "readOracle" },
+            { kind: "crossRef", network: "mainnet", contract: "registry" },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not require the crossRef network to be declared anywhere in the spec", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "a",
+          contract: "A",
+          args: [{ kind: "crossRef", network: "notDeclaredAnywhere", contract: "b" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateSpec — CrossRefArg shape rejection", () => {
+  it("rejects a crossRef arg with an empty network", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "crossRef", network: "", contract: "b" }] },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a crossRef arg with an empty contract", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "crossRef", network: "mainnet", contract: "" }] },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.code === "INVALID_SHAPE")).toBe(true);
+    }
+  });
+
+  it("rejects a crossRef arg missing the network field", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "crossRef", contract: "b" }] }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a crossRef arg missing the contract field", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [{ id: "a", contract: "A", args: [{ kind: "crossRef", network: "mainnet" }] }],
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("validateSpec — CrossRefArg does not contribute build-order/cycle edges", () => {
+  it("a spec whose only 'cyclic-looking' link is via crossRef does not report CYCLE", () => {
+    // If crossRef were (incorrectly) treated like a ref, "a" -> "b" -> "a"
+    // would be flagged as a cycle. It must not be, since the crossRef target
+    // lives on a different network entirely.
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        { id: "a", contract: "A", args: [{ kind: "ref", contract: "b" }] },
+        { id: "b", contract: "B", args: [{ kind: "crossRef", network: "mainnet", contract: "a" }] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("a crossRef referencing an unknown id anywhere never produces MISSING_REF or SELF_REFERENCE", () => {
+    const result = validateSpec({
+      version: 1,
+      contracts: [
+        {
+          id: "onlyEntry",
+          contract: "Only",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "onlyEntry" }],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Sanity: confirm no errors were silently swallowed by checking the
+      // spec round-trips as fully valid with the crossRef arg intact.
+      expect(result.spec.contracts[0].args).toEqual([
+        { kind: "crossRef", network: "mainnet", contract: "onlyEntry" },
+      ]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Upgradeable proxies (issue #155)
 // ---------------------------------------------------------------------------
 

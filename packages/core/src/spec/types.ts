@@ -123,11 +123,67 @@ export interface ResolverArg {
 }
 
 /**
- * A constructor argument for a contract: a ref to another contract, a literal
- * value, a named parameter, a computed expression, or a typed resolver
- * escape-hatch.
+ * A reference to a contract deployed on a DIFFERENT network than the one this
+ * spec is being deployed to.
+ *
+ * Unlike `RefArg` (which references a sibling entry in THIS spec/run and is
+ * resolved by Ignition into a real build-time future dependency), a
+ * `CrossRefArg` names a `network` (an opaque string — core has no network
+ * registry; see `resolve/crossRef.ts`'s `ResolveCrossRefOptions.journals`,
+ * which the CALLER injects, typically backed by a project's own
+ * network-to-deployment-directory mapping such as
+ * `@redeploy/deploy-server`'s `NetworksRegistry`) and a `contract` id that
+ * must already be deployed and journaled on THAT network.
+ *
+ * Resolution happens at deploy time, BEFORE compilation, via
+ * `resolveCrossRefArgs()` (`resolve/crossRef.ts`): the target network's
+ * Ignition journal is read (using the SAME journal primitive `deploy()` uses
+ * for its own deploymentDir — see `resolve/journal.ts`) and the arg is
+ * replaced with a concrete `{ kind: "literal", value: <address> }`. A
+ * compiled spec must NEVER contain a `crossRef` arg — `compileSpec()` throws
+ * `CompileError("UNRESOLVED_CROSS_REF_ARG")` if it ever sees one (mirrors the
+ * `ResolverArg` guard).
+ *
+ * SCOPE BOUNDARY (v1): the referenced network's deployment must already be
+ * COMPLETE before this spec is deployed. There is no cross-chain
+ * orchestrator, no automatic ordering across networks, and no attempt to
+ * "wait" for the other network — sequencing multi-network deployments is
+ * entirely the operator's responsibility. `crossRef` args also contribute NO
+ * build-order/cycle-detection edges (`validate.ts`'s `detectCycles` and
+ * `compile.ts`'s `buildCreationOrder`) since the target lives outside this
+ * spec's own dependency graph entirely — checking it here would be
+ * meaningless (and cross-spec cycles are not a concept this library models).
+ *
+ * @example
+ * ```ts
+ * { kind: "crossRef", network: "mainnet", contract: "registry" }
+ * ```
  */
-export type ContractArg = RefArg | LiteralArg | ParamArg | ExprArg | ResolverArg;
+export interface CrossRefArg {
+  readonly kind: "crossRef";
+  /**
+   * The name of the OTHER network the referenced contract was deployed to.
+   * Opaque to core — resolved against `ResolveCrossRefOptions.journals`
+   * (resolve/crossRef.ts), which the caller injects.
+   */
+  readonly network: string;
+  /** The `id` of the contract, as deployed on `network`. */
+  readonly contract: string;
+}
+
+/**
+ * A constructor argument for a contract: a ref to another contract, a literal
+ * value, a named parameter, a computed expression, a typed resolver
+ * escape-hatch, or a cross-chain reference to a contract deployed on a
+ * different network.
+ */
+export type ContractArg =
+  | RefArg
+  | LiteralArg
+  | ParamArg
+  | ExprArg
+  | ResolverArg
+  | CrossRefArg;
 
 /**
  * Configuration for an upgrade-time "initializer" call — the function invoked

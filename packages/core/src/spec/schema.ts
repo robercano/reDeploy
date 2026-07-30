@@ -136,6 +136,21 @@ export const resolverArgSchema = z.object({
 });
 
 /**
+ * `{ kind: "crossRef", network: "<non-empty network name>", contract: "<non-empty id>" }`
+ *
+ * Shape validation only — both `network` and `contract` are opaque strings to
+ * this layer. `network` resolution against an injected journals map, and
+ * whether `contract` was actually deployed there, are checked at deploy time
+ * by `resolveCrossRefArgs()` (resolve/crossRef.ts) — see `CrossRefArg`'s doc
+ * comment in spec/types.ts for the full design.
+ */
+export const crossRefArgSchema = z.object({
+  kind: z.literal("crossRef"),
+  network: z.string().min(1, { message: "crossRef.network must be a non-empty string" }),
+  contract: z.string().min(1, { message: "crossRef.contract must be a non-empty string" }),
+});
+
+/**
  * ContractArg discriminated union.
  * Unknown `kind` values produce a clear parse error.
  */
@@ -145,6 +160,7 @@ export const contractArgSchema: z.ZodType<ContractArg> = z.discriminatedUnion("k
   paramArgSchema,
   exprArgSchema,
   resolverArgSchema,
+  crossRefArgSchema,
 ]);
 
 // ---------------------------------------------------------------------------
