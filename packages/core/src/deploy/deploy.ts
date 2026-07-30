@@ -15,30 +15,34 @@
  *
  * This module's responsibility is:
  *   1. Validate the spec (fail fast with a typed DeployError).
- *   2. Resolve `{ kind: "resolver" }` args against the injected
+ *   2. Resolve `{ kind: "crossRef" }` args (cross-chain dependency refs,
+ *      issue #159) against the injected `DeployOptions.crossNetworkJournals`
+ *      map — an async pre-pass that reads ANOTHER network's journal and
+ *      runs BEFORE compilation (see resolve/crossRef.ts for the full design
+ *      and v1 scope boundary). This is a no-op (skipped entirely) for specs
+ *      that don't use crossRef args.
+ *   3. Resolve `{ kind: "resolver" }` args against the injected
  *      `DeployOptions.resolvers` registry — an async pre-pass that runs
- *      BEFORE compilation (see resolve/resolveSpec.ts and resolve/registry.ts
- *      for the full Layer 2 "typed resolver escape-hatch" design). This is a
- *      no-op (skipped entirely) for specs that don't use resolver args.
- *   3. Compile the (now fully-resolved) spec into an Ignition module.
- *   4. Run the PREFLIGHT phase (see deploy/preflight.ts): the effective
+ *      AFTER crossRef resolution (step 2) and BEFORE compilation (see
+ *      resolve/resolveSpec.ts and resolve/registry.ts for the full Layer 2
+ *      "typed resolver escape-hatch" design). This is a no-op (skipped
+ *      entirely) for specs that don't use resolver args.
+ *   4. Compile the (now fully-resolved) spec into an Ignition module.
+ *   5. Run the PREFLIGHT phase (see deploy/preflight.ts): the effective
  *      policy — a per-field merge of `spec.preflight` and
  *      `DeployOptions.preflight` — is checked against the live RPC/account
  *      BEFORE any transaction is broadcast. A failing check throws a typed
  *      `DeployError("PREFLIGHT_FAILED", ...)`. Skipped entirely (zero extra
  *      RPC calls) when the effective policy has no fields set — the common
  *      case — so deploy() has zero extra cost for callers who don't opt in.
- *   5. Thread `deploymentDir` through to Ignition's `deploy()` so the journal
+ *   6. Thread `deploymentDir` through to Ignition's `deploy()` so the journal
  *      persists across calls — do NOT reinvent journaling here.
- *   6. Wrap the raw DeploymentResult with enough accessors to let callers
+ *   7. Wrap the raw DeploymentResult with enough accessors to let callers
  *      check success and read deployed addresses.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import {
   deploy as ignitionDeploy,
-  status as ignitionStatus,
   DeploymentResultType,
 } from "@nomicfoundation/ignition-core";
 import type {
@@ -58,6 +62,10 @@ import {
   specHasResolverArgs,
 } from "../resolve/resolveSpec.js";
 import { ResolveError } from "../resolve/errors.js";
+import { loadAddressesFromJournal, stripModulePrefix } from "../resolve/journal.js";
+import type { CrossNetworkJournal } from "../resolve/crossRef.js";
+import { resolveCrossRefArgs, specHasCrossRefArgs } from "../resolve/crossRef.js";
+import { CrossRefError } from "../resolve/crossRefErrors.js";
 import type { PreflightPolicy } from "./preflight.js";
 import { isEmptyPreflightPolicy, mergePreflightPolicies, runPreflight } from "./preflight.js";
 
@@ -129,6 +137,25 @@ export interface DeployOptions {
    */
   resolvers?: ResolverRegistry;
   /**
+   * Injected map of network name -> journal location, for resolving
+   * `{ kind: "crossRef" }` args (cross-chain dependency refs — see
+   * spec/types.ts's CrossRefArg). Optional: specs with no crossRef args never
+   * touch this option. Every network name referenced by a `{ kind: "crossRef" }`
+   * arg anywhere in `spec.contracts` must appear as a key here, or deploy()
+   * throws `DeployError("CROSS_REF_ERROR")` before any compilation or
+   * on-chain activity happens.
+   *
+   * Core has NO network registry of its own (single-network spec, single
+   * `deploymentDir` per call) — this map is entirely caller-supplied. A
+   * typical caller (e.g. `@redeploy/deploy-server`) derives it from its own
+   * network config (mapping network name -> that network's deployment
+   * directory) before calling deploy(). See resolve/crossRef.ts for the full
+   * `resolveCrossRefArgs`/`CrossNetworkJournal` contract and the v1 scope
+   * boundary (the referenced network's deployment must already be COMPLETE
+   * — no cross-chain orchestrator, no automatic ordering across networks).
+   */
+  crossNetworkJournals?: Record<string, CrossNetworkJournal>;
+  /**
    * Per-call PREFLIGHT policy override. The EFFECTIVE policy used by this
    * `deploy()` call is a per-field merge of `spec.preflight` (the
    * declarative base) and this value — fields set here win over the spec's,
@@ -173,49 +200,6 @@ export interface DeployResult {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers — resolver pre-resolution pass plumbing
-// ---------------------------------------------------------------------------
-
-/**
- * Strips Ignition's "<moduleId>#" future-id prefix so callers can index by
- * their spec entry id. Shared between the post-deploy address extraction
- * (step 5 below) and the pre-deploy journal read for
- * `ResolverContext.resolvedAddresses` (step 2 below) so both paths agree on
- * the exact same id shape.
- */
-function stripModulePrefix(key: string, moduleId: string): string {
-  const prefix = `${moduleId}#`;
-  return key.startsWith(prefix) ? key.slice(prefix.length) : key;
-}
-
-/**
- * Best-effort read of addresses already deployed in a PREVIOUS run against
- * `deploymentDir`, for `ResolverContext.resolvedAddresses`. Returns an empty
- * object for a fresh deployment (no journal yet) — that is the documented v1
- * behavior (see resolve/registry.ts's scope-boundary note), not an error.
- *
- * We check for `journal.jsonl`'s existence before calling Ignition's
- * `status()` because `status()` throws an `IgnitionError` for a
- * `deploymentDir` with no journal, and a fresh-deploy resolver run should not
- * depend on parsing/matching that error shape.
- */
-async function loadResolvedAddressesFromJournal(
-  deploymentDir: string,
-  moduleId: string,
-): Promise<Record<string, string>> {
-  const journalPath = join(deploymentDir, "journal.jsonl");
-  if (!existsSync(journalPath)) {
-    return {};
-  }
-  const statusResult = await ignitionStatus(deploymentDir);
-  const resolvedAddresses: Record<string, string> = {};
-  for (const [key, contract] of Object.entries(statusResult.contracts)) {
-    resolvedAddresses[stripModulePrefix(key, moduleId)] = contract.address;
-  }
-  return resolvedAddresses;
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -244,6 +228,10 @@ async function loadResolvedAddressesFromJournal(
  * @throws DeployError with code "RESOLVER_ERROR" if a resolver invocation
  *   fails, or a spec parameter cannot be coerced to the bigint shape
  *   `ResolverContext.params` requires.
+ * @throws DeployError with code "CROSS_REF_ERROR" if a `{ kind: "crossRef" }`
+ *   arg names a network absent from `DeployOptions.crossNetworkJournals`, or
+ *   references a contract id not yet deployed on that network. See
+ *   resolve/crossRef.ts.
  * @throws DeployError with code "COMPILE_ERROR" if spec compilation fails.
  * @throws DeployError with code "PREFLIGHT_FAILED" if the effective PREFLIGHT
  *   policy fails one or more checks. Thrown BEFORE any on-chain transaction
@@ -276,7 +264,40 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     );
   }
 
-  // --- 2. Resolve `resolver` args (Layer 2 typed escape-hatch) ----------------
+  const effectiveModuleId = moduleId ?? "Deployment";
+  let specForCompile: DeploymentSpec = validateResult.spec;
+
+  // --- 2. Resolve `crossRef` args (cross-chain dependency refs, issue #159) ---
+  //
+  // MUST run before compileSpec() — Ignition's builder has no concept of
+  // crossRef args; by the time compileSpec() sees the spec, every crossRef
+  // arg must already be a concrete literal. Runs BEFORE the resolver
+  // pre-resolution pass below (step 3): both are pre-compile literal
+  // substitutions, ordered crossRef -> resolver. See resolve/crossRef.ts for
+  // the full design and v1 scope boundary (no cross-chain orchestrator; the
+  // referenced network's deployment must already be complete).
+  //
+  // Skipped entirely (no journal read, no journals-map lookup) when the spec
+  // has no crossRef args — the common case — so deploy() has zero extra cost
+  // for specs that don't use this feature.
+  if (specHasCrossRefArgs(specForCompile)) {
+    try {
+      specForCompile = await resolveCrossRefArgs(specForCompile, {
+        journals: options.crossNetworkJournals ?? {},
+      });
+    } catch (err) {
+      if (err instanceof CrossRefError) {
+        throw new DeployError("CROSS_REF_ERROR", err.message);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new DeployError(
+        "CROSS_REF_ERROR",
+        `Failed to resolve DeploymentSpec crossRef args: ${msg}`,
+      );
+    }
+  }
+
+  // --- 3. Resolve `resolver` args (Layer 2 typed escape-hatch) ----------------
   //
   // MUST run before compileSpec() — Ignition's builder has no concept of
   // resolver args; by the time compileSpec() sees the spec, every resolver
@@ -286,11 +307,9 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
   // Skipped entirely (no journal read, no param build, no registry lookup)
   // when the spec has no resolver args — the common case — so deploy() has
   // zero extra cost for specs that don't use this feature.
-  const effectiveModuleId = moduleId ?? "Deployment";
-  let specForCompile: DeploymentSpec = validateResult.spec;
   if (specHasResolverArgs(specForCompile)) {
     try {
-      const resolvedAddresses = await loadResolvedAddressesFromJournal(
+      const resolvedAddresses = await loadAddressesFromJournal(
         deploymentDir,
         effectiveModuleId,
       );
@@ -320,7 +339,7 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     }
   }
 
-  // --- 3. Compile spec into an Ignition module --------------------------------
+  // --- 4. Compile spec into an Ignition module --------------------------------
   let ignitionModule;
   try {
     ignitionModule = compileSpec(specForCompile, { moduleId });
@@ -333,7 +352,7 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     );
   }
 
-  // --- 4. PREFLIGHT phase — pre-broadcast safety checks -----------------------
+  // --- 5. PREFLIGHT phase — pre-broadcast safety checks -----------------------
   //
   // Runs AFTER spec validation/compile but STRICTLY BEFORE ignitionDeploy()
   // below, so a failing check aborts before any transaction is broadcast. The
@@ -361,7 +380,7 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     }
   }
 
-  // --- 5. Run Ignition deploy — idempotency/resume live here ------------------
+  // --- 6. Run Ignition deploy — idempotency/resume live here ------------------
   //
   // Ignition's deploy() creates (or reads) a journal at
   // `<deploymentDir>/journal.jsonl`. Futures already recorded as complete are
@@ -379,7 +398,7 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     defaultSender,
   });
 
-  // --- 6. Build our result wrapper -------------------------------------------
+  // --- 7. Build our result wrapper -------------------------------------------
   const success = ignitionResult.type === DeploymentResultType.SUCCESSFUL_DEPLOYMENT;
 
   const deployedAddresses: Record<string, string> = {};

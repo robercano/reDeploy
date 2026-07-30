@@ -108,6 +108,21 @@ export interface PlannedStep {
    */
   readonly dependsOn: string[];
   /**
+   * Cross-chain dependency refs declared anywhere on this entry (constructor
+   * `args`, `upgradeable.initializer.args`, `upgradeable.proxyAdminOwner`) —
+   * one `{ network, contract }` pair per `{ kind: "crossRef" }` arg found, in
+   * the same left-to-right order those args were collected for `dependsOn`
+   * below (args, then upgradeable). Surfaced as a DISTINCT field from
+   * `dependsOn` because a crossRef targets a contract on a DIFFERENT network
+   * entirely — it is never a same-run build/deploy-order dependency (see
+   * CrossRefArg's doc comment in spec/types.ts for the full v1 scope
+   * boundary). Undefined when the entry declares no crossRef args.
+   *
+   * Rendering these as distinct (e.g. cross-network) edges in a visual plan
+   * is a studio follow-up — this field only surfaces the data plan-only.
+   */
+  readonly crossRefs?: readonly { readonly network: string; readonly contract: string }[];
+  /**
    * Present iff this entry declares `ContractEntry.upgradeable` — surfaces
    * the proxy shape WITHOUT compiling a real Ignition module (this stays a
    * byte-for-byte-compatible superset: entries with no `upgradeable` produce
@@ -214,17 +229,32 @@ export function simulate(spec: unknown): SimulateResult {
       }
     };
 
+    // crossRef args are collected SEPARATELY from dependsOn — see
+    // PlannedStep.crossRefs's doc comment. Not deduplicated (unlike
+    // dependsOn): the same {network, contract} pair could legitimately be
+    // referenced from multiple positions (e.g. two different constructor
+    // args), and each occurrence is a distinct plan-relevant fact.
+    const crossRefs: { network: string; contract: string }[] = [];
+    const addCrossRefDep = (arg: ContractArg): void => {
+      if (arg.kind === "crossRef") {
+        crossRefs.push({ network: arg.network, contract: arg.contract });
+      }
+    };
+
     for (const arg of entry.args ?? []) {
       addRefDep(arg);
+      addCrossRefDep(arg);
     }
     // upgradeable refs participate in dependsOn identically to constructor
     // args — see compile.ts's buildCreationOrder (same treatment applied
     // there for real Ignition dependency edges).
     for (const arg of entry.upgradeable?.initializer?.args ?? []) {
       addRefDep(arg);
+      addCrossRefDep(arg);
     }
     if (entry.upgradeable?.proxyAdminOwner !== undefined) {
       addRefDep(entry.upgradeable.proxyAdminOwner);
+      addCrossRefDep(entry.upgradeable.proxyAdminOwner);
     }
     for (const afterId of entry.after ?? []) {
       if (!seenDeps.has(afterId)) {
@@ -239,6 +269,7 @@ export function simulate(spec: unknown): SimulateResult {
       ...(entry.args !== undefined ? { args: entry.args } : {}),
       ...(entry.after !== undefined ? { after: entry.after } : {}),
       dependsOn,
+      ...(crossRefs.length > 0 ? { crossRefs } : {}),
       ...(entry.upgradeable !== undefined
         ? {
             upgradeable: {

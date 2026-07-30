@@ -600,6 +600,128 @@ describe("simulate — ResolverArg pass-through", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 12. CrossRefArg — PlannedStep.crossRefs (issue #159)
+// ---------------------------------------------------------------------------
+//
+// simulate() is validate + topo-sort only — a crossRef arg is surfaced in a
+// DISTINCT `crossRefs` field (not `dependsOn`), since the referenced contract
+// lives on a different network entirely and is never a same-run build/deploy
+// order dependency.
+
+describe("simulate — CrossRefArg surfacing", () => {
+  it("populates PlannedStep.crossRefs from a constructor crossRef arg", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    expect(steps[0].crossRefs).toEqual([{ network: "mainnet", contract: "registry" }]);
+  });
+
+  it("does not add a dependsOn entry for a crossRef arg", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    expect(steps[0].dependsOn).toEqual([]);
+  });
+
+  it("omits `crossRefs` entirely for an entry with no crossRef args (byte-for-byte compatible)", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [{ id: "token", contract: "Token" }],
+    });
+    const steps = assertOk(result);
+    expect(steps[0]).not.toHaveProperty("crossRefs");
+  });
+
+  it("collects multiple crossRef args across args/initializer.args/proxyAdminOwner", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+          upgradeable: {
+            kind: "transparent",
+            initializer: {
+              function: "initialize",
+              args: [{ kind: "crossRef", network: "polygon", contract: "token" }],
+            },
+            proxyAdminOwner: { kind: "crossRef", network: "arbitrum", contract: "admin" },
+          },
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    expect(steps[0].crossRefs).toEqual([
+      { network: "mainnet", contract: "registry" },
+      { network: "polygon", contract: "token" },
+      { network: "arbitrum", contract: "admin" },
+    ]);
+    // None of these contribute a same-run dependency edge.
+    expect(steps[0].dependsOn).toEqual([]);
+  });
+
+  it("mixes a crossRef arg with ref/literal/param/expr/resolver args in the same step", () => {
+    const result = simulate({
+      version: 1,
+      parameters: { threshold: 1 },
+      contracts: [
+        { id: "registry", contract: "Registry" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "registry" },
+            { kind: "literal", value: "Vault Name" },
+            { kind: "param", name: "threshold" },
+            { kind: "expr", expression: "1n + 1n" },
+            { kind: "resolver", name: "readOracle" },
+            { kind: "crossRef", network: "mainnet", contract: "registry" },
+          ],
+        },
+      ],
+    });
+    const steps = assertOk(result);
+    const vault = steps.find((s) => s.id === "vault")!;
+    expect(vault.args).toHaveLength(6);
+    expect(vault.crossRefs).toEqual([{ network: "mainnet", contract: "registry" }]);
+    // Only the ref contributes a dependsOn edge — crossRef does not.
+    expect(vault.dependsOn).toEqual(["registry"]);
+  });
+
+  it("never touches a chain/journal — stays synchronous and side-effect-free", () => {
+    const result = simulate({
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+      ],
+    });
+    expect(result).not.toBeInstanceOf(Promise);
+    expect(assertOk(result)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Upgradeable proxies — PlannedStep.upgradeable marker (issue #155)
 // ---------------------------------------------------------------------------
 

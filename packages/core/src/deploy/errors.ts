@@ -38,6 +38,17 @@ export type DeployErrorCode =
    */
   | "RESOLVER_ERROR"
   /**
+   * A `{ kind: "crossRef" }` arg named a network absent from
+   * `DeployOptions.crossNetworkJournals`, or referenced a contract id not
+   * present in that network's journal (either the journal doesn't exist yet
+   * or the id was never deployed there — deploy that network first). See
+   * resolve/crossRef.ts for the full CrossRefError/CrossRefErrorCode detail
+   * (CrossRefError.code distinguishes "CROSS_REF_UNKNOWN_NETWORK" from
+   * "CROSS_REF_NOT_DEPLOYED", but both re-wrap to this single DeployError
+   * code — check `err.message` for which one occurred).
+   */
+  | "CROSS_REF_ERROR"
+  /**
    * The effective PREFLIGHT policy (per-field merge of
    * `DeploymentSpec.preflight` and `DeployOptions.preflight`) failed one or
    * more checks — wrong chain id, insufficient deployer balance, or gas
