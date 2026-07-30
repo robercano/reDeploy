@@ -1737,3 +1737,232 @@ describe("deploy() — PREFLIGHT phase", () => {
     }
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// CrossRefArg + DeployOptions.crossNetworkJournals — cross-chain dependency
+// refs, end-to-end (issue #159)
+// ---------------------------------------------------------------------------
+//
+// Mirrors the ResolverArg end-to-end tests above: a crossRef arg's resolved
+// value is decoded out of the REAL ABI-encoded constructor args Ignition
+// sent on-chain, proving the whole chain works: spec CrossRefArg ->
+// resolve/crossRef.ts's resolveCrossRefArgs() -> deploy()'s pre-compile pass
+// -> compile.ts -> Ignition -> the actual deploy transaction. Both
+// "networks" here are just two independent deploymentDirs deployed via the
+// SAME in-memory fake provider (no real multi-chain setup needed — core has
+// no network concept of its own; see CrossRefArg's docs).
+
+describe("deploy() — CrossRefArg resolution end-to-end", () => {
+  let sourceDir: string;
+  let targetDir: string;
+  afterEach(() => {
+    if (sourceDir) rmTmpDir(sourceDir);
+    if (targetDir) rmTmpDir(targetDir);
+  });
+
+  it("resolves a crossRef arg against another network's journal and passes its address into the real deploy transaction", async () => {
+    sourceDir = makeTmpDir();
+    targetDir = makeTmpDir();
+    const sourceState = makeProviderState();
+    const targetState = makeProviderState();
+
+    // "Network A": deploy a Registry normally.
+    const sourceResult = await deploy({
+      spec: { version: 1, contracts: [{ id: "registry", contract: "Registry" }] },
+      provider: makeFakeProvider(sourceState),
+      accounts: ACCOUNTS,
+      deploymentDir: sourceDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+    });
+    expect(sourceResult.success).toBe(true);
+    const registryAddress = sourceResult.deployedAddresses["registry"];
+
+    // "Network B": deploy a Vault whose constructor arg is a crossRef to
+    // Network A's registry.
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "networkA", contract: "registry" }],
+        },
+      ],
+    };
+
+    const targetResult = await deploy({
+      spec,
+      provider: makeFakeProvider(targetState),
+      accounts: ACCOUNTS,
+      deploymentDir: targetDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Vault: buildTypedConstructorAbi(["address"]),
+      }),
+      crossNetworkJournals: { networkA: { deploymentDir: sourceDir } },
+    });
+
+    expect(targetResult.success).toBe(true);
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["address"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: targetState.sentData[0] as `0x${string}`,
+    });
+    expect((decoded.args?.[0] as string).toLowerCase()).toBe(registryAddress.toLowerCase());
+  }, 30_000);
+
+  it("mixes a crossRef arg with a same-run ref arg in the same entry", async () => {
+    sourceDir = makeTmpDir();
+    targetDir = makeTmpDir();
+    const sourceState = makeProviderState();
+    const targetState = makeProviderState();
+
+    const sourceResult = await deploy({
+      spec: { version: 1, contracts: [{ id: "registry", contract: "Registry" }] },
+      provider: makeFakeProvider(sourceState),
+      accounts: ACCOUNTS,
+      deploymentDir: sourceDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+    });
+    const registryAddress = sourceResult.deployedAddresses["registry"];
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        { id: "token", contract: "Token" },
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [
+            { kind: "ref", contract: "token" },
+            { kind: "crossRef", network: "networkA", contract: "registry" },
+          ],
+        },
+      ],
+    };
+
+    const targetResult = await deploy({
+      spec,
+      provider: makeFakeProvider(targetState),
+      accounts: ACCOUNTS,
+      deploymentDir: targetDir,
+      artifactResolver: makeTypedArtifactResolver({
+        Token: [],
+        Vault: buildTypedConstructorAbi(["address", "address"]),
+      }),
+      crossNetworkJournals: { networkA: { deploymentDir: sourceDir } },
+    });
+
+    expect(targetResult.success).toBe(true);
+    // vault is the second contract deployed (after token, via the ref dependency)
+    const decoded = decodeDeployData({
+      abi: buildTypedConstructorAbi(["address", "address"]),
+      bytecode: FAKE_BYTECODE as `0x${string}`,
+      data: targetState.sentData[1] as `0x${string}`,
+    });
+    expect((decoded.args?.[0] as string).toLowerCase()).toBe(
+      targetResult.deployedAddresses["token"].toLowerCase(),
+    );
+    expect((decoded.args?.[1] as string).toLowerCase()).toBe(registryAddress.toLowerCase());
+  }, 30_000);
+
+  it("throws DeployError(CROSS_REF_ERROR) with ZERO tx sent when the network is absent from crossNetworkJournals", async () => {
+    targetDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "ghostNetwork", contract: "registry" }],
+        },
+      ],
+    };
+
+    try {
+      await deploy({
+        spec,
+        provider: makeFakeProvider(state),
+        accounts: ACCOUNTS,
+        deploymentDir: targetDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["address"]),
+        }),
+        // no `crossNetworkJournals` supplied at all
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("CROSS_REF_ERROR");
+      expect(deployErr.message).toContain("ghostNetwork");
+    }
+
+    expect(state.sendTxCount).toBe(0);
+  }, 30_000);
+
+  it("throws DeployError(CROSS_REF_ERROR) with ZERO tx sent when the referenced contract was not yet deployed on the target network", async () => {
+    sourceDir = makeTmpDir();
+    targetDir = makeTmpDir();
+    const sourceState = makeProviderState();
+    const targetState = makeProviderState();
+
+    // Network A exists but never deployed "registry".
+    await deploy({
+      spec: { version: 1, contracts: [{ id: "somethingElse", contract: "Registry" }] },
+      provider: makeFakeProvider(sourceState),
+      accounts: ACCOUNTS,
+      deploymentDir: sourceDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+    });
+
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "networkA", contract: "registry" }],
+        },
+      ],
+    };
+
+    try {
+      await deploy({
+        spec,
+        provider: makeFakeProvider(targetState),
+        accounts: ACCOUNTS,
+        deploymentDir: targetDir,
+        artifactResolver: makeTypedArtifactResolver({
+          Vault: buildTypedConstructorAbi(["address"]),
+        }),
+        crossNetworkJournals: { networkA: { deploymentDir: sourceDir } },
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("CROSS_REF_ERROR");
+      expect(deployErr.message).toContain("registry");
+    }
+
+    expect(targetState.sendTxCount).toBe(0);
+  }, 30_000);
+
+  it("does not require DeployOptions.crossNetworkJournals for specs with no crossRef args (backward compatible)", async () => {
+    targetDir = makeTmpDir();
+    const state = makeProviderState();
+
+    const result = await deploy({
+      spec: { version: 1, contracts: [{ id: "reg", contract: "Registry" }] },
+      provider: makeFakeProvider(state),
+      accounts: ACCOUNTS,
+      deploymentDir: targetDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+      // no `crossNetworkJournals` option — must not be required
+    });
+
+    expect(result.success).toBe(true);
+  }, 30_000);
+});

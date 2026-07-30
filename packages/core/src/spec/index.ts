@@ -9,6 +9,7 @@ export type {
   ParamArg,
   ExprArg,
   ResolverArg,
+  CrossRefArg,
   LiteralScalar,
   LiteralValue,
   ContractArg,
@@ -22,6 +23,7 @@ export {
   contractEntrySchema,
   deploymentSpecSchema,
   resolverArgSchema,
+  crossRefArgSchema,
   preflightPolicySchema,
 } from "./schema.js";
 

@@ -117,6 +117,18 @@ function checkArgRefAndParam(
       code: "UNKNOWN_PARAM",
       message: `Contract "${entry.id}" ${locationDescription} references undeclared parameter "${arg.name}" — add it to DeploymentSpec.parameters`,
     });
+  } else if (arg.kind === "crossRef") {
+    // crossRef is intentionally shape-only here: `network` and `contract`
+    // target a DIFFERENT network's deployment, entirely outside this spec's
+    // own id space — checking `arg.contract` against `allIds` (this spec's
+    // ids) or flagging SELF_REFERENCE would be meaningless (and could
+    // produce false positives if a same-named id happens to exist locally).
+    // zod's `crossRefArgSchema` already guarantees both fields are
+    // non-empty strings; real resolution (does `network` exist in the
+    // injected journals map, was `contract` actually deployed there) happens
+    // at deploy time in resolve/crossRef.ts's resolveCrossRefArgs(), which
+    // has visibility into the injected ResolveCrossRefOptions that
+    // validateSpec does not.
   }
 }
 

@@ -23,6 +23,16 @@ export type CompileErrorCode =
    */
   | "UNRESOLVED_RESOLVER_ARG"
   /**
+   * A `{ kind: "crossRef" }` arg reached compileSpec() unresolved. Cross-chain
+   * refs must be pre-resolved to concrete literals BEFORE compileSpec() is
+   * called — deploy() does this automatically via its async pre-resolution
+   * pass (resolve/crossRef.ts), which runs BEFORE the resolver pre-resolution
+   * pass. compileSpec() itself never reads another network's journal (that
+   * would require async I/O inside a synchronous builder callback) — see
+   * resolve/crossRef.ts for the full design.
+   */
+  | "UNRESOLVED_CROSS_REF_ARG"
+  /**
    * An internal invariant was violated — e.g. a ref whose target id was not
    * registered as a future (which implies the caller bypassed validateSpec).
    */

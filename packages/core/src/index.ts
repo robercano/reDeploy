@@ -5,6 +5,7 @@ export type {
   ParamArg,
   ExprArg,
   ResolverArg,
+  CrossRefArg,
   LiteralScalar,
   LiteralValue,
   ContractArg,
@@ -20,6 +21,7 @@ export {
   contractEntrySchema,
   deploymentSpecSchema,
   resolverArgSchema,
+  crossRefArgSchema,
   upgradeableConfigSchema,
   preflightPolicySchema,
 } from "./spec/schema.js";
@@ -87,3 +89,19 @@ export { jsonRpcProvider } from "./provider/jsonRpc.js";
 // / RESOLVER_ERROR, exported above via DeployErrorCode), so callers of
 // deploy() only ever need to catch DeployError.
 export type { Resolver, ResolverContext, ResolverRegistry } from "./resolve/registry.js";
+
+// Cross-chain dependency refs (issue #159) — async pre-deploy resolution of
+// `{ kind: "crossRef" }` args against an injected map of network -> journal
+// location, wired via DeployOptions.crossNetworkJournals. See
+// resolve/crossRef.ts for the full ResolveCrossRefOptions/CrossNetworkJournal
+// contract and the v1 scope boundary (core has no network registry; the
+// referenced network's deployment must already be complete).
+//
+// Unlike resolve/errors.ts's ResolveError, CrossRefError IS exported here —
+// resolveCrossRefArgs() is intended to be callable directly (e.g. by a
+// multi-network orchestration layer outside deploy()), not only through
+// deploy()'s own pre-resolution pass.
+export type { CrossNetworkJournal, ResolveCrossRefOptions } from "./resolve/crossRef.js";
+export { resolveCrossRefArgs, specHasCrossRefArgs } from "./resolve/crossRef.js";
+export type { CrossRefErrorCode } from "./resolve/crossRefErrors.js";
+export { CrossRefError } from "./resolve/crossRefErrors.js";
