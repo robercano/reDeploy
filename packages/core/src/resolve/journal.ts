@@ -59,7 +59,12 @@ export async function loadAddressesFromJournal(
     return {};
   }
   const statusResult = await ignitionStatus(deploymentDir);
-  const addresses: Record<string, string> = {};
+  // Defense-in-depth against prototype pollution: build the map with no
+  // prototype so a stripped contract id equal to an Object.prototype member
+  // (e.g. "__proto__", "constructor") can never resolve to an inherited
+  // value at any downstream lookup site — even one that forgets the explicit
+  // Object.hasOwn guard callers are expected to use (see resolve/crossRef.ts).
+  const addresses: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [key, contract] of Object.entries(statusResult.contracts)) {
     addresses[stripModulePrefix(key, moduleId)] = contract.address;
   }

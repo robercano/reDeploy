@@ -13,7 +13,7 @@
  * real Ignition `status()` read path, not a mocked one.
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import {
   resolveCrossRefArgs,
   specHasCrossRefArgs,
@@ -507,6 +507,59 @@ describe("resolveCrossRefArgs — prototype-pollution guard", () => {
       } catch (err) {
         expect(err).toBeInstanceOf(CrossRefError);
         expect((err as CrossRefError).code).toBe("CROSS_REF_UNKNOWN_NETWORK");
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// resolveCrossRefArgs — prototype-pollution guard on the ADDRESS lookup
+// (addresses[contract]) — a real fixture journal that does NOT contain a
+// prototype-key contract id must still be rejected as CROSS_REF_NOT_DEPLOYED,
+// never silently resolving to an inherited Object.prototype member.
+// ---------------------------------------------------------------------------
+
+describe("resolveCrossRefArgs — prototype-pollution guard (contract id)", () => {
+  let sourceDir: string;
+
+  beforeAll(async () => {
+    sourceDir = makeTmpDir();
+    const provider = makeFakeProvider();
+    const sourceResult = await deploy({
+      spec: { version: 1, contracts: [{ id: "registry", contract: "Registry" }] },
+      provider,
+      accounts: FAKE_ACCOUNTS,
+      deploymentDir: sourceDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+    });
+    expect(sourceResult.success).toBe(true);
+  });
+
+  afterAll(() => {
+    rmTmpDir(sourceDir);
+  });
+
+  it.each(["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"])(
+    "throws CrossRefError(CROSS_REF_NOT_DEPLOYED) for contract id %j when absent from a real journal",
+    async (contractId) => {
+      const spec: DeploymentSpec = {
+        version: 1,
+        contracts: [
+          {
+            id: "vault",
+            contract: "Vault",
+            args: [{ kind: "crossRef", network: "mainnet", contract: contractId }],
+          },
+        ],
+      };
+
+      try {
+        await resolveCrossRefArgs(spec, { journals: { mainnet: { deploymentDir: sourceDir } } });
+        expect.fail(`should have thrown for contract id ${contractId}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(CrossRefError);
+        expect((err as CrossRefError).code).toBe("CROSS_REF_NOT_DEPLOYED");
+        expect((err as CrossRefError).message).not.toMatch(/function|\[native code\]/);
       }
     },
   );

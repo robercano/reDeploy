@@ -37,6 +37,7 @@
  * path to.
  */
 
+import { isAddress } from "viem";
 import type { ContractArg, ContractEntry, DeploymentSpec, LiteralArg } from "../spec/types.js";
 import { loadAddressesFromJournal } from "./journal.js";
 import { CrossRefError } from "./crossRefErrors.js";
@@ -113,7 +114,12 @@ function entryHasCrossRefArg(entry: ContractEntry): boolean {
  * @throws CrossRefError with code "CROSS_REF_NOT_DEPLOYED" if the referenced
  *   network's journal has no recorded address for the requested contract id
  *   (including when the journal doesn't exist at all — nothing deployed
- *   there yet). The referenced network's deployment must be COMPLETE first
+ *   there yet — or when the requested `contract` id collides with an
+ *   inherited Object.prototype member such as "__proto__"/"constructor",
+ *   which is treated identically to "not present"). Also thrown (same code)
+ *   if the journal DOES have a recorded value for the id but that value is
+ *   not a well-formed address — refuses to substitute it into on-chain
+ *   calldata. The referenced network's deployment must be COMPLETE first
  *   — see CrossRefArg's v1 scope boundary (spec/types.ts).
  */
 export async function resolveCrossRefArgs(
@@ -153,13 +159,31 @@ export async function resolveCrossRefArgs(
       journalCache.set(network, addresses);
     }
 
-    const address = addresses[contract];
-    if (address === undefined) {
+    // Guard against prototype pollution: only OWN, enumerable keys of the
+    // loaded address map may be looked up — a `contract` id equal to an
+    // inherited Object.prototype member (e.g. "__proto__", "constructor",
+    // "toString") must NOT resolve to that inherited member. Mirrors the
+    // Object.hasOwn guard above for the journals-map lookup.
+    if (!Object.hasOwn(addresses, contract)) {
       throw new CrossRefError(
         "CROSS_REF_NOT_DEPLOYED",
         `Contract "${entryId}" ${locationDescription} references contract "${contract}" on network ` +
           `"${network}", but it is not present in that network's journal — deploy network "${network}" ` +
           `first before this one`,
+      );
+    }
+
+    const address = addresses[contract];
+    // Defense-in-depth: the resolved value is about to be substituted as a
+    // `{ kind: "literal" }` constructor arg and fed into on-chain calldata —
+    // refuse to do that for anything that isn't a well-formed address, even
+    // though `loadAddressesFromJournal` should only ever produce addresses.
+    if (!isAddress(address)) {
+      throw new CrossRefError(
+        "CROSS_REF_NOT_DEPLOYED",
+        `Contract "${entryId}" ${locationDescription} references contract "${contract}" on network ` +
+          `"${network}", but the value recorded in that network's journal ("${address}") is not a valid ` +
+          `address — refusing to substitute it into on-chain calldata`,
       );
     }
     return address;
