@@ -9,6 +9,7 @@
  */
 
 import type { SpecError } from "../spec/validate.js";
+import type { PreflightFailure } from "./preflight.js";
 
 /** Discriminated error codes for DeployError. */
 export type DeployErrorCode =
@@ -35,12 +36,22 @@ export type DeployErrorCode =
    * coerced into the bigint shape ResolverContext.params requires. See
    * resolve/resolveSpec.ts.
    */
-  | "RESOLVER_ERROR";
+  | "RESOLVER_ERROR"
+  /**
+   * The effective PREFLIGHT policy (per-field merge of
+   * `DeploymentSpec.preflight` and `DeployOptions.preflight`) failed one or
+   * more checks — wrong chain id, insufficient deployer balance, or gas
+   * price above the configured ceiling. Thrown BEFORE any on-chain
+   * transaction is broadcast. Check DeployError.preflightFailures for the
+   * full list of failed checks. See deploy/preflight.ts.
+   */
+  | "PREFLIGHT_FAILED";
 
 /**
- * Thrown by deploy() when the DeploymentSpec is invalid or cannot be compiled.
- * Does NOT represent on-chain execution failures — those are returned as a
- * DeployResult with type !== SUCCESSFUL_DEPLOYMENT.
+ * Thrown by deploy() when the DeploymentSpec is invalid, cannot be compiled,
+ * or fails the PREFLIGHT phase. Does NOT represent on-chain execution
+ * failures — those are returned as a DeployResult with type !==
+ * SUCCESSFUL_DEPLOYMENT.
  */
 export class DeployError extends Error {
   readonly code: DeployErrorCode;
@@ -49,11 +60,22 @@ export class DeployError extends Error {
    * Undefined for other error codes.
    */
   readonly specErrors?: SpecError[];
+  /**
+   * The list of failed preflight checks when code === "PREFLIGHT_FAILED".
+   * Undefined for other error codes. See deploy/preflight.ts.
+   */
+  readonly preflightFailures?: PreflightFailure[];
 
-  constructor(code: DeployErrorCode, message: string, specErrors?: SpecError[]) {
+  constructor(
+    code: DeployErrorCode,
+    message: string,
+    specErrors?: SpecError[],
+    preflightFailures?: PreflightFailure[],
+  ) {
     super(message);
     this.name = "DeployError";
     this.code = code;
     this.specErrors = specErrors;
+    this.preflightFailures = preflightFailures;
   }
 }

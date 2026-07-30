@@ -1584,3 +1584,156 @@ describe("deploy() — ResolverArg resolution end-to-end", () => {
     expect(result.success).toBe(true);
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// PREFLIGHT phase — declarative pre-broadcast safety checks (issue #156)
+// ---------------------------------------------------------------------------
+//
+// deploy.ts's `makeFakeProvider` does not implement `eth_getBalance` (the
+// normal deploy flow never calls it), which makes it a perfect discriminator
+// for the "zero extra RPC calls when no preflight is configured" contract: if
+// deploy() ever called eth_getBalance without a `minBalanceWei` policy, these
+// tests would fail with "unhandled method" instead of silently passing.
+
+describe("deploy() — PREFLIGHT phase", () => {
+  let tmpDir: string;
+  afterEach(() => {
+    if (tmpDir) rmTmpDir(tmpDir);
+  });
+
+  it("throws DeployError(PREFLIGHT_FAILED) with populated preflightFailures for a wrong-chainId policy, before any tx is sent", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    // makeFakeProvider's eth_chainId always returns "0x7a69" (31337) — declare
+    // a policy that expects a different chain to force a mismatch.
+    await expect(
+      deploy({
+        spec: { version: 1, contracts: [{ id: "reg", contract: "Registry" }] },
+        provider: makeFakeProvider(state),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+        preflight: { expectedChainId: 1 }, // mainnet — provider reports 31337
+      }),
+    ).rejects.toThrow(DeployError);
+
+    // No transaction was ever attempted — the failure happens strictly
+    // before ignitionDeploy() is called.
+    expect(state.sendTxCount).toBe(0);
+
+    // Preflight fails BEFORE ignitionDeploy() ever runs, so no journal was
+    // written — safe to re-run against the same deploymentDir.
+    try {
+      await deploy({
+        spec: { version: 1, contracts: [{ id: "reg", contract: "Registry" }] },
+        provider: makeFakeProvider(makeProviderState()),
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+        preflight: { expectedChainId: 1 },
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(DeployError);
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("PREFLIGHT_FAILED");
+      expect(deployErr.preflightFailures).toBeDefined();
+      expect(deployErr.preflightFailures).toHaveLength(1);
+      expect(deployErr.preflightFailures![0]).toMatchObject({
+        check: "chainId",
+        expected: "1",
+        actual: "31337",
+      });
+      // specErrors is only populated for INVALID_SPEC — must be undefined here.
+      expect(deployErr.specErrors).toBeUndefined();
+    }
+  }, 30_000);
+
+  it("behaves EXACTLY as before (no extra RPC calls, deploy succeeds) for a spec with no preflight configured", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    // Wrap the fake provider so any eth_getBalance call (which the normal
+    // deploy flow never makes) throws — proving the preflight phase truly
+    // makes ZERO extra RPC calls when no policy is configured anywhere.
+    const guardedProvider: EIP1193Provider = {
+      async request(args: { method: string; params?: readonly unknown[] | object }): Promise<unknown> {
+        if (args.method === "eth_getBalance") {
+          throw new Error("PREFLIGHT REGRESSION: eth_getBalance called with no minBalanceWei policy set");
+        }
+        return makeFakeProvider(state).request(args);
+      },
+    };
+
+    const result = await deploy({
+      spec: { version: 1, contracts: [{ id: "reg", contract: "Registry" }] },
+      provider: guardedProvider,
+      accounts: ACCOUNTS,
+      deploymentDir: tmpDir,
+      artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+      // no `preflight` option, no `spec.preflight` — fully backward compatible
+    });
+
+    expect(result.success).toBe(true);
+    expect(state.sendTxCount).toBe(1);
+  }, 30_000);
+
+  it("merges spec.preflight (declarative base) with DeployOptions.preflight (per-call override), per field", async () => {
+    tmpDir = makeTmpDir();
+    const state = makeProviderState();
+
+    // spec declares expectedChainId (satisfied by the fake provider's 31337)
+    // AND a minBalanceWei the account can never satisfy (fake provider has no
+    // eth_getBalance handler, so route it through a stub that reports 0).
+    const balanceStubProvider: EIP1193Provider = {
+      async request(args: { method: string; params?: readonly unknown[] | object }): Promise<unknown> {
+        if (args.method === "eth_getBalance") {
+          return "0x0";
+        }
+        return makeFakeProvider(state).request(args);
+      },
+    };
+
+    await expect(
+      deploy({
+        spec: {
+          version: 1,
+          contracts: [{ id: "reg", contract: "Registry" }],
+          preflight: { expectedChainId: 31337 }, // satisfied — no failure from this field
+        },
+        provider: balanceStubProvider,
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+        // per-call override ADDS a balance check the spec didn't declare
+        preflight: { minBalanceWei: "1000000000000000000" },
+      }),
+    ).rejects.toThrow(DeployError);
+
+    expect(state.sendTxCount).toBe(0);
+
+    try {
+      await deploy({
+        spec: {
+          version: 1,
+          contracts: [{ id: "reg", contract: "Registry" }],
+          preflight: { expectedChainId: 31337 },
+        },
+        provider: balanceStubProvider,
+        accounts: ACCOUNTS,
+        deploymentDir: tmpDir,
+        artifactResolver: makeFakeArtifactResolver({ Registry: 0 }),
+        preflight: { minBalanceWei: "1000000000000000000" },
+      });
+      expect.fail("should have thrown");
+    } catch (err) {
+      const deployErr = err as DeployError;
+      expect(deployErr.code).toBe("PREFLIGHT_FAILED");
+      // Only the balance check fails — the merged chainId check (from spec)
+      // passed, proving both sources of the effective policy were honored.
+      expect(deployErr.preflightFailures).toHaveLength(1);
+      expect(deployErr.preflightFailures![0].check).toBe("balance");
+    }
+  }, 30_000);
+});

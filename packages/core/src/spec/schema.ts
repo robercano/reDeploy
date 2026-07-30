@@ -11,6 +11,7 @@ import type {
   ContractEntry,
   DeploymentSpec,
   LiteralValue,
+  PreflightPolicy,
   UpgradeableConfig,
   UpgradeableInitializer,
 } from "./types.js";
@@ -202,6 +203,46 @@ export const contractEntrySchema: z.ZodType<ContractEntry> = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// PREFLIGHT policy — pre-broadcast safety checks (see deploy/preflight.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Matches a non-negative decimal (base-10) integer string with no leading
+ * zeros (other than the literal "0" itself), e.g. "0", "42", "1000000000000000000".
+ * Used for `minBalanceWei` / `maxGasPriceWei`, which are bigint-as-string
+ * encoded wei amounts (see `PreflightPolicy`'s docs in spec/types.ts).
+ */
+export const DECIMAL_BIGINT_RE = /^(0|[1-9][0-9]*)$/;
+
+/**
+ * `{ expectedChainId?: <positive integer>, minBalanceWei?: <decimal string>,
+ *    maxGasPriceWei?: <decimal string> }`
+ *
+ * Shape validation only. All three fields are optional and independent — see
+ * `PreflightPolicy`'s docs in spec/types.ts and `runPreflight`'s check
+ * semantics in deploy/preflight.ts.
+ */
+export const preflightPolicySchema: z.ZodType<PreflightPolicy> = z.object({
+  expectedChainId: z
+    .number()
+    .int({ message: "preflight.expectedChainId must be a positive integer" })
+    .positive({ message: "preflight.expectedChainId must be a positive integer" })
+    .optional(),
+  minBalanceWei: z
+    .string()
+    .regex(DECIMAL_BIGINT_RE, {
+      message: "preflight.minBalanceWei must be a non-negative decimal integer string",
+    })
+    .optional(),
+  maxGasPriceWei: z
+    .string()
+    .regex(DECIMAL_BIGINT_RE, {
+      message: "preflight.maxGasPriceWei must be a non-negative decimal integer string",
+    })
+    .optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Top-level deployment spec
 // ---------------------------------------------------------------------------
 
@@ -209,4 +250,5 @@ export const deploymentSpecSchema: z.ZodType<DeploymentSpec> = z.object({
   version: z.literal(1),
   contracts: z.array(contractEntrySchema),
   parameters: z.record(z.string(), literalValueSchema).optional(),
+  preflight: preflightPolicySchema.optional(),
 });

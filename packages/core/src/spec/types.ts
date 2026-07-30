@@ -288,4 +288,50 @@ export interface DeploymentSpec {
    * a different spec — see ParamArg's docs for the full resolution story.
    */
   readonly parameters?: Record<string, LiteralValue>;
+  /**
+   * Declarative PREFLIGHT policy: pre-broadcast safety checks that run
+   * BEFORE any transaction is sent (see `deploy/preflight.ts` and
+   * `deploy/deploy.ts`'s phase ordering). Optional — specs without it are
+   * unchanged and fully backward compatible (no preflight checks run, zero
+   * extra RPC calls).
+   *
+   * This is the DECLARATIVE base policy, checked in against the spec. The
+   * EFFECTIVE policy used by a given `deploy()` call is a per-field merge of
+   * this value and `DeployOptions.preflight` (the per-call override wins per
+   * field) — see `deploy/preflight.ts`'s `mergePreflightPolicies`. This lets
+   * a spec declare a sane default (e.g. `expectedChainId` for the network it
+   * targets) while callers such as `@redeploy/deploy-server` still apply
+   * per-network overrides (e.g. a stricter `maxGasPriceWei`) without editing
+   * the spec.
+   */
+  readonly preflight?: PreflightPolicy;
+}
+
+/**
+ * A declarative pre-broadcast safety policy: up to three independent,
+ * optional checks (`expectedChainId`, `minBalanceWei`, `maxGasPriceWei`) run
+ * BEFORE any transaction is broadcast. Declared here (a spec-level shape used
+ * by both the schema/validate layer and `DeploymentSpec.preflight`) and
+ * re-exported as the canonical public type from `deploy/preflight.ts`, which
+ * owns the actual `runPreflight` check logic and the merge-with-DeployOptions
+ * semantics — see that module's docs for the full design.
+ */
+export interface PreflightPolicy {
+  /**
+   * The chain id the RPC endpoint is expected to report via `eth_chainId`.
+   * Must be a positive integer. A mismatch is a `"chainId"` failure — the
+   * classic "pointed the deploy at the wrong network" mistake.
+   */
+  readonly expectedChainId?: number;
+  /**
+   * Minimum required balance (in wei) for the deployer account, as a decimal
+   * bigint-encoded string (e.g. `"1000000000000000000"` for 1 ETH). The
+   * deployer account is `DeployOptions.defaultSender ?? accounts[0]`.
+   */
+  readonly minBalanceWei?: string;
+  /**
+   * Maximum acceptable current network gas price (in wei), as a decimal
+   * bigint-encoded string. Guards against deploying during a gas spike.
+   */
+  readonly maxGasPriceWei?: string;
 }

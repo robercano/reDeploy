@@ -14,6 +14,7 @@ export type {
   ContractArg,
   ContractEntry,
   DeploymentSpec,
+  PreflightPolicy,
 } from "./types.js";
 
 export {
@@ -21,6 +22,7 @@ export {
   contractEntrySchema,
   deploymentSpecSchema,
   resolverArgSchema,
+  preflightPolicySchema,
 } from "./schema.js";
 
 export type { SpecError, SpecErrorCode, ValidateResult } from "./validate.js";

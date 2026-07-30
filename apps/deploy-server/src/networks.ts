@@ -53,7 +53,13 @@
  *         "moduleId": "Deployment",              // optional; else "Deployment"
  *         "deploymentParameters": {               // optional; flat paramName -> value,
  *           "someParam": 123                      // wrapped under `moduleId` before
- *         }                                        // being passed to core.deploy()
+ *         },                                       // being passed to core.deploy()
+ *         "requireSimulate": true,                // optional; default false — see below
+ *         "preflight": {                          // optional PreflightPolicy (see @redeploy/core)
+ *           "expectedChainId": 11155111,
+ *           "minBalanceWei": "1000000000000000000",
+ *           "maxGasPriceWei": "50000000000"
+ *         }
  *       }
  *     }
  *   }
@@ -92,6 +98,16 @@
  *     time) — defense in depth for the derived-deploymentDir path segment,
  *     even though names only ever originate from trusted server config, never
  *     from client input.
+ *   - `requireSimulate` (default `false`): when `true`, `POST /api/deploy`
+ *     for this network refuses to run unless a `POST /api/simulate` has
+ *     already succeeded for the EXACT SAME spec on this same network — see
+ *     `simulate-state.ts` and `server.ts`'s `handleDeploy`.
+ *   - `preflight` (optional): a `PreflightPolicy` (from `@redeploy/core`)
+ *     passed as `core.deploy()`'s per-call `preflight` option for this
+ *     network — merged (per field) with any `spec.preflight` the request
+ *     carries. See `@redeploy/core`'s preflight docs for the check
+ *     semantics; a failure surfaces as a structured `PREFLIGHT_FAILED` SSE
+ *     error from `POST /api/deploy` (never broadcasting a transaction).
  *
  * WIRE SHAPE
  * ==========
@@ -106,7 +122,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { DeployOptions } from "@redeploy/core";
+import type { DeployOptions, PreflightPolicy } from "@redeploy/core";
 
 // ---------------------------------------------------------------------------
 // Types derived from @redeploy/core's public surface (avoids a direct
@@ -148,6 +164,29 @@ export interface NetworkConfig {
   readonly deploymentParameters?: ModuleParameters;
   /** Ignition module id override for this network. Defaults to `"Deployment"`. */
   readonly moduleId?: string;
+  /**
+   * When `true`, `POST /api/deploy` for this network REFUSES to run unless a
+   * `POST /api/simulate` has already succeeded for the EXACT SAME spec (by
+   * stable hash — see `spec-hash.ts`) on this same network. See
+   * `simulate-state.ts` and `server.ts`'s `handleDeploy` for the interlock
+   * check. Defaults to `false`/undefined — omitting this field preserves
+   * pre-existing behavior exactly (no interlock).
+   */
+  readonly requireSimulate?: boolean;
+  /**
+   * Optional per-network `PreflightPolicy` (from `@redeploy/core`), passed
+   * as `core.deploy()`'s `preflight` option for this network. Per-field
+   * merged by `core.deploy()` with any `spec.preflight` the request body
+   * carries (the network's policy is the "per-call override" — see
+   * `@redeploy/core`'s `mergePreflightPolicies`). Every field is optional and
+   * independent (`expectedChainId`, `minBalanceWei`, `maxGasPriceWei`) — the
+   * deep numeric/shape validation of these values is delegated to
+   * `@redeploy/core` at deploy time; this module only shape-checks that
+   * `preflight` (when present) is an object with the expected primitive
+   * field types (mirroring the light shape-checking already done for
+   * `chainId`/`deploymentParameters` below).
+   */
+  readonly preflight?: PreflightPolicy;
 }
 
 /** The full set of configured networks plus which one is the default. */
@@ -205,6 +244,14 @@ interface RawNetworkConfig {
   deploymentDir?: unknown;
   deploymentParameters?: unknown;
   moduleId?: unknown;
+  requireSimulate?: unknown;
+  preflight?: unknown;
+}
+
+interface RawPreflightPolicy {
+  expectedChainId?: unknown;
+  minBalanceWei?: unknown;
+  maxGasPriceWei?: unknown;
 }
 
 interface RawNetworksConfigFile {
@@ -314,6 +361,47 @@ function readNetworksConfigFile(
         `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has an invalid "deploymentParameters" (must be an object)`,
       );
     }
+    if (entry.requireSimulate !== undefined && typeof entry.requireSimulate !== "boolean") {
+      throw new NetworksConfigError(
+        `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has a non-boolean "requireSimulate"`,
+      );
+    }
+
+    let preflight: PreflightPolicy | undefined;
+    if (entry.preflight !== undefined) {
+      if (typeof entry.preflight !== "object" || entry.preflight === null || Array.isArray(entry.preflight)) {
+        throw new NetworksConfigError(
+          `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has an invalid "preflight" (must be an object)`,
+        );
+      }
+      const rawPreflight = entry.preflight as RawPreflightPolicy;
+      if (rawPreflight.expectedChainId !== undefined && typeof rawPreflight.expectedChainId !== "number") {
+        throw new NetworksConfigError(
+          `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has a non-numeric "preflight.expectedChainId"`,
+        );
+      }
+      if (rawPreflight.minBalanceWei !== undefined && typeof rawPreflight.minBalanceWei !== "string") {
+        throw new NetworksConfigError(
+          `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has a non-string "preflight.minBalanceWei"`,
+        );
+      }
+      if (rawPreflight.maxGasPriceWei !== undefined && typeof rawPreflight.maxGasPriceWei !== "string") {
+        throw new NetworksConfigError(
+          `NETWORKS_CONFIG file at "${resolvedPath}": network "${name}" has a non-string "preflight.maxGasPriceWei"`,
+        );
+      }
+      preflight = {
+        ...(rawPreflight.expectedChainId !== undefined
+          ? { expectedChainId: rawPreflight.expectedChainId as number }
+          : {}),
+        ...(rawPreflight.minBalanceWei !== undefined
+          ? { minBalanceWei: rawPreflight.minBalanceWei as string }
+          : {}),
+        ...(rawPreflight.maxGasPriceWei !== undefined
+          ? { maxGasPriceWei: rawPreflight.maxGasPriceWei as string }
+          : {}),
+      };
+    }
 
     networks[name] = {
       rpcUrl: entry.rpcUrl,
@@ -324,6 +412,8 @@ function readNetworksConfigFile(
         ? { deploymentParameters: entry.deploymentParameters as ModuleParameters }
         : {}),
       ...(entry.moduleId !== undefined ? { moduleId: entry.moduleId as string } : {}),
+      ...(entry.requireSimulate !== undefined ? { requireSimulate: entry.requireSimulate as boolean } : {}),
+      ...(preflight !== undefined ? { preflight } : {}),
     };
   }
 

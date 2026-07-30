@@ -21,9 +21,16 @@
  *      for the full Layer 2 "typed resolver escape-hatch" design). This is a
  *      no-op (skipped entirely) for specs that don't use resolver args.
  *   3. Compile the (now fully-resolved) spec into an Ignition module.
- *   4. Thread `deploymentDir` through to Ignition's `deploy()` so the journal
+ *   4. Run the PREFLIGHT phase (see deploy/preflight.ts): the effective
+ *      policy — a per-field merge of `spec.preflight` and
+ *      `DeployOptions.preflight` — is checked against the live RPC/account
+ *      BEFORE any transaction is broadcast. A failing check throws a typed
+ *      `DeployError("PREFLIGHT_FAILED", ...)`. Skipped entirely (zero extra
+ *      RPC calls) when the effective policy has no fields set — the common
+ *      case — so deploy() has zero extra cost for callers who don't opt in.
+ *   5. Thread `deploymentDir` through to Ignition's `deploy()` so the journal
  *      persists across calls — do NOT reinvent journaling here.
- *   5. Wrap the raw DeploymentResult with enough accessors to let callers
+ *   6. Wrap the raw DeploymentResult with enough accessors to let callers
  *      check success and read deployed addresses.
  */
 
@@ -51,10 +58,15 @@ import {
   specHasResolverArgs,
 } from "../resolve/resolveSpec.js";
 import { ResolveError } from "../resolve/errors.js";
+import type { PreflightPolicy } from "./preflight.js";
+import { isEmptyPreflightPolicy, mergePreflightPolicies, runPreflight } from "./preflight.js";
 
 // Re-export error types for public API surface
 export type { DeployErrorCode } from "./errors.js";
 export { DeployError } from "./errors.js";
+
+// Re-export the PREFLIGHT phase's public API surface
+export type { PreflightPolicy, PreflightFailure, PreflightCheck } from "./preflight.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -116,6 +128,19 @@ export interface DeployOptions {
    * (resolvers are trusted, in-repo code — never loaded dynamically).
    */
   resolvers?: ResolverRegistry;
+  /**
+   * Per-call PREFLIGHT policy override. The EFFECTIVE policy used by this
+   * `deploy()` call is a per-field merge of `spec.preflight` (the
+   * declarative base) and this value — fields set here win over the spec's,
+   * `undefined` fields fall back to the spec. This is how a caller such as
+   * `@redeploy/deploy-server` applies a per-network policy (e.g. a stricter
+   * `maxGasPriceWei` for mainnet) without editing the spec itself.
+   *
+   * If the effective (merged) policy has no fields set at all, the entire
+   * PREFLIGHT phase is skipped — zero extra RPC calls, no behavior change
+   * for callers who don't opt in. See deploy/preflight.ts.
+   */
+  preflight?: PreflightPolicy;
 }
 
 /**
@@ -205,6 +230,14 @@ async function loadResolvedAddressesFromJournal(
  * `deploymentDir` will deploy ONLY the contracts whose futures are not yet
  * recorded as complete in the journal.
  *
+ * PREFLIGHT: before any on-chain transaction is broadcast, the effective
+ * PREFLIGHT policy (a per-field merge of `spec.preflight` and
+ * `DeployOptions.preflight` — see deploy/preflight.ts) is checked against the
+ * live RPC and deployer account. This catches mistakes like pointing a
+ * mainnet deploy at the wrong chain, an underfunded deployer, or a gas-price
+ * spike — BEFORE any transaction is sent. Skipped entirely (zero extra RPC
+ * calls) when the effective policy has no fields set.
+ *
  * @throws DeployError with code "INVALID_SPEC" if the spec fails validation.
  * @throws DeployError with code "UNKNOWN_RESOLVER" if a `{ kind: "resolver" }`
  *   arg names a resolver absent from `DeployOptions.resolvers`.
@@ -212,6 +245,10 @@ async function loadResolvedAddressesFromJournal(
  *   fails, or a spec parameter cannot be coerced to the bigint shape
  *   `ResolverContext.params` requires.
  * @throws DeployError with code "COMPILE_ERROR" if spec compilation fails.
+ * @throws DeployError with code "PREFLIGHT_FAILED" if the effective PREFLIGHT
+ *   policy fails one or more checks. Thrown BEFORE any on-chain transaction
+ *   is broadcast — check DeployError.preflightFailures for the full list of
+ *   failed checks.
  *
  * On-chain execution errors (e.g. reverted transactions, gas errors) are NOT
  * thrown — they are returned in `result.ignitionResult` with a non-SUCCESSFUL
@@ -296,7 +333,35 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     );
   }
 
-  // --- 4. Run Ignition deploy — idempotency/resume live here ------------------
+  // --- 4. PREFLIGHT phase — pre-broadcast safety checks -----------------------
+  //
+  // Runs AFTER spec validation/compile but STRICTLY BEFORE ignitionDeploy()
+  // below, so a failing check aborts before any transaction is broadcast. The
+  // effective policy is a per-field merge of the spec's declarative base
+  // (`spec.preflight`) and this call's override (`options.preflight`), with
+  // the override winning per field — see deploy/preflight.ts's
+  // mergePreflightPolicies. If the merged policy has NO fields set (the
+  // common case — no preflight configured anywhere), we skip runPreflight()
+  // entirely: zero extra RPC calls, identical behavior to before this
+  // feature existed.
+  const effectivePreflightPolicy = mergePreflightPolicies(
+    validateResult.spec.preflight,
+    options.preflight,
+  );
+  if (!isEmptyPreflightPolicy(effectivePreflightPolicy)) {
+    const preflightAccount = defaultSender ?? accounts[0];
+    const preflightFailures = await runPreflight(provider, effectivePreflightPolicy, preflightAccount);
+    if (preflightFailures.length > 0) {
+      throw new DeployError(
+        "PREFLIGHT_FAILED",
+        `Preflight checks failed with ${preflightFailures.length} failure(s): ${preflightFailures.map((f) => f.message).join("; ")}`,
+        undefined,
+        preflightFailures,
+      );
+    }
+  }
+
+  // --- 5. Run Ignition deploy — idempotency/resume live here ------------------
   //
   // Ignition's deploy() creates (or reads) a journal at
   // `<deploymentDir>/journal.jsonl`. Futures already recorded as complete are
@@ -314,7 +379,7 @@ export async function deploy(options: DeployOptions): Promise<DeployResult> {
     defaultSender,
   });
 
-  // --- 5. Build our result wrapper -------------------------------------------
+  // --- 6. Build our result wrapper -------------------------------------------
   const success = ignitionResult.type === DeploymentResultType.SUCCESSFUL_DEPLOYMENT;
 
   const deployedAddresses: Record<string, string> = {};

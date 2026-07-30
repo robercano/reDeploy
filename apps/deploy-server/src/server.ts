@@ -21,6 +21,8 @@ import { createRpcChainReader } from "./verify/chain-reader.js";
 import { loadNetworksRegistry, resolveNetwork, listNetworks, DEFAULT_MODULE_ID } from "./networks.js";
 import type { NetworkConfig } from "./networks.js";
 import { buildAddressBook, buildChainConfigExecutor } from "./apply-config/chain-executor.js";
+import { specHash } from "./spec-hash.js";
+import { recordSimulated, hasSimulated } from "./simulate-state.js";
 
 /** Maximum body size for POST requests (1 MiB). */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -297,6 +299,15 @@ async function readAndParseBody(
  * resolved config. Once core's simulate() gains a
  * deploymentParameters/moduleId option, wire `network.config.deploymentParameters`
  * (keyed under `network.config.moduleId ?? DEFAULT_MODULE_ID`) through here.
+ *
+ * Simulate-first interlock recording (issue #156): on a SUCCESSFUL simulate
+ * (`ok:true`), the request body's stable spec hash (see `spec-hash.ts`) is
+ * recorded via `recordSimulated()` against the resolved network's
+ * `deploymentDir` — this is what `POST /api/deploy` later checks for
+ * networks configured with `requireSimulate: true` (see `networks.ts` and
+ * `handleDeploy`). Recording is best-effort (mirrors `recordSimulated`'s own
+ * doc comment): a failure here never turns a successful simulate into an
+ * error response, and never affects the SSE frames emitted to the client.
  */
 async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const result = await readAndParseBody(req, res);
@@ -305,11 +316,10 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
 
   // Resolve + validate the target network (allowlist lookup only — see
   // resolveNetworkForRequest doc). See this function's LIMITATION note: the
-  // resolved config is not yet consumed by simulate() itself.
+  // resolved config is not yet consumed by simulate() itself (beyond the
+  // simulate-first interlock recording below).
   const network = resolveNetworkForRequest(req, res);
   if (network === undefined) return;
-  // `network` is intentionally unused beyond validation — see LIMITATION
-  // above: core's simulate() has no options parameter to pass it through to.
 
   // --- Simulate ------------------------------------------------------------
   const simResult = simulate(spec);
@@ -327,6 +337,16 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
       writeSseEvent(res, "step", stepData);
     }
     writeSseEvent(res, "done", { success: true });
+
+    // --- Record simulate-first interlock state (best-effort) ---------------
+    // See recordSimulated()'s doc comment: failures here are swallowed (a
+    // generic stderr line only) and never affect the response already sent.
+    try {
+      fs.mkdirSync(network.config.deploymentDir, { recursive: true });
+      recordSimulated(network.config.deploymentDir, specHash(spec));
+    } catch {
+      process.stderr.write("[deploy-server] failed to record simulate-first interlock state\n");
+    }
   } else {
     const errors: SimulateError[] = [...simResult.errors];
     writeSseEvent(res, "done", { success: false, errors });
@@ -389,6 +409,27 @@ async function handleSimulate(req: IncomingMessage, res: ServerResponse): Promis
  * by the provider's internal viem account, returning [account.address]. This
  * avoids importing viem directly into deploy-server.
  *
+ * Simulate-first interlock (issue #156): when the resolved network's
+ * `requireSimulate` is `true`, this handler computes the request body's
+ * stable spec hash (see `spec-hash.ts`) and requires a prior successful
+ * `POST /api/simulate` for that EXACT hash on this same network (see
+ * `simulate-state.ts` / `handleSimulate`'s recording step). This check runs
+ * BEFORE any provider/tx construction, right after the SSE stream opens; a
+ * miss yields a terminal `done{success:false, errors:[{code:
+ * "SIMULATE_REQUIRED", message}]}` frame and `core.deploy()` is never
+ * called.
+ *
+ * Preflight (issue #156): the resolved network's optional `preflight` policy
+ * (see `networks.ts`'s `NetworkConfig.preflight`) is passed as
+ * `core.deploy()`'s `preflight` option, merged (per field, core-side) with
+ * any `spec.preflight` the request body carries. A failing check throws
+ * `DeployError("PREFLIGHT_FAILED", ..., preflightFailures)` BEFORE any
+ * transaction is broadcast; this handler maps each `PreflightFailure` into
+ * the `done{success:false}` errors array as `{code:"PREFLIGHT_FAILED",
+ * message, check, expected, actual}` (see the `DeployError` catch branch
+ * below) so the studio can render exactly which check(s) failed. These
+ * values (chain ids, wei amounts, an address) are non-secret.
+ *
  * ReadError handling: on success:true, we call readDeployment() synchronously.
  * If it throws ReadError we still emit done{success:true, deployment:null,
  * warning:"could not read journal"} — a successful deploy must not become a 500.
@@ -428,6 +469,31 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
+
+  // --- Simulate-first interlock (issue #156) --------------------------------
+  // For networks configured with requireSimulate: true, refuse to deploy
+  // unless a POST /api/simulate has already succeeded for this EXACT spec
+  // (by stable hash — see spec-hash.ts) on this same network (see
+  // simulate-state.ts and handleSimulate's recording step above). This check
+  // runs BEFORE any provider/tx construction — caught pre-broadcast, never an
+  // SSE error after a transaction could have been sent. SECURITY: the spec
+  // itself is never echoed back — only a fixed, structured error.
+  if (network.config.requireSimulate === true) {
+    const hash = specHash(body);
+    if (!hasSimulated(network.config.deploymentDir, hash)) {
+      writeSseEvent(res, "done", {
+        success: false,
+        errors: [
+          {
+            code: "SIMULATE_REQUIRED",
+            message: "This network requires a successful simulate for this exact spec before deploying.",
+          },
+        ],
+      });
+      res.end();
+      return;
+    }
+  }
 
   // --- Validate private key presence BEFORE building the provider ----------
   // SECURITY: never include the key value in any message or log.
@@ -522,18 +588,47 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
       artifactResolver,
       moduleId,
       ...(deploymentParameters !== undefined ? { deploymentParameters } : {}),
+      // Per-network preflight policy (issue #156) — merged by core.deploy()
+      // (per field) with any spec.preflight the request body carries. See
+      // networks.ts's NetworkConfig.preflight doc comment.
+      ...(network.config.preflight !== undefined ? { preflight: network.config.preflight } : {}),
     });
   } catch (caughtErr) {
-    // deploy() throws DeployError for INVALID_SPEC and COMPILE_ERROR.
-    // All other thrown values are unexpected errors.
+    // deploy() throws DeployError for INVALID_SPEC, COMPILE_ERROR, and
+    // PREFLIGHT_FAILED. All other thrown values are unexpected errors.
     if (caughtErr instanceof DeployError) {
       const deployErr = caughtErr;
-      const errors: Array<{ code?: string; message: string }> =
+      let errors: Array<{
+        code?: string;
+        message: string;
+        check?: string;
+        expected?: string;
+        actual?: string;
+      }>;
+      if (
         deployErr.code === "INVALID_SPEC" &&
         deployErr.specErrors != null &&
         deployErr.specErrors.length > 0
-          ? deployErr.specErrors.map((se) => ({ code: deployErr.code, message: se.message }))
-          : [{ code: deployErr.code, message: deployErr.message }];
+      ) {
+        errors = deployErr.specErrors.map((se) => ({ code: deployErr.code, message: se.message }));
+      } else if (
+        deployErr.code === "PREFLIGHT_FAILED" &&
+        deployErr.preflightFailures != null &&
+        deployErr.preflightFailures.length > 0
+      ) {
+        // Structured preflight failures (issue #156) — non-secret (chain
+        // ids, wei amounts, the deployer address), safe to forward so the
+        // studio can render exactly which check(s) failed.
+        errors = deployErr.preflightFailures.map((f) => ({
+          code: "PREFLIGHT_FAILED",
+          message: f.message,
+          check: f.check,
+          expected: f.expected,
+          actual: f.actual,
+        }));
+      } else {
+        errors = [{ code: deployErr.code, message: deployErr.message }];
+      }
       writeSseEvent(res, "done", { success: false, errors });
       res.end();
       return;
