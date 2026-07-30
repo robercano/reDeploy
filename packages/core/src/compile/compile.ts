@@ -217,7 +217,11 @@ export function buildCreationOrder(entries: readonly ContractEntry[]): ContractE
           // Otherwise, the validator will catch it as a missing reference
         }
       }
-      // `param` and `resolver` args add no edges (see NOTE above).
+      // `param` and `resolver` args add no edges (see NOTE above). `crossRef`
+      // args likewise add no edge here — the referenced contract lives on a
+      // DIFFERENT network entirely, outside this spec's own dependency
+      // graph, so a build-order edge would be meaningless. See CrossRefArg's
+      // doc comment (spec/types.ts) for the full v1 scope boundary.
     }
     // After constraints
     for (const afterId of entry.after ?? []) {
@@ -468,6 +472,24 @@ function mapContractArg(
         `Resolver args must be resolved to concrete literals first — deploy() does this ` +
         `automatically via its pre-resolution pass (resolve/resolveSpec.ts). If you are ` +
         `calling compileSpec() directly, call resolveSpecResolverArgs() on the spec first.`,
+      argPath,
+    );
+  }
+  if (arg.kind === "crossRef") {
+    // compileSpec() never reads another network's journal itself — see
+    // resolve/crossRef.ts and this error code's doc comment
+    // (compile/errors.ts). deploy() always pre-resolves crossRef args via
+    // resolve/crossRef.ts's resolveCrossRefArgs() BEFORE calling
+    // compileSpec(), so this should be unreachable through the normal
+    // deploy() pipeline. It fires only if compileSpec() is called directly
+    // with a spec that still contains unresolved crossRef args.
+    throw new CompileError(
+      "UNRESOLVED_CROSS_REF_ARG",
+      `Cross-chain ref to contract "${arg.contract}" on network "${arg.network}" was not ` +
+        `pre-resolved before compileSpec() was called. crossRef args must be resolved to ` +
+        `concrete literals first — deploy() does this automatically via its pre-resolution ` +
+        `pass (resolve/crossRef.ts). If you are calling compileSpec() directly, call ` +
+        `resolveCrossRefArgs() on the spec first.`,
       argPath,
     );
   }

@@ -1114,6 +1114,82 @@ describe("compileSpec — UNRESOLVED_RESOLVER_ARG error (unresolved ResolverArg)
 });
 
 // ---------------------------------------------------------------------------
+// CrossRefArg — unresolved cross-chain refs at compile time (issue #159)
+// ---------------------------------------------------------------------------
+//
+// compileSpec() is called by deploy() only AFTER its crossRef pre-resolution
+// pass (resolve/crossRef.ts) has already replaced every `{ kind: "crossRef" }`
+// arg with a concrete `{ kind: "literal" }` arg — so compileSpec() itself
+// should never see a crossRef arg in the normal deploy() pipeline. These
+// tests exercise compileSpec()'s defensive behavior for direct callers who
+// pass a spec that still contains unresolved crossRef args (mirrors the
+// UNRESOLVED_RESOLVER_ARG tests above).
+
+describe("compileSpec — UNRESOLVED_CROSS_REF_ARG error (unresolved CrossRefArg)", () => {
+  it("throws CompileError(UNRESOLVED_CROSS_REF_ARG) for an unresolved crossRef arg", () => {
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+      ],
+    };
+    expect(() => compileSpec(spec)).toThrowError(CompileError);
+    try {
+      compileSpec(spec);
+    } catch (err) {
+      expect(err).toBeInstanceOf(CompileError);
+      expect((err as CompileError).code).toBe("UNRESOLVED_CROSS_REF_ARG");
+      expect((err as CompileError).message).toContain("registry");
+      expect((err as CompileError).message).toContain("mainnet");
+      expect((err as CompileError).path).toBe("contracts[id=vault].args[0]");
+    }
+  });
+
+  it("compiles successfully once the crossRef arg has been pre-substituted with a literal", () => {
+    // Simulates what deploy()'s crossRef pre-resolution pass does: replace
+    // the crossRef arg with a concrete literal BEFORE calling compileSpec().
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "literal", value: "0x000000000000000000000000000000000000AA" }],
+        },
+      ],
+    };
+    const mod = compileSpec(spec);
+    const f = asContractFuture([...mod.futures][0]);
+    expect(f.constructorArgs[0]).toBe("0x000000000000000000000000000000000000AA");
+  });
+
+  it("crossRef args contribute no build-order dependency edges (buildCreationOrder)", () => {
+    // A crossRef arg referencing a LOCAL-looking contract id textually (in
+    // `contract`) must NOT create a build-time dependency edge — the target
+    // lives on a DIFFERENT network entirely, outside this spec's dependency
+    // graph. Order here is declared with the "dependent" contract FIRST
+    // specifically to prove no edge was created.
+    const spec: DeploymentSpec = {
+      version: 1,
+      contracts: [
+        {
+          id: "vault",
+          contract: "Vault",
+          args: [{ kind: "crossRef", network: "mainnet", contract: "registry" }],
+        },
+        { id: "registry", contract: "Registry" },
+      ],
+    };
+    const ordered = buildCreationOrder(spec.contracts);
+    expect(ordered.map((e) => e.id)).toEqual(["vault", "registry"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 15. Upgradeable proxies — UUPS (issue #155)
 // ---------------------------------------------------------------------------
 
