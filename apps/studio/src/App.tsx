@@ -1165,7 +1165,7 @@ export function App() {
     setVerifyError(null);
 
     const [driftOutcome, sourceOutcome] = await Promise.all([
-      runVerifyConfig(config),
+      runVerifyConfig(config, fetch, selectedNetwork ?? undefined),
       runVerifySource(),
     ]);
 
@@ -1196,7 +1196,7 @@ export function App() {
     }
 
     setVerifying(false);
-  }, [verifying, config]);
+  }, [verifying, config, selectedNetwork]);
 
   // "Apply config" opens a confirmation modal — it never POSTs directly
   // (mirrors onOpenDeployModal above; broadcasts real transactions).
@@ -1299,7 +1299,7 @@ export function App() {
         // `driftResults` untouched — the UI keeps showing the last-known
         // (now possibly stale) drift status rather than clearing it.
         if (forceStepIds !== undefined) {
-          const driftOutcome = await runVerifyConfig(config);
+          const driftOutcome = await runVerifyConfig(config, fetch, selectedNetwork ?? undefined);
           if (driftOutcome.ok) {
             setDriftResults(driftOutcome.result.results);
           }

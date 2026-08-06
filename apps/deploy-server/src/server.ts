@@ -1209,13 +1209,22 @@ function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unk
 
 /**
  * Shared by both /api/verify/config and /api/verify/source: read the
- * persisted deployment from the server-resolved deploymentDir, treating a
- * fresh/never-deployed directory as the EMPTY_DEPLOYMENT_VIEW (not an error)
- * exactly like handleGetDeployment. On any other ReadError (or unexpected
- * error), writes a 500 response and returns `null` so the caller bails out.
+ * persisted deployment from a deploymentDir, treating a fresh/never-deployed
+ * directory as the EMPTY_DEPLOYMENT_VIEW (not an error) exactly like
+ * handleGetDeployment. On any other ReadError (or unexpected error), writes a
+ * 500 response and returns `null` so the caller bails out.
+ *
+ * `deploymentDir` defaults to the server-resolved (env-only) directory —
+ * /api/verify/source has no network selection, so it always uses the
+ * default. /api/verify/config instead passes the RESOLVED network's own
+ * `deploymentDir` (see handleVerifyConfig) so a drift check against a
+ * non-default network reads that network's deployment, not the default one.
  */
-function readPersistedDeploymentOr500(res: ServerResponse, logLabel: string): DeploymentView | null {
-  const deploymentDir = resolveDeploymentDir();
+function readPersistedDeploymentOr500(
+  res: ServerResponse,
+  logLabel: string,
+  deploymentDir: string = resolveDeploymentDir(),
+): DeploymentView | null {
   try {
     return readDeployment({ deploymentDir });
   } catch (err) {
@@ -1234,18 +1243,28 @@ function readPersistedDeploymentOr500(res: ServerResponse, logLabel: string): De
  *
  * Reads the JSON body as a ConfigSpec (structurally validated via
  * validateConfigSpecShape — a 400 for anything not shaped like
- * `{version, steps, orderedSteps?}`), reads the persisted deployment (server
- * env only — see readPersistedDeploymentOr500), builds a read-only
- * (never-signing) chain reader over RPC_URL/FOUNDRY_OUT, and runs
- * runConfigDrift() (see verify/run-config-drift.ts for the full
+ * `{version, steps, orderedSteps?}`), reads the persisted deployment for the
+ * RESOLVED network (see readPersistedDeploymentOr500), builds a read-only
+ * (never-signing) chain reader over that network's rpcUrl/FOUNDRY_OUT, and
+ * runs runConfigDrift() (see verify/run-config-drift.ts for the full
  * graceful-degradation contract: unresolvable refs and non-derivable getter
  * mappings become per-step "error"/"skipped" results, never a 500).
+ *
+ * Network selection: accepts the OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest`), mirroring `handleApplyConfig`. This MUST stay
+ * network-aware the same way the forced-re-apply write path is (issue #153
+ * security review, finding H1): drift badges gate a real one-click re-apply
+ * broadcast, so computing them against the wrong chain would let a user
+ * "fix" a mismatch that doesn't exist (or miss one that does) on the network
+ * actually being written to.
  *
  * Response: 200 `{ clean: boolean, results: ConfigDriftResultEntry[] }`.
  * Error responses (non-streaming JSON):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON, or body not shaped like a ConfigSpec
- *   - 500  the persisted deployment could not be read
+ *   - 400  malformed JSON, body not shaped like a ConfigSpec, or an unknown
+ *          `?network=` name
+ *   - 500  network configuration could not be loaded, or the persisted
+ *          deployment could not be read
  */
 async function handleVerifyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const bodyResult = await readAndParseBody(req, res);
@@ -1258,10 +1277,13 @@ async function handleVerifyConfig(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
 
-  const deployment = readPersistedDeploymentOr500(res, "verify/config");
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
+
+  const deployment = readPersistedDeploymentOr500(res, "verify/config", network.config.deploymentDir);
   if (deployment === null) return;
 
-  const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+  const rpcUrl = network.config.rpcUrl;
   const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
 
   const addressToContractName = new Map<string, string>();
@@ -1490,8 +1512,12 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  if (method === "POST" && url === "/api/verify/config") {
+  if (method === "POST" && pathname === "/api/verify/config") {
     // handleVerifyConfig is async; fire-and-forget — errors are handled internally.
+    // Uses `pathname` (query-stripped), NOT `url`, because this route now
+    // accepts an optional `?network=` query param (issue #153 security
+    // review, finding H1) — matching the raw `url` would 404 any request
+    // that includes one.
     handleVerifyConfig(req, res).catch(() => {
       if (!res.headersSent) {
         writeJsonResponse(res, 500, { error: "Internal Server Error" });

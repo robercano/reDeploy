@@ -111,14 +111,30 @@ async function readJsonOrError<T>(response: Response): Promise<{ ok: true; resul
  * @param spec     - The ConfigSpec JSON object to send (as the request body).
  * @param fetchFn  - The fetch implementation to use (defaults to global fetch;
  *                   accepted as a parameter for testability).
+ * @param network  - Optional target network name (issue #139 convention),
+ *                   sent as `?network=<name>` (URI-encoded). Omitted/undefined
+ *                   ⇒ no `network` param, server resolves its default network.
+ *                   MUST match whatever network a subsequent forced re-apply
+ *                   targets (issue #153 security review, finding H1) — the
+ *                   drift badges this produces gate a real on-chain write, so
+ *                   reading drift from one chain while writing to another
+ *                   would let a "Re-apply" click broadcast a transaction for
+ *                   a mismatch that doesn't exist (or hide one that does) on
+ *                   the network actually being written to.
  */
 export async function runVerifyConfig(
   spec: unknown,
   fetchFn: typeof fetch = fetch,
+  network?: string,
 ): Promise<VerifyConfigResult> {
+  const url =
+    network !== undefined && network !== ""
+      ? `/api/verify/config?network=${encodeURIComponent(network)}`
+      : "/api/verify/config";
+
   let response: Response;
   try {
-    response = await fetchFn("/api/verify/config", {
+    response = await fetchFn(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec),
