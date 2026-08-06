@@ -20,6 +20,7 @@ import * as path from "node:path";
 
 const getChainIdSpy = vi.fn();
 const readContractSpy = vi.fn();
+const httpSpy = vi.fn();
 
 vi.mock("viem", async (importOriginal) => {
   const original = await importOriginal<typeof import("viem")>();
@@ -29,7 +30,10 @@ vi.mock("viem", async (importOriginal) => {
       getChainId: (...args: unknown[]) => getChainIdSpy(...args),
       readContract: (...args: unknown[]) => readContractSpy(...args),
     })),
-    http: vi.fn((url: string) => ({ type: "http", url })),
+    http: vi.fn((url: string) => {
+      httpSpy(url);
+      return { type: "http", url };
+    }),
   };
 });
 
@@ -184,6 +188,7 @@ beforeEach(() => {
 
   getChainIdSpy.mockReset();
   readContractSpy.mockReset();
+  httpSpy.mockReset();
 });
 
 afterEach(() => {
@@ -481,10 +486,12 @@ describe("POST /api/verify/config — multi-network (?network=)", () => {
     const resAlpha = await doRequest(port, "POST", "/api/verify/config?network=alpha", NETWORK_SET_FEE_SPEC);
     expect(resAlpha.statusCode).toBe(200);
     expect(readContractSpy).toHaveBeenLastCalledWith(expect.objectContaining({ address: ALPHA_ADDRESS }));
+    expect(httpSpy).toHaveBeenLastCalledWith("http://alpha-rpc.internal.example.com");
 
     const resBeta = await doRequest(port, "POST", "/api/verify/config?network=beta", NETWORK_SET_FEE_SPEC);
     expect(resBeta.statusCode).toBe(200);
     expect(readContractSpy).toHaveBeenLastCalledWith(expect.objectContaining({ address: BETA_ADDRESS }));
+    expect(httpSpy).toHaveBeenLastCalledWith("http://beta-rpc.internal.example.com");
   });
 
   it("an unknown ?network= value -> 400, the chain is never read", async () => {

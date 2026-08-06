@@ -1398,13 +1398,13 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  *   POST /api/verify/config   → 200 JSON { clean, results } (config-drift check)
  *   POST /api/verify/source   → 200 JSON { success, skipped, reason?, results } (Etherscan source verification)
  *
- * `GET /api/deployment`, `POST /api/simulate`, `POST /api/deploy`, and
- * `POST /api/apply-config` all accept an OPTIONAL `?network=<name>` query
- * param (see `resolveNetworkForRequest` / networks.ts) — hence routing
- * matches on `pathname` (query-string-stripped), not the raw `url`, for
- * these four. `GET /api/networks` takes no query params but is likewise
- * matched on `pathname` for consistency (harmless if a client appends one
- * anyway).
+ * `GET /api/deployment`, `POST /api/simulate`, `POST /api/deploy`,
+ * `POST /api/apply-config`, and `POST /api/verify/config` all accept an
+ * OPTIONAL `?network=<name>` query param (see `resolveNetworkForRequest` /
+ * networks.ts) — hence routing matches on `pathname` (query-string-stripped),
+ * not the raw `url`, for these five. `GET /api/networks` takes no query
+ * params but is likewise matched on `pathname` for consistency (harmless if
+ * a client appends one anyway).
  *
  * `POST /api/apply-config` ALSO accepts an OPTIONAL `?forceStepIds=<id1>,<id2>`
  * query param (see `parseForceStepIds`) that forces re-execution of specific
