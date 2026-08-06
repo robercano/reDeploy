@@ -88,6 +88,25 @@ function getQueryParam(url: string | undefined, name: string): string | undefine
 }
 
 /**
+ * Like `getQueryParam`, but returns EVERY value of a repeated query param
+ * (`?name=a&name=b` → `["a", "b"]`) instead of only the first
+ * (`URLSearchParams.get` semantics). Returns `[]` when `url` is undefined,
+ * has no `?`, or the param is absent — never throws (same WHATWG-parser
+ * avoidance rationale as `getQueryParam`).
+ *
+ * Used by `parseForceStepIds` (issue #153 review, finding B5) so that
+ * `?forceStepIds=a&forceStepIds=b` MERGES both values instead of silently
+ * dropping all but the first, as a bare `.get()` would.
+ */
+function getQueryParamAll(url: string | undefined, name: string): string[] {
+  if (url === undefined) return [];
+  const qIdx = url.indexOf("?");
+  if (qIdx === -1) return [];
+  const queryString = url.slice(qIdx + 1).split("#")[0] ?? "";
+  return new URLSearchParams(queryString).getAll(name);
+}
+
+/**
  * Resolve the target network for an incoming request, from the OPTIONAL
  * `?network=<name>` query param — shared by `handleSimulate`, `handleDeploy`,
  * and `handleGetDeployment` so all three stay in sync (see networks.ts's
@@ -167,12 +186,30 @@ const MAX_FORCE_STEP_ID_LENGTH = 256;
  * spec validation and be a breaking wire-format change. The query string is
  * the only place to carry this out-of-band control input.
  *
- * Format: a comma-separated list of step ids. Each id is trimmed; empty
- * entries (from a leading/trailing/doubled comma, or the whole param being
- * an empty string) are dropped silently — NOT an error. Duplicate ids (after
- * trimming) are deduped. The list is capped at `MAX_FORCE_STEP_IDS` entries
- * and each id at `MAX_FORCE_STEP_ID_LENGTH` characters — both violations are
- * clean 400s.
+ * Format: BOTH forms are accepted and MERGED —
+ *   - a comma-separated list within a single value: `?forceStepIds=a,b`
+ *   - a repeated query param: `?forceStepIds=a&forceStepIds=b`
+ * `getQueryParamAll` collects every occurrence of the param (unlike a bare
+ * `URLSearchParams.get`, which silently keeps only the first), and each
+ * occurrence is then split on `,` — so `?forceStepIds=a,b&forceStepIds=c`
+ * yields `["a", "b", "c"]`. Each id is trimmed; empty entries (from a
+ * leading/trailing/doubled comma, or a value being an empty string) are
+ * dropped silently — NOT an error.
+ *
+ * ORDER OF CHECKS (matters for the cap): the `MAX_FORCE_STEP_IDS` count cap
+ * is enforced on the trimmed, non-empty id list BEFORE deduping — so, e.g.,
+ * 501 copies of the SAME id is a 400, even though it would collapse to a
+ * single id after dedup. This is a deliberate input-size guard (bounding the
+ * work done per request before any dedup pass), not a bug. The
+ * `MAX_FORCE_STEP_ID_LENGTH` per-id length cap is checked next, and
+ * duplicate ids (after trimming) are deduped only in the final returned
+ * list.
+ *
+ * RESERVED DELIMITER: because a single value is split on `,`, a step id
+ * containing a literal comma can never be forced via this param — it would
+ * always be split into two ids. `apply-config-client.ts`'s `runApplyConfig`
+ * enforces this client-side (rejecting such an id before sending) so this is
+ * a documented contract, not a silent footgun.
  *
  * Ids that don't match any step in the spec are NOT validated here —
  * `applyConfig()` silently ignores unknown forced ids (see
@@ -196,13 +233,13 @@ function parseForceStepIds(
   req: IncomingMessage,
   res: ServerResponse,
 ): { ok: true; forceStepIds: string[] | undefined } | { ok: false } {
-  const raw = getQueryParam(req.url, "forceStepIds");
-  if (raw === undefined) {
+  const rawValues = getQueryParamAll(req.url, "forceStepIds");
+  if (rawValues.length === 0) {
     return { ok: true, forceStepIds: undefined };
   }
 
-  const ids = raw
-    .split(",")
+  const ids = rawValues
+    .flatMap((raw) => raw.split(","))
     .map((id) => id.trim())
     .filter((id) => id !== "");
 

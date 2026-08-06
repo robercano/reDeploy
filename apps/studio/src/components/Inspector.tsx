@@ -177,24 +177,34 @@ function stringifyDriftValue(value: unknown): string {
     : str;
 }
 
+// Clickable badge base style (issue #153 review, non-blocking performance
+// note): the drift badge is always `role="button"`/clickable (toggles the
+// detail panel), so `cursor: "pointer"` is baked into every entry below AT
+// MODULE SCOPE — these are constant object references, never recreated per
+// render. Previously the render spread `{ ...DRIFT_BADGE_STYLES[status],
+// cursor: "pointer" }` inline in JSX, allocating a brand-new style object for
+// every badge on every render; baking the property in here restores a
+// constant reference (matching every other style constant in this file).
+const clickableBadgeBaseStyle: React.CSSProperties = { ...badgeBaseStyle, cursor: "pointer" };
+
 const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
   match: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-success-bg-strong)",
     color: "var(--color-success-text-strong)",
   },
   drift: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-danger-bg)",
     color: "var(--color-danger-text)",
   },
   error: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-warning-bg)",
     color: "var(--color-warning-text)",
   },
   skipped: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-bg-elevated)",
     color: "var(--color-text-muted)",
   },
@@ -266,7 +276,7 @@ function ConfigStepCard({
               detail panel below. */}
           {drift !== undefined && (
             <span
-              style={{ ...(DRIFT_BADGE_STYLES[drift.status] ?? badgeBaseStyle), cursor: "pointer" }}
+              style={DRIFT_BADGE_STYLES[drift.status] ?? clickableBadgeBaseStyle}
               data-testid={`config-step-${step.id}-drift`}
               title={drift.message}
               role="button"

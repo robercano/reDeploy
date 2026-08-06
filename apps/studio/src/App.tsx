@@ -68,6 +68,7 @@ import { graphToTemplate } from "./templates/serialize.js";
 import type { ParamSelection } from "./templates/serialize.js";
 import { graphToSpec } from "./spec/graph-to-spec.js";
 import type { GraphEdge } from "./spec/graph-to-spec.js";
+import { narrowConfigToStep } from "./spec/narrow-config.js";
 import { toGraphNodes } from "./spec/project-nodes.js";
 import { overviewEdges } from "./spec/overview-edges.js";
 import type { ContractNodeData, ViewMode } from "./spec/types.js";
@@ -1238,9 +1239,22 @@ export function App() {
   // forced re-apply we automatically re-run runVerifyConfig so the
   // Inspector's drift badges refresh to reflect the newly-applied state,
   // without requiring the user to click "Verify" again.
+  //
+  // SPEC NARROWING (issue #153 review, finding B1): `forceStepIds` alone only
+  // controls which ALREADY-journaled step is forced to re-run — it does
+  // nothing to stop every OTHER not-yet-applied step still on the canvas from
+  // also executing, since `applyConfig()` server-side runs every step in the
+  // POSTed spec that isn't already journaled. The confirm modal below
+  // promises "1 step, nothing else broadcast" — to make that literally true
+  // (not just a UI claim), a single-step re-apply POSTs a spec NARROWED to
+  // just `pendingReapplyStepId` (see narrowConfigToStep's doc comment for why
+  // this is safe: ref resolution never depends on sibling steps). A full
+  // (non-forced) apply still POSTs the complete `config` unchanged.
   const handleApplyConfig = useCallback(async () => {
     if (applying) return;
     const forceStepIds = pendingReapplyStepId !== null ? [pendingReapplyStepId] : undefined;
+    const specToSend =
+      pendingReapplyStepId !== null ? narrowConfigToStep(config, pendingReapplyStepId) : config;
     // Close the confirm modal immediately so a second confirm can't double-fire.
     setShowApplyConfigModal(false);
     setPendingReapplyStepId(null);
@@ -1250,7 +1264,7 @@ export function App() {
     setApplyConfigSteps([]);
 
     try {
-      const result = await runApplyConfig(config, fetch, selectedNetwork ?? undefined, forceStepIds);
+      const result = await runApplyConfig(specToSend, fetch, selectedNetwork ?? undefined, forceStepIds);
 
       setApplyConfigSteps(result.steps);
 
@@ -1272,6 +1286,18 @@ export function App() {
         // from the PREVIOUS /api/verify/config run are now stale. Re-run it
         // (best-effort — a failure here doesn't turn the successful apply
         // into an error) so the badges immediately reflect the new state.
+        //
+        // On-failure behaviour, chosen deliberately (issue #153 review,
+        // finding B4/non-blocking): unlike `handleVerify` — a user-initiated
+        // check where a failed drift call clears `driftResults` to `null` so
+        // no stale badge is shown as if it were current — this refresh is a
+        // best-effort background follow-up to a real state-changing action
+        // that already succeeded. Clearing to `null` here would replace a
+        // (possibly still-accurate) previous drift badge with "no drift data
+        // at all", which reads as MORE alarming/uncertain than simply leaving
+        // the last-known badge in place. So on failure we intentionally leave
+        // `driftResults` untouched — the UI keeps showing the last-known
+        // (now possibly stale) drift status rather than clearing it.
         if (forceStepIds !== undefined) {
           const driftOutcome = await runVerifyConfig(config);
           if (driftOutcome.ok) {
@@ -1581,9 +1607,10 @@ export function App() {
               <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
                 This will <strong>broadcast a real transaction</strong> for step{" "}
                 <strong data-testid="apply-config-reapply-step-id">{pendingReapplyStepId}</strong>{" "}
-                — FORCING it to re-run even though it was already applied
-                (config-drift re-apply). It is <strong>irreversible</strong> —
-                gas will be spent. All other steps are unaffected.
+                only — FORCING it to run now, regardless of whether it ran
+                before (config-drift re-apply). It is{" "}
+                <strong>irreversible</strong> — gas will be spent. No other
+                step will be sent or broadcast.
               </p>
             ) : (
               <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>

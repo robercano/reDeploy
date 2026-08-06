@@ -919,6 +919,56 @@ describe("POST /api/apply-config — forceStepIds", () => {
     );
   });
 
+  it("repeated ?forceStepIds= params MERGE (not just the first one) — issue #153 review finding B5", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee&forceStepIds=grant-minter",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: ["set-fee", "grant-minter"] }),
+    );
+  });
+
+  it("a repeated param value can itself be comma-separated — both forms combine", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee,grant-minter&forceStepIds=wire-token-into-vault",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceStepIds: ["set-fee", "grant-minter", "wire-token-into-vault"],
+      }),
+    );
+  });
+
   it("max-count ids (exactly 500) is accepted", async () => {
     process.env["DEPLOYER_PRIVATE_KEY"] =
       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

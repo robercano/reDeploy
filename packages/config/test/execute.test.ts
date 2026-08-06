@@ -1015,16 +1015,57 @@ describe("applyConfig — forceStepIds", () => {
 
     const journalFile = path.join(stateDir, "config-state.jsonl");
     const content = await fs.promises.readFile(journalFile, "utf8");
+
+    // "set-fee" appears twice: once from the first run, once from the forced
+    // re-run. readCompletedStepIds folds duplicates into a Set, so this is
+    // safe and does not affect skip/resume behaviour.
+    const setFeeLines = content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { id: string; completedAt: string })
+      .filter((r) => r.id === "set-fee");
+    expect(setFeeLines).toHaveLength(2);
+
+    // The re-journaled completedAt must be a fresh timestamp — not a stale
+    // copy of the first run's record — and both must be valid ISO strings.
+    for (const record of setFeeLines) {
+      expect(() => new Date(record.completedAt).toISOString()).not.toThrow();
+      expect(new Date(record.completedAt).toISOString()).toBe(record.completedAt);
+    }
+    expect(new Date(setFeeLines[1]!.completedAt).getTime()).toBeGreaterThanOrEqual(
+      new Date(setFeeLines[0]!.completedAt).getTime(),
+    );
+  });
+
+  it("a forced step whose executor THROWS does not append a second journal record (no double-journal on failure)", async () => {
+    const stateDir = await makeTempDir();
+
+    // First run: fully applies the spec, journaling "set-fee" once.
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    // Second run: force "set-fee" to re-execute, but its executor throws on
+    // this (its only) call. The error must propagate, and — since
+    // executeStep only appends to the journal AFTER a successful
+    // executor.execute() — "set-fee" must NOT be journaled a second time.
+    const executor2 = new FakeExecutor(1);
+    await expect(
+      applyConfig({
+        ...makeOptions(threeStepSpec, executor2, stateDir),
+        forceStepIds: ["set-fee"],
+      }),
+    ).rejects.toThrow(/simulated failure/);
+
+    const journalFile = path.join(stateDir, "config-state.jsonl");
+    const content = await fs.promises.readFile(journalFile, "utf8");
     const ids = content
       .trim()
       .split("\n")
       .filter(Boolean)
       .map((l) => (JSON.parse(l) as { id: string }).id);
 
-    // "set-fee" appears twice: once from the first run, once from the forced
-    // re-run. readCompletedStepIds folds duplicates into a Set, so this is
-    // safe and does not affect skip/resume behaviour.
-    expect(ids.filter((id) => id === "set-fee")).toHaveLength(2);
+    expect(ids.filter((id) => id === "set-fee")).toHaveLength(1);
   });
 
   it("forced steps still resolve read args and invoke executor.read() again", async () => {

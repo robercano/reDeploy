@@ -15,7 +15,7 @@
  * and App.applyConfig.test.tsx (SSE apply-config mocking + confirm gating).
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import App from "../src/App.js";
 
@@ -303,6 +303,56 @@ describe("App — Re-apply flow", () => {
     });
   });
 
+  it("when the post-re-apply drift refresh ITSELF fails (500), the apply success banner still shows, no error banner appears, and the drift badge stays at its last-known ('drift') status — issue #153 review finding B4", async () => {
+    const { fetchSpy, verifyConfigCallUrls } = mockCombinedFetch({
+      verifyConfigResponses: [
+        {
+          status: 200,
+          body: { clean: false, results: [{ id: "setFee", status: "drift", expected: 500, actual: 999 }] },
+        },
+        // The SECOND /api/verify/config call (the post-re-apply refresh)
+        // fails — exercises the `if (driftOutcome.ok)` false branch at
+        // App.tsx's handleApplyConfig, which was previously untested and
+        // inexpressible with this helper.
+        { status: 500, body: { error: "internal error" } },
+      ],
+      verifySourceResponse: { status: 200, body: { success: true, skipped: false, results: [] } },
+      applyConfigRaw:
+        stepFrame("setFee", "setX", "executing") +
+        stepFrame("setFee", "setX", "completed") +
+        doneOkFrame(
+          ["setFee"],
+          [],
+          ["setFee"],
+          [{ id: "setFee", kind: "setX", completed: true, completedAt: "2026-08-06T00:00:00.000Z" }],
+        ),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await setupWithDrift(fetchSpy);
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    fireEvent.click(screen.getByTestId("config-step-setFee-reapply"));
+    fireEvent.click(screen.getByTestId("apply-config-confirm"));
+
+    // Both /api/verify/config calls happened (the second one failed).
+    await waitFor(() => {
+      expect(verifyConfigCallUrls.length).toBe(2);
+    });
+
+    // The apply itself succeeded — its success banner shows, unaffected by
+    // the drift-refresh failure (which is best-effort, per handleApplyConfig's
+    // doc comment).
+    await waitFor(() => {
+      expect(screen.queryByTestId("apply-config-success")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("apply-config-error")).toBeNull();
+
+    // The drift badge keeps its LAST-KNOWN status ("drift") rather than being
+    // cleared to a blank/no-data state or crashing the app — see the
+    // deliberate on-failure-behaviour comment in App.tsx's handleApplyConfig.
+    expect(screen.getByTestId("config-step-setFee-drift").textContent).toBe("drift");
+  });
+
   it("Cancel on the re-apply confirm modal does NOT POST /api/apply-config", async () => {
     const { fetchSpy } = mockCombinedFetch({
       verifyConfigResponses: [
@@ -348,5 +398,200 @@ describe("App — Re-apply flow", () => {
     expect(modal.textContent).toContain("Confirm re-apply step");
     expect(modal.textContent).not.toContain("Confirm apply config");
     expect(screen.getByTestId("apply-config-confirm").textContent).toBe("Re-apply for real");
+  });
+
+  it("the re-apply modal's copy is accurate (issue #153 review finding B1) — no false 'already applied' claim, and truthfully says no other step is sent", async () => {
+    const { fetchSpy } = mockCombinedFetch({
+      verifyConfigResponses: [
+        {
+          status: 200,
+          body: { clean: false, results: [{ id: "setFee", status: "drift", expected: 500, actual: 999 }] },
+        },
+      ],
+      verifySourceResponse: { status: 200, body: { success: true, skipped: false, results: [] } },
+      applyConfigRaw: doneOkFrame([], [], [], []),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await setupWithDrift(fetchSpy);
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    fireEvent.click(screen.getByTestId("config-step-setFee-reapply"));
+
+    const modal = screen.getByTestId("apply-config-modal");
+    // Old (fixed) copy asserted the step "was already applied" — false when a
+    // drifted step was never journaled. The reworded copy makes no claim
+    // about journal history at all.
+    expect(modal.textContent).not.toContain("already applied");
+    // Now structurally true (the POSTed spec is narrowed to this one step —
+    // see App.reapplyNarrowing.test.tsx), not just an unchecked UI label.
+    expect(modal.textContent?.toLowerCase()).toContain("no other step");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `if (applying) return;` guard in onReapplyStep (issue #153 review finding
+// B3) — the Inspector and its Re-apply button stay mounted and clickable
+// while an apply is in flight, so this guard is the only thing preventing a
+// SECOND real on-chain broadcast from a second click.
+// ---------------------------------------------------------------------------
+
+describe("App — onReapplyStep guard while an apply is already in flight", () => {
+  it("clicking Re-apply again while an apply is in flight is a no-op: no second modal, no second POST", async () => {
+    // The /api/apply-config fetch NEVER resolves during this test — keeps
+    // `applying` true for its whole duration, so we can assert the guard.
+    let resolveApply: ((r: Response) => void) | null = null;
+    const neverResolvingApply = new Promise<Response>((resolve) => {
+      resolveApply = resolve;
+    });
+
+    const fetchSpy = vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/verify/config") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              clean: false,
+              results: [{ id: "setFee", status: "drift", expected: 500, actual: 999 }],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url === "/api/verify/source") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true, skipped: false, results: [] }), { status: 200 }),
+        );
+      }
+      if (url.startsWith("/api/apply-config")) {
+        return neverResolvingApply;
+      }
+      return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await setupWithDrift(fetchSpy);
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    fireEvent.click(screen.getByTestId("config-step-setFee-reapply"));
+    fireEvent.click(screen.getByTestId("apply-config-confirm"));
+
+    // The confirm modal closes immediately (handleApplyConfig closes it
+    // synchronously before awaiting the fetch) — this confirms the apply is
+    // genuinely in flight (`applying === true`) with the request never
+    // resolving.
+    await waitFor(() => {
+      expect(screen.queryByTestId("apply-config-modal")).toBeNull();
+    });
+    const applyCallsBefore = fetchSpy.mock.calls.filter((c: unknown[]) =>
+      (c[0] as string).startsWith("/api/apply-config"),
+    ).length;
+    expect(applyCallsBefore).toBe(1);
+
+    // The drift detail panel + its Re-apply button are still mounted (App
+    // never unmounts the Inspector while applying) — clicking Re-apply again
+    // must be a no-op: the `if (applying) return;` guard in onReapplyStep.
+    fireEvent.click(screen.getByTestId("config-step-setFee-reapply"));
+
+    expect(screen.queryByTestId("apply-config-modal")).toBeNull();
+    const applyCallsAfter = fetchSpy.mock.calls.filter((c: unknown[]) =>
+      (c[0] as string).startsWith("/api/apply-config"),
+    ).length;
+    expect(applyCallsAfter).toBe(1);
+
+    // Cleanup: resolve the hung fetch so the test doesn't leave a dangling
+    // unhandled promise / act() warning after the test completes.
+    resolveApply!(
+      new Response(
+        `event: done\ndata: ${JSON.stringify({
+          success: true,
+          executedStepIds: [],
+          skippedStepIds: [],
+          completedStepIds: [],
+          deployment: null,
+        })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      ),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-blocking cleanup item (issue #153 review): nothing previously asserted
+// that a NON-forced full "Apply config" run triggers exactly ONE
+// /api/verify/config call (i.e. does NOT also run the re-apply drift
+// refresh). Removing the `if (forceStepIds !== undefined)` guard at
+// App.tsx's handleApplyConfig survived the suite before this test existed.
+// ---------------------------------------------------------------------------
+
+function addNodeByName(name: string) {
+  if (!screen.queryByTestId("contracts-browser")) {
+    fireEvent.click(screen.getByTestId("toggle-contracts-browser"));
+  }
+  const browser = screen.getByTestId("contracts-browser");
+  fireEvent.click(within(browser).getByTestId(`contract-row-${name}`));
+}
+
+function fillArg(index: number, value: string) {
+  fireEvent.change(screen.getByLabelText(`arg-${index}`), { target: { value } });
+}
+
+function addGrantRoleStep(nodeIndex = 0) {
+  const configSection = document.querySelectorAll(
+    "[data-testid^='node-config-section-']",
+  )[nodeIndex] as HTMLElement;
+  fireEvent.click(within(configSection).getByText("Add config call"));
+  fireEvent.click(within(configSection).getByText("grantRole(bytes32,address)"));
+}
+
+describe("App — a full (non-forced) apply does not trigger a second drift refresh", () => {
+  it("a full 'Apply config' run POSTs to /api/verify/config exactly ZERO additional times (no re-apply drift refresh)", async () => {
+    let verifyConfigCallCount = 0;
+    const fetchSpy = vi.fn().mockImplementation((url: string) => {
+      if (url === "/api/verify/config") {
+        verifyConfigCallCount += 1;
+        return Promise.resolve(
+          new Response(JSON.stringify({ clean: true, results: [] }), { status: 200 }),
+        );
+      }
+      if (url.startsWith("/api/apply-config")) {
+        return Promise.resolve(
+          new Response(
+            makeStream([
+              enc(
+                doneOkFrame(
+                  ["grant-minter"],
+                  [],
+                  ["grant-minter"],
+                  [{ id: "grant-minter", kind: "grantRole", completed: true }],
+                ),
+              ),
+            ]),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<App />);
+    addNodeByName("Registry");
+    fillArg(0, "0x0000000000000000000000000000000000000001");
+    addGrantRoleStep(0);
+
+    fireEvent.click(screen.getByTestId("deploy-apply-config-button"));
+    fireEvent.click(screen.getByTestId("apply-config-confirm"));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some((c: unknown[]) => (c[0] as string).startsWith("/api/apply-config")),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("apply-config-success")).not.toBeNull();
+    });
+
+    // No /api/verify/config call at all — the re-apply drift refresh only
+    // runs when `forceStepIds` was set (a single-step re-apply), never for a
+    // full apply.
+    expect(verifyConfigCallCount).toBe(0);
   });
 });

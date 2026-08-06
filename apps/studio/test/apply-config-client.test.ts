@@ -378,16 +378,38 @@ describe("runApplyConfig — forceStepIds param", () => {
     expect(mockFetch).toHaveBeenCalledWith("/api/apply-config?forceStepIds=set-fee", expect.anything());
   });
 
-  it("multiple forceStepIds ids are comma-joined", async () => {
+  it("multiple forceStepIds ids are sent as REPEATED query params (issue #153 review finding B5) — not comma-joined", async () => {
     const raw = doneOkFrame(["set-fee", "grant-minter"], [], ["set-fee", "grant-minter"], null, "warn");
     const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
 
     await runApplyConfig({}, mockFetch, undefined, ["set-fee", "grant-minter"]);
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "/api/apply-config?forceStepIds=set-fee,grant-minter",
+      "/api/apply-config?forceStepIds=set-fee&forceStepIds=grant-minter",
       expect.anything(),
     );
+  });
+
+  it("a step id containing a comma is rejected client-side — no fetch is made at all", async () => {
+    const mockFetch = vi.fn();
+
+    const result = await runApplyConfig({}, mockFetch, undefined, ["set,fee"]);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.error).toContain("set,fee");
+    expect(result.error.toLowerCase()).toContain("comma");
+    expect(result.steps).toEqual([]);
+  });
+
+  it("a comma-containing id is rejected even when mixed with other valid ids (fail before any are sent)", async () => {
+    const mockFetch = vi.fn();
+
+    const result = await runApplyConfig({}, mockFetch, undefined, ["set-fee", "grant,minter"]);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
   });
 
   it("composes correctly with a network param: both present, joined with &", async () => {

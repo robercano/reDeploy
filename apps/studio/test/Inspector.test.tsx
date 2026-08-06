@@ -337,6 +337,33 @@ describe("Inspector — drift detail panel", () => {
     expect(screen.queryByTestId("config-step-setFee-drift-detail")).not.toBeNull();
   });
 
+  it("the badge is keyboard-activatable (Space key toggles the panel)", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    fireEvent.keyDown(badge, { key: " " });
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).not.toBeNull();
+    // Pressing it again toggles back closed, mirroring the click-toggle test.
+    fireEvent.keyDown(badge, { key: " " });
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).toBeNull();
+  });
+
+  it("a key other than Enter/Space is a no-op (no toggle, no preventDefault branch taken)", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    fireEvent.keyDown(badge, { key: "Tab" });
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).toBeNull();
+  });
+
   it("a detail panel is offered for a 'match' step too, but with no Re-apply button", () => {
     render(
       <Inspector
@@ -395,6 +422,37 @@ describe("Inspector — drift detail panel", () => {
     fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
     // JSON.stringify(500n) throws a TypeError; the fallback String(500n) is "500".
     expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("500");
+  });
+
+  it("renders the literal string 'undefined' when expected/actual is undefined", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          { id: "setFee", status: "drift", expected: undefined, actual: 999 },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("undefined");
+  });
+
+  it("falls back to String() when JSON.stringify returns undefined (e.g. a function value)", () => {
+    // JSON.stringify(fn) returns `undefined` (not a string, not a throw) — a
+    // distinct branch from both the plain-string case and the throw/catch
+    // case above. stringifyDriftValue's `?? String(value)` fallback covers
+    // it: String(a function) always contains "function".
+    const fnValue = function namedFn() {
+      return 1;
+    };
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: fnValue, actual: 999 }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("function");
   });
 
   it("renders no message row when drift.message is undefined", () => {
