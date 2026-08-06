@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
-# GitHub notification poll for robercano/reDeploy: prints new issues, PR review
-# comments, issue-comments on PRs, and PR reviews since the cursor, then
-# advances the cursor. Designed to be invoked by the notification cron job —
-# pre-approved in .claude/settings.json so it never blocks on a permission
-# prompt. Output is JSON sections for the model to summarize.
+# GitHub notification poll: prints new issues, PR review comments,
+# issue-comments on PRs, and PR reviews since the last run, then advances the
+# cursor. Intended to be invoked by a notification cron job / /loop.
+#
+# IMPORTANT: invoke this as `bash .claude/scripts/notify-poll.sh` and add that
+# exact command to the settings.json permissions allow list. An inline compound
+# command (loops, $(), redirects) never matches a permission rule, so a cron
+# that polls inline will block on a permission prompt every firing.
+#
+# Repo is derived from the current git remote; override with $1 (owner/repo).
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# Authenticate as the bot (a read-capable collaborator) so the cron runs headless
-# without a separate owner `gh auth login`. Same token merge-ready.sh uses.
-if [ -f "$root/.env" ]; then set -a; . "$root/.env"; set +a; fi
-: "${GH_BOT_TOKEN:?GH_BOT_TOKEN not set — add it to .env (see .env.example)}"
-export GH_TOKEN="$GH_BOT_TOKEN"
-repo="robercano/reDeploy"
-state_dir="$root/.claude/state"
+# Two-root derivation (issue #63): script_dir = sibling scripts, root = consumer project.
+# shellcheck source=resolve-roots.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve-roots.sh"
+# Route EVERY gh call through the bot identity (see bot-gh.sh). Defined before the
+# first gh use below so the repo-derivation call already runs as the bot.
+gh() { bash "$script_dir/bot-gh.sh" "$@"; }
+repo="${1:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+owner="${MERGE_APPROVER:-${repo%%/*}}"   # the human whose APPROVED review gates a merge
+state_dir="$root/.claude/state"          # add .claude/state/ to .gitignore
 cursor_file="$state_dir/notify-cursor"
 
 mkdir -p "$state_dir"
@@ -42,19 +47,19 @@ done
 
 # Standing status of EVERY open PR (cursor-independent): merge-readiness is a
 # state, not an event — an approval may have landed a tick ago and CI only just
-# gone green. The cron uses this to decide which PRs need feedback addressed;
+# gone green. A cron uses this to decide which PRs need feedback addressed;
 # merge-ready.sh acts on the approved+green ones.
 echo "=== open pr status ==="
 for n in $(gh pr list -R "$repo" --state open --json number -q '.[].number'); do
   gh pr view "$n" -R "$repo" --json number,title,author,baseRefName,isDraft,mergeable,reviews,statusCheckRollup \
-    --jq '{
+    --jq "{
       pr: .number, title: .title, author: .author.login, base: .baseRefName, draft: .isDraft, mergeable: .mergeable,
-      ownerReview: ([.reviews[] | select(.author.login=="robercano")] | sort_by(.submittedAt) | last | .state // "none"),
+      ownerReview: ([.reviews[] | select(.author.login==\"$owner\")] | sort_by(.submittedAt) | last | .state // \"none\"),
       checks: ([.statusCheckRollup[]? | (.conclusion // .state)] | {
-        failing: (map(select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT")) | length),
-        pending: (map(select(. == "PENDING" or . == "QUEUED" or . == "IN_PROGRESS" or . == null)) | length),
+        failing: (map(select(. == \"FAILURE\" or . == \"ERROR\" or . == \"CANCELLED\" or . == \"TIMED_OUT\")) | length),
+        pending: (map(select(. == \"PENDING\" or . == \"QUEUED\" or . == \"IN_PROGRESS\" or . == null)) | length),
         total: length })
-    }'
+    }"
 done
 
 echo "$now" > "$cursor_file"

@@ -22,7 +22,9 @@
 # Usage: .claude/scripts/bot-gh.sh pr create --title "..." --body "..."
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Two-root derivation (issue #63): script_dir = sibling scripts, root = consumer project.
+# shellcheck source=resolve-roots.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/resolve-roots.sh"
 if [ -f "$root/.env" ]; then
   set -a
   # shellcheck disable=SC1091
@@ -30,9 +32,6 @@ if [ -f "$root/.env" ]; then
   set +a
 fi
 : "${GH_BOT_TOKEN:?GH_BOT_TOKEN not set — add it to .env (see setup notes in this script)}"
-
-# reDeploy sandbox: gh lives under ~/.local/bin, which isn't always on PATH here.
-export PATH="$HOME/.local/bin:$PATH"
 
 # Preflight: the bot needs collaborator access to EACH (private) repo it acts on
 # (setup step 2). Without it, gh fails with an opaque
@@ -140,12 +139,29 @@ if [ "$has_assignee" -eq 0 ] && [ -n "$owner" ]; then
   if [ "$status" -ne 0 ]; then exit "$status"; fi
   pr_number="${pr_url##*/}"
   if [ -n "$repo_full" ] && [ -n "$pr_number" ]; then
-    # NOTE: use a JSON body via --input, NOT `-f "assignees[]=$owner"`. The -f
-    # array form is silently ignored by the assignees endpoint here (returns 200
-    # but assigns no one), which would defeat this whole block. The JSON body is
-    # the form empirically confirmed to work with a repo-scoped bot token.
-    if ! printf '{"assignees":["%s"]}' "$owner" | GH_TOKEN="$GH_BOT_TOKEN" gh api -X POST "repos/$repo_full/issues/$pr_number/assignees" --input - >/dev/null 2>&1; then
+    # Send the payload as an explicit JSON --input body, NEVER as
+    # `-f "assignees[]=..."`: gh only grew the bracket array syntax in later
+    # 2.x releases — on older gh (e.g. Ubuntu 22.04's packaged 2.4.0) it
+    # sends a literal "assignees[]" STRING field, which the API silently
+    # ignores while still returning 200. Exit code 0, nobody assigned, no
+    # warning — this exact silent no-op shipped for weeks. Same lesson for
+    # verification: don't trust the exit code, check the response actually
+    # names the owner (the closing quote in the grep keeps '<owner>-bot'
+    # style logins from matching as a prefix).
+    resp="$(printf '{"assignees":["%s"]}' "$owner" \
+      | GH_TOKEN="$GH_BOT_TOKEN" gh api -X POST "repos/$repo_full/issues/$pr_number/assignees" --input - 2>/dev/null)" || resp=""
+    if ! printf '%s' "$resp" | grep -q "\"login\":\"$owner\""; then
       echo "bot-gh.sh: warning — created $pr_url but could not assign it to '$owner' (bot token may lack read:org); PR left unassigned." >&2
+    fi
+    # Also request a formal review from the owner: assignment alone does not
+    # put the PR in the owner's GitHub review queue or fire the
+    # review-requested notification. The author is always the bot here (the
+    # whole point of bot-gh.sh), so GitHub's no-self-review-request rule
+    # cannot trip on the owner. Soft-fail like the assignment.
+    resp="$(printf '{"reviewers":["%s"]}' "$owner" \
+      | GH_TOKEN="$GH_BOT_TOKEN" gh api -X POST "repos/$repo_full/pulls/$pr_number/requested_reviewers" --input - 2>/dev/null)" || resp=""
+    if ! printf '%s' "$resp" | grep -q "\"login\":\"$owner\""; then
+      echo "bot-gh.sh: warning — created $pr_url but could not request a review from '$owner'; request it by hand so the owner is notified." >&2
     fi
   fi
   exit 0

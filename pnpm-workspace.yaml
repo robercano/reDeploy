@@ -1,3 +1,10 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# Moved here from package.json's "pnpm" field: pnpm 10.x no longer reads that
+# field and silently ignored it ("[WARN] The 'pnpm' field in package.json is no
+# longer read by pnpm"), which meant esbuild's postinstall build script was no
+# longer allowlisted. See https://pnpm.io/settings
+onlyBuiltDependencies:
+  - esbuild

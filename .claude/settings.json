@@ -1,29 +1,7 @@
 {
-  "_README": "Generic harness settings. Hooks call .claude/scripts/gate.sh (commands live in .claude/gates.json). The 'allow' list pre-approves the agent command surface so parallel workers never block on prompts and the harness never has to persist a grant into this tracked file. Incidental runtime grants should land in .claude/settings.local.json (gitignored), not here.",
+  "_README": "Generic harness settings. Gate commands live in .claude/gates.json; the hooks that RUN them are registered by the orchestrator plugin itself (hooks/hooks.json), NOT here — see _hooks below. The 'allow' list pre-approves the agent command surface so parallel workers never block on prompts and the harness never has to persist a grant into this tracked file. Incidental runtime grants should land in .claude/settings.local.json (gitignored), not here.",
 
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/gate.sh\" lint"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/gate.sh\" test_affected"
-          }
-        ]
-      }
-    ]
-  },
+  "_hooks": "REMOVED ON PURPOSE — do not re-add. This file used to declare PostToolUse(Edit|Write)->'gate.sh lint' and Stop->'gate.sh test_affected', scaffolded back when the plugin vendored .claude/scripts/ into consumer repos. Since issue #134 the plugin registers those SAME two hooks itself from hooks/hooks.json (via ${CLAUDE_PLUGIN_ROOT}/scripts/gate.sh), so keeping them here ran every gate TWICE per turn — two concurrent 'pnpm -r build' into the same dist/, which is what produced the racy 'Stop hook error: No stderr output'. The plugin's copies are the live ones; interactive-vs-loop scoping is handled in gates.json -> gates.test_affected, which both hooks funnel through.",
 
   "permissions": {
     "allow": [
