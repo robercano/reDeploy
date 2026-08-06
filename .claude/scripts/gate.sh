@@ -43,7 +43,11 @@ fi
 # (the documented "not configured" marker) is a no-op and must stay one even when
 # node_modules is momentarily stale; only a gate that's actually about to execute
 # needs a fresh node_modules.
-if [ -f "$root/pnpm-lock.yaml" ]; then
+# Exempt the 'install' gate itself: this message points at 'pnpm install' as the
+# remedy, and on a brand-new checkout there is no node_modules at all yet, so the
+# staleness check would always fire and abort before the remedy command ever runs
+# — deadlocking every CI job, since every other gate calls 'install' first.
+if [ -f "$root/pnpm-lock.yaml" ] && [ "$key" != "install" ]; then
   installed_lock="$root/node_modules/.pnpm/lock.yaml"
   if [ ! -e "$installed_lock" ] || ! cmp -s "$root/pnpm-lock.yaml" "$installed_lock"; then
     echo "gate.sh: node_modules is out of sync with pnpm-lock.yaml — run 'pnpm install' (gate '$key' aborted)." >&2
