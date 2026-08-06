@@ -142,6 +142,17 @@ describe("App — Re-apply narrows the POSTed spec to a single step", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     render(<App />);
+    // Non-empty canvas config, issue #153 review (TESTS lens, finding T1):
+    // this step (id "setX-1") is UNRELATED to the "setFee" step being
+    // re-applied below and must NEVER be broadcast alongside it. Without a
+    // node on the canvas, `config` is `{version:1,steps:[]}` and the
+    // `toEqual(narrowedSpec)` assertion below is vacuous — narrowed and
+    // un-narrowed are both empty, so it can't distinguish a correctly
+    // narrowed POST from an accidentally-full one.
+    addNodeByName("Registry");
+    fillArg(0, "0x0000000000000000000000000000000000000001");
+    addGrantRoleStep(0);
+
     fireEvent.click(screen.getByTestId("deploy-verify-button"));
     await waitFor(() => {
       expect(screen.getByTestId("config-step-setFee-drift")).not.toBeNull();
@@ -165,12 +176,25 @@ describe("App — Re-apply narrows the POSTed spec to a single step", () => {
     const applyCall = fetchSpy.mock.calls.find((c: unknown[]) =>
       (c[0] as string).startsWith("/api/apply-config"),
     )!;
-    const sentBody: unknown = JSON.parse((applyCall[1] as { body: string }).body);
+    const sentBody: { steps?: Array<{ id: string }>; orderedSteps?: Array<{ id: string }> } = JSON.parse(
+      (applyCall[1] as { body: string }).body,
+    );
     const narrowedSpec = narrowConfigToStepSpy.mock.results[0]!.value;
 
     // The exact spec that was POSTed must be exactly what narrowConfigToStep
     // produced — not the full, unnarrowed `config`.
     expect(sentBody).toEqual(narrowedSpec);
+
+    // Request-body assertion independent of the spy (issue #153 review,
+    // TESTS lens finding T1): even if `narrowConfigToStep` were called but
+    // its result discarded (e.g. `specToSend = config`), this must fail. No
+    // step id other than the re-apply target ("setFee") may appear anywhere
+    // in the POSTed body — in particular the unrelated canvas step
+    // ("setX-1") added above must be absent, since broadcasting it would
+    // reintroduce finding B1 (re-apply sending transactions for other
+    // steps).
+    const ids = [...(sentBody.steps ?? []), ...(sentBody.orderedSteps ?? [])].map((s) => s.id);
+    expect(ids.filter((id) => id !== "setFee")).toEqual([]);
   });
 
   it("a full (non-forced) 'Apply config' does NOT call narrowConfigToStep — the full config is sent unchanged", async () => {

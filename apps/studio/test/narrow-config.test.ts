@@ -60,4 +60,34 @@ describe("narrowConfigToStep", () => {
     const allIds = [...narrowed.steps, ...(narrowed.orderedSteps ?? [])].map((s) => s.id);
     expect(allIds).toEqual(["grant-minter"]);
   });
+
+  // Issue #153 review (TESTS lens, nit): the same step id present in BOTH
+  // `steps` AND `orderedSteps` is an already-invalid spec (packages/config's
+  // `validateConfig` rejects any id duplicated across the two lists with a
+  // `DUPLICATE_STEP_ID` -> `INVALID_SPEC` error before any step ever
+  // executes — see packages/config/src/steps/validate.ts). narrowConfigToStep
+  // itself does not de-duplicate: it independently filters each list by id,
+  // so a duplicate id is kept in BOTH lists. Pinning that here so a future
+  // change to the filtering logic can't silently start dropping one of the
+  // duplicates (which would just as silently mask an otherwise-caught
+  // INVALID_SPEC).
+  it("a step id present in BOTH `steps` and `orderedSteps` is kept in both (narrowConfigToStep does not de-duplicate; the resulting spec is later rejected as DUPLICATE_STEP_ID by validateConfig, not silently collapsed here)", () => {
+    const duplicateIdSpec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "dup",
+          target: "token",
+          function: "setFee",
+          args: [{ kind: "literal", value: 500 }],
+        },
+      ],
+      orderedSteps: [{ kind: "wire", id: "dup", source: "token", into: "vault", function: "setToken" }],
+    };
+
+    const narrowed = narrowConfigToStep(duplicateIdSpec, "dup");
+    expect(narrowed.steps).toEqual([duplicateIdSpec.steps[0]]);
+    expect(narrowed.orderedSteps).toEqual([duplicateIdSpec.orderedSteps![0]]);
+  });
 });

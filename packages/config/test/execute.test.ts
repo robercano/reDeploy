@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1004,14 +1004,29 @@ describe("applyConfig — forceStepIds", () => {
 
   it("a forced step appends a NEW journal record (duplicate id) alongside the original", async () => {
     const stateDir = await makeTempDir();
-    const executor1 = new FakeExecutor();
-    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
 
-    const executor2 = new FakeExecutor();
-    await applyConfig({
-      ...makeOptions(threeStepSpec, executor2, stateDir),
-      forceStepIds: ["set-fee"],
-    });
+    // Issue #153 review (TESTS lens, nit): control the system clock across
+    // the two runs so the second record's `completedAt` is verifiably a
+    // FRESH timestamp, not merely `>=` the first (which a stale copy of the
+    // first record would also satisfy, since equal values pass
+    // `toBeGreaterThanOrEqual`). Advancing fake time between runs makes a
+    // regression that re-journals a copy of the original timestamp provably
+    // fail here.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+      const executor1 = new FakeExecutor();
+      await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+      vi.setSystemTime(new Date("2024-01-01T00:05:00.000Z"));
+      const executor2 = new FakeExecutor();
+      await applyConfig({
+        ...makeOptions(threeStepSpec, executor2, stateDir),
+        forceStepIds: ["set-fee"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const journalFile = path.join(stateDir, "config-state.jsonl");
     const content = await fs.promises.readFile(journalFile, "utf8");
@@ -1033,7 +1048,11 @@ describe("applyConfig — forceStepIds", () => {
       expect(() => new Date(record.completedAt).toISOString()).not.toThrow();
       expect(new Date(record.completedAt).toISOString()).toBe(record.completedAt);
     }
-    expect(new Date(setFeeLines[1]!.completedAt).getTime()).toBeGreaterThanOrEqual(
+    expect(setFeeLines[0]!.completedAt).toBe("2024-01-01T00:00:00.000Z");
+    expect(setFeeLines[1]!.completedAt).toBe("2024-01-01T00:05:00.000Z");
+    // Strict inequality: a stale copy of the first record's timestamp would
+    // fail this, unlike the previous `toBeGreaterThanOrEqual`.
+    expect(new Date(setFeeLines[1]!.completedAt).getTime()).toBeGreaterThan(
       new Date(setFeeLines[0]!.completedAt).getTime(),
     );
   });

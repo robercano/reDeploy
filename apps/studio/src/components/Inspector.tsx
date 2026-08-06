@@ -276,7 +276,16 @@ function ConfigStepCard({
               detail panel below. */}
           {drift !== undefined && (
             <span
-              style={DRIFT_BADGE_STYLES[drift.status] ?? clickableBadgeBaseStyle}
+              // Object.hasOwn guard (issue #153 review, security nit): plain
+              // object indexing by a server-supplied `drift.status` string
+              // would otherwise also match inherited keys like "constructor"
+              // / "toString", returning a prototype function instead of
+              // falling through to `clickableBadgeBaseStyle`.
+              style={
+                Object.hasOwn(DRIFT_BADGE_STYLES, drift.status)
+                  ? DRIFT_BADGE_STYLES[drift.status]
+                  : clickableBadgeBaseStyle
+              }
               data-testid={`config-step-${step.id}-drift`}
               title={drift.message}
               role="button"
