@@ -74,8 +74,15 @@ export { simulate } from "./simulate/simulate.js";
 export { foundryArtifactResolver } from "./resolvers/foundry.js";
 
 // EIP-1193 provider factory — wire deploy() with a local key + JSON-RPC URL
-export type { JsonRpcProviderOptions } from "./provider/jsonRpc.js";
-export { jsonRpcProvider } from "./provider/jsonRpc.js";
+export type { JsonRpcProviderOptions, SignerProviderOptions } from "./provider/jsonRpc.js";
+export { jsonRpcProvider, signerProvider } from "./provider/jsonRpc.js";
+
+// Pluggable signer seam (issue #154) — generalizes jsonRpcProvider's signing
+// step so deploy/config transactions can be signed by an external signer
+// (hardware wallet, remote KMS, ...) instead of a raw private key. See
+// provider/signer.ts for the full Signer contract.
+export type { Signer } from "./provider/signer.js";
+export { privateKeySigner } from "./provider/signer.js";
 
 // Typed resolver escape-hatch (Layer 2) — async pre-deploy resolution of
 // `{ kind: "resolver" }` args against an injected ResolverRegistry, wired via
@@ -105,3 +112,29 @@ export type { CrossNetworkJournal, ResolveCrossRefOptions } from "./resolve/cros
 export { resolveCrossRefArgs, specHasCrossRefArgs } from "./resolve/crossRef.js";
 export type { CrossRefErrorCode } from "./resolve/crossRefErrors.js";
 export { CrossRefError } from "./resolve/crossRefErrors.js";
+
+// Propose execution mode (issue #154) — collects the ordered batch of
+// transactions a deployment WOULD send (to/data/value) instead of
+// broadcasting them, for external-signer / Safe-multisig workflows. See
+// propose/propose.ts for the full design, especially the "JOURNAL SAFETY"
+// section (proposed-but-not-executed transactions are never journaled as
+// complete), and this package's README ("Propose mode") for the
+// propose -> Safe execution -> resume operator flow.
+export type { ProposeOptions, ProposeResult, ProposedTransaction } from "./propose/propose.js";
+export { proposeDeploy } from "./propose/propose.js";
+export type { ProposeErrorCode } from "./propose/errors.js";
+export { ProposeError } from "./propose/errors.js";
+
+// Safe Transaction Builder-compatible JSON batch output (issue #154, point 3)
+// — a pure, offline transform from ProposeResult.transactions to the Safe
+// Transaction Builder batch schema. See safeBatch.ts's module doc for the
+// documented scope boundary (raw contract-creation steps, `to: null`,
+// cannot be represented — throws SafeBatchError) and the Safe Transaction
+// Service API seam (deliberately not implemented).
+export type {
+  SafeBatchErrorCode,
+  SafeBatchJson,
+  SafeBatchTransactionJson,
+  BuildSafeBatchOptions,
+} from "./propose/safeBatch.js";
+export { buildSafeBatch, SafeBatchError } from "./propose/safeBatch.js";

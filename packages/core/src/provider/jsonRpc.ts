@@ -2,7 +2,7 @@
  * EIP-1193 provider factory for @redeploy/core.
  *
  * Creates a provider backed by viem that:
- *   - Signs transactions LOCALLY with the supplied private key account
+ *   - Signs transactions LOCALLY via a pluggable `Signer` (see provider/signer.ts)
  *   - Broadcasts signed transactions via eth_sendRawTransaction over HTTP JSON-RPC
  *   - Forwards all read-only methods verbatim to the JSON-RPC transport
  *
@@ -16,20 +16,31 @@
  * sign locally -- local signing only happens through viem's high-level action API
  * (walletClient.sendTransaction). Therefore we implement the signing layer ourselves:
  *
- *   - eth_accounts / eth_requestAccounts  -> return [account.address] immediately (no RPC)
+ *   - eth_accounts / eth_requestAccounts  -> return [signer.address] immediately (no RPC)
  *   - eth_sendTransaction                 -> sign locally, broadcast via eth_sendRawTransaction
  *   - eth_signTransaction                 -> sign locally, return signed raw tx (no broadcast)
- *   - personal_sign                       -> route to account.signMessage (params: [data, address])
- *   - eth_sign                            -> route to account.signMessage (params: [address, data])
- *   - eth_signTypedData_v4 / _v3          -> route to account.signTypedData (parse JSON param)
+ *   - personal_sign                       -> route to signer.signMessage (params: [data, address])
+ *   - eth_sign                            -> route to signer.signMessage (params: [address, data])
+ *   - eth_signTypedData_v4 / _v3          -> route to signer.signTypedData (parse JSON param)
  *   - ALL OTHER methods                   -> forward verbatim to the transport
+ *
+ * SIGNER SEAM (issue #154)
+ * ========================
+ * The signing step is delegated to a pluggable `Signer` (provider/signer.ts)
+ * instead of being hard-wired to a raw private key. `jsonRpcProvider()` keeps
+ * its ORIGINAL signature/behavior unchanged for backwards compatibility — it
+ * derives a `Signer` from the private key via `privateKeySigner()` and hands
+ * it to `signerProvider()`, the generalized factory below. Callers who need a
+ * hardware wallet / remote KMS / any other external signer use
+ * `signerProvider({ rpcUrl, signer })` directly with their own `Signer`
+ * implementation.
  *
  * SECURITY
  * ========
  * The private key is consumed once to derive the viem account and is NEVER
  * stored on the returned object, logged, printed, or included in error messages.
- * The only time the private key is in memory is during `privateKeyToAccount()`
- * inside this factory call.
+ * The only time the private key is in memory is during `privateKeySigner()`'s
+ * call to `privateKeyToAccount()`, inside signer construction.
  */
 
 import {
@@ -38,8 +49,11 @@ import {
   type TransactionSerializableLegacy,
   type TransactionSerializableEIP1559,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 import type { EIP1193Provider } from "@nomicfoundation/ignition-core";
+import { privateKeySigner, type Signer } from "./signer.js";
+
+export type { Signer } from "./signer.js";
+export { privateKeySigner } from "./signer.js";
 
 /**
  * Options for jsonRpcProvider.
@@ -54,6 +68,21 @@ export interface JsonRpcProviderOptions {
 }
 
 /**
+ * Options for signerProvider — the generalized form of jsonRpcProvider that
+ * accepts any pluggable `Signer` instead of a raw private key.
+ *
+ * @property rpcUrl - Full HTTP/HTTPS RPC endpoint URL.
+ * @property signer - A `Signer` (see provider/signer.ts) that performs LOCAL
+ *   signing on behalf of its `address`. Use `privateKeySigner(pk)` for the
+ *   original private-key behavior, or supply your own implementation backed
+ *   by a hardware wallet, remote KMS, etc.
+ */
+export interface SignerProviderOptions {
+  rpcUrl: string;
+  signer: Signer;
+}
+
+/**
  * Creates an EIP-1193 compatible provider that uses viem under the hood.
  *
  * Local signing is performed via the viem account derived from the private key.
@@ -64,12 +93,26 @@ export interface JsonRpcProviderOptions {
  *   invalid (not a valid secp256k1 scalar).
  */
 export function jsonRpcProvider({ rpcUrl, privateKey }: JsonRpcProviderOptions): EIP1193Provider {
-  // Derive the account from the private key.
-  // `privateKeyToAccount` validates the key. Any error thrown here does NOT
+  // Derive the signer from the private key.
+  // `privateKeySigner` validates the key. Any error thrown here does NOT
   // include the private key in its message (viem produces "Invalid private key"
   // type errors without echoing the value).
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  const signer = privateKeySigner(privateKey);
+  return signerProvider({ rpcUrl, signer });
+}
 
+/**
+ * Creates an EIP-1193 compatible provider that uses viem under the hood,
+ * signing LOCALLY via the supplied pluggable `Signer` (see provider/signer.ts)
+ * instead of a hard-wired private key. This is the generalized form of
+ * `jsonRpcProvider()` — see this file's module doc ("SIGNER SEAM") for the
+ * full design.
+ *
+ * The transport is used only for read methods and for broadcasting signed
+ * transactions via eth_sendRawTransaction. The node never receives an
+ * unsigned eth_sendTransaction.
+ */
+export function signerProvider({ rpcUrl, signer: account }: SignerProviderOptions): EIP1193Provider {
   const transport = http(rpcUrl);
 
   // PublicClient: used for all read-only RPC forwarding and for filling in
