@@ -336,3 +336,90 @@ describe("runApplyConfig — network param", () => {
     expect(mockFetch).toHaveBeenCalledWith("/api/apply-config", expect.anything());
   });
 });
+
+// ---------------------------------------------------------------------------
+// runApplyConfig — forceStepIds param (issue #153)
+// ---------------------------------------------------------------------------
+
+describe("runApplyConfig — forceStepIds param", () => {
+  it("omitted forceStepIds → POSTs with no query string (when network also omitted)", async () => {
+    const raw = doneOkFrame([], [], [], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/apply-config", expect.anything());
+  });
+
+  it("undefined forceStepIds → identical to omitted", async () => {
+    const raw = doneOkFrame([], [], [], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, undefined, undefined);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/apply-config", expect.anything());
+  });
+
+  it("empty forceStepIds array → treated the same as omitted (no query string)", async () => {
+    const raw = doneOkFrame([], [], [], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, undefined, []);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/apply-config", expect.anything());
+  });
+
+  it("a single forceStepIds id → POSTs to /api/apply-config?forceStepIds=<id>", async () => {
+    const raw = doneOkFrame(["set-fee"], [], ["set-fee"], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, undefined, ["set-fee"]);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/apply-config?forceStepIds=set-fee", expect.anything());
+  });
+
+  it("multiple forceStepIds ids are comma-joined", async () => {
+    const raw = doneOkFrame(["set-fee", "grant-minter"], [], ["set-fee", "grant-minter"], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, undefined, ["set-fee", "grant-minter"]);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/apply-config?forceStepIds=set-fee,grant-minter",
+      expect.anything(),
+    );
+  });
+
+  it("composes correctly with a network param: both present, joined with &", async () => {
+    const raw = doneOkFrame(["set-fee"], [], ["set-fee"], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, "sepolia", ["set-fee"]);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/apply-config?network=sepolia&forceStepIds=set-fee",
+      expect.anything(),
+    );
+  });
+
+  it("network omitted but forceStepIds present → only forceStepIds in the query string", async () => {
+    const raw = doneOkFrame(["set-fee"], [], ["set-fee"], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, "", ["set-fee"]);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/apply-config?forceStepIds=set-fee", expect.anything());
+  });
+
+  it("a step id with special characters is URI-encoded", async () => {
+    const raw = doneOkFrame([], [], [], null, "warn");
+    const mockFetch = vi.fn().mockResolvedValue(new Response(makeStream([raw]), { status: 200 }));
+
+    await runApplyConfig({}, mockFetch, undefined, ["weird id/1"]);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/api/apply-config?forceStepIds=${encodeURIComponent("weird id/1")}`,
+      expect.anything(),
+    );
+  });
+});

@@ -9,8 +9,8 @@
  * Mirrors App.test.tsx and ConfigPanel.test.tsx patterns.
  */
 
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
 import { resolve } from "node:path";
 import { Inspector } from "../src/components/Inspector.js";
 import { readDeployment } from "../src/inspector/load-deployment.js";
@@ -269,6 +269,225 @@ describe("Inspector — config-drift badges", () => {
     );
     expect(screen.getByTestId("config-step-setFee-drift")).not.toBeNull();
     expect(screen.queryByTestId("config-step-setToken-drift")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inspector — drift detail panel + Re-apply button (issue #153)
+// ---------------------------------------------------------------------------
+
+describe("Inspector — drift detail panel", () => {
+  it("no detail panel is rendered before the drift badge is clicked", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          { id: "setFee", status: "drift", expected: 500, actual: 999, message: "mismatch" },
+        ]}
+      />,
+    );
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).toBeNull();
+  });
+
+  it("clicking the drift badge for a drifted step reveals expected/actual/message", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          { id: "setFee", status: "drift", expected: 500, actual: 999, message: "Expected 500 but got 999" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+
+    const detail = screen.getByTestId("config-step-setFee-drift-detail");
+    expect(detail).not.toBeNull();
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("500");
+    expect(screen.getByTestId("config-step-setFee-drift-actual").textContent).toContain("999");
+    expect(screen.getByTestId("config-step-setFee-drift-message").textContent).toContain(
+      "Expected 500 but got 999",
+    );
+  });
+
+  it("clicking the drift badge again collapses the detail panel", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    fireEvent.click(badge);
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).not.toBeNull();
+    fireEvent.click(badge);
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).toBeNull();
+  });
+
+  it("the badge is keyboard-activatable (Enter key toggles the panel)", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+    const badge = screen.getByTestId("config-step-setFee-drift");
+    fireEvent.keyDown(badge, { key: "Enter" });
+    expect(screen.queryByTestId("config-step-setFee-drift-detail")).not.toBeNull();
+  });
+
+  it("a detail panel is offered for a 'match' step too, but with no Re-apply button", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "match", expected: 500, actual: 500 }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.getByTestId("config-step-setFee-drift-detail")).not.toBeNull();
+    expect(screen.queryByTestId("config-step-setFee-reapply")).toBeNull();
+  });
+
+  it("stringifies a non-string expected/actual value (object) as JSON, not [object Object]", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[
+          {
+            id: "setFee",
+            status: "drift",
+            expected: { role: "MINTER_ROLE", account: "0xabc" },
+            actual: { role: "MINTER_ROLE", account: "0xdef" },
+          },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("0xabc");
+    expect(screen.getByTestId("config-step-setFee-drift-actual").textContent).toContain("0xdef");
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).not.toContain(
+      "[object Object]",
+    );
+  });
+
+  it("truncates a very long expected/actual value instead of rendering it in full", () => {
+    const longValue = "x".repeat(5000);
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: longValue, actual: "short" }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    const expectedEl = screen.getByTestId("config-step-setFee-drift-expected");
+    expect(expectedEl.textContent!.length).toBeLessThan(longValue.length);
+    expect(expectedEl.textContent).toContain("truncated");
+  });
+
+  it("falls back to String() when JSON.stringify throws (e.g. a BigInt value)", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500n, actual: 999 }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    // JSON.stringify(500n) throws a TypeError; the fallback String(500n) is "500".
+    expect(screen.getByTestId("config-step-setFee-drift-expected").textContent).toContain("500");
+  });
+
+  it("renders no message row when drift.message is undefined", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.queryByTestId("config-step-setFee-drift-message")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inspector — Re-apply button (issue #153)
+// ---------------------------------------------------------------------------
+
+describe("Inspector — Re-apply button", () => {
+  it("renders a Re-apply button for a 'drift' status step once the panel is expanded", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+        onReapplyStep={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    const btn = screen.getByTestId("config-step-setFee-reapply");
+    expect(btn).not.toBeNull();
+    expect(btn.textContent).toBe("Re-apply");
+  });
+
+  it("renders a Re-apply button for an 'error' status step", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "error", expected: null, actual: null, message: "boom" }]}
+        onReapplyStep={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.getByTestId("config-step-setFee-reapply")).not.toBeNull();
+  });
+
+  it("does NOT render a Re-apply button for a 'match' status step", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "match", expected: 500, actual: 500 }]}
+        onReapplyStep={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.queryByTestId("config-step-setFee-reapply")).toBeNull();
+  });
+
+  it("does NOT render a Re-apply button for a 'skipped' status step", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "skipped", expected: null, actual: null }]}
+        onReapplyStep={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.queryByTestId("config-step-setFee-reapply")).toBeNull();
+  });
+
+  it("clicking Re-apply calls onReapplyStep with the step's id", () => {
+    const onReapplyStep = vi.fn();
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+        onReapplyStep={onReapplyStep}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    fireEvent.click(screen.getByTestId("config-step-setFee-reapply"));
+    expect(onReapplyStep).toHaveBeenCalledTimes(1);
+    expect(onReapplyStep).toHaveBeenCalledWith("setFee");
+  });
+
+  it("no Re-apply button is rendered at all when onReapplyStep is omitted, even for a drifted step", () => {
+    render(
+      <Inspector
+        view={view}
+        driftResults={[{ id: "setFee", status: "drift", expected: 500, actual: 999 }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("config-step-setFee-drift"));
+    expect(screen.queryByTestId("config-step-setFee-reapply")).toBeNull();
   });
 });
 

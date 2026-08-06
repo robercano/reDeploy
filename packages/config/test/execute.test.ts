@@ -935,6 +935,197 @@ describe("applyConfig — journal malformed-line tolerance", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Test: forceStepIds — force re-execution of already-journaled steps
+// ---------------------------------------------------------------------------
+
+describe("applyConfig — forceStepIds", () => {
+  it("re-executes an already-journaled step whose id is in forceStepIds", async () => {
+    const stateDir = await makeTempDir();
+
+    // First run: fully applies the spec.
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    // Second run: force "grant-minter" — it must re-execute even though it's
+    // already journaled; the other two steps remain skipped.
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(threeStepSpec, executor2, stateDir),
+      forceStepIds: ["grant-minter"],
+    });
+
+    expect(result2.success).toBe(true);
+    expect(executor2.calls.map((c) => c.stepId)).toEqual(["grant-minter"]);
+    expect(result2.executedStepIds).toEqual(["grant-minter"]);
+    expect(result2.skippedStepIds).toEqual(["set-fee", "wire-token-into-vault"]);
+    expect(result2.completedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+  });
+
+  it("non-forced journaled steps still skip when forceStepIds targets a different step", async () => {
+    const stateDir = await makeTempDir();
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(threeStepSpec, executor2, stateDir),
+      forceStepIds: ["set-fee"],
+    });
+
+    expect(executor2.calls.map((c) => c.stepId)).toEqual(["set-fee"]);
+    expect(result2.executedStepIds).toEqual(["set-fee"]);
+    expect(result2.skippedStepIds).toEqual(["grant-minter", "wire-token-into-vault"]);
+  });
+
+  it("a forced id absent from the spec is silently ignored (no-op, no error)", async () => {
+    const stateDir = await makeTempDir();
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(threeStepSpec, executor2, stateDir),
+      forceStepIds: ["this-step-does-not-exist-in-the-spec"],
+    });
+
+    expect(result2.success).toBe(true);
+    expect(executor2.calls).toHaveLength(0);
+    expect(result2.executedStepIds).toEqual([]);
+    expect(result2.skippedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+  });
+
+  it("a forced step appends a NEW journal record (duplicate id) alongside the original", async () => {
+    const stateDir = await makeTempDir();
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    const executor2 = new FakeExecutor();
+    await applyConfig({
+      ...makeOptions(threeStepSpec, executor2, stateDir),
+      forceStepIds: ["set-fee"],
+    });
+
+    const journalFile = path.join(stateDir, "config-state.jsonl");
+    const content = await fs.promises.readFile(journalFile, "utf8");
+    const ids = content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => (JSON.parse(l) as { id: string }).id);
+
+    // "set-fee" appears twice: once from the first run, once from the forced
+    // re-run. readCompletedStepIds folds duplicates into a Set, so this is
+    // safe and does not affect skip/resume behaviour.
+    expect(ids.filter((id) => id === "set-fee")).toHaveLength(2);
+  });
+
+  it("forced steps still resolve read args and invoke executor.read() again", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        {
+          kind: "setX",
+          id: "set-decimals",
+          target: "vault",
+          function: "setDecimalsCache",
+          args: [{ kind: "read", contract: "token", function: "decimals" }],
+        },
+      ],
+    };
+    const deployedAddresses = { vault: ADDRESSES.vault, token: ADDRESSES.token };
+
+    const executor1 = new ReadFakeExecutor("18");
+    await applyConfig({ spec, deployedAddresses, executor: executor1, stateDir });
+    expect(executor1.reads).toHaveLength(1);
+
+    const executor2 = new ReadFakeExecutor("19");
+    const result2 = await applyConfig({
+      spec,
+      deployedAddresses,
+      executor: executor2,
+      stateDir,
+      forceStepIds: ["set-decimals"],
+    });
+
+    expect(executor2.reads).toHaveLength(1);
+    expect(executor2.calls).toHaveLength(1);
+    expect(executor2.calls[0].args[0]).toBe("19");
+    expect(result2.executedStepIds).toEqual(["set-decimals"]);
+    expect(result2.skippedStepIds).toEqual([]);
+  });
+
+  it("empty forceStepIds array is a no-op — identical to omitting it", async () => {
+    const stateDir = await makeTempDir();
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(threeStepSpec, executor2, stateDir),
+      forceStepIds: [],
+    });
+
+    expect(executor2.calls).toHaveLength(0);
+    expect(result2.executedStepIds).toEqual([]);
+    expect(result2.skippedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+  });
+
+  it("undefined forceStepIds is a no-op — identical to today's behaviour", async () => {
+    const stateDir = await makeTempDir();
+    const executor1 = new FakeExecutor();
+    const result1 = await applyConfig(makeOptions(threeStepSpec, executor1, stateDir));
+    expect(result1.executedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig(
+      makeOptions(threeStepSpec, executor2, stateDir),
+    );
+
+    expect(executor2.calls).toHaveLength(0);
+    expect(result2.executedStepIds).toEqual([]);
+    expect(result2.skippedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+  });
+
+  it("forcing a step that has never run (fresh spec) executes it normally — not an error", async () => {
+    const stateDir = await makeTempDir();
+    const executor = new FakeExecutor();
+    const result = await applyConfig({
+      ...makeOptions(threeStepSpec, executor, stateDir),
+      forceStepIds: ["grant-minter"],
+    });
+
+    // Fresh run: forcing has no observable effect since nothing was journaled yet.
+    expect(result.executedStepIds).toEqual([
+      "set-fee",
+      "grant-minter",
+      "wire-token-into-vault",
+    ]);
+    expect(result.skippedStepIds).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test: `read` args — resolved via executor.read()
 // ---------------------------------------------------------------------------
 

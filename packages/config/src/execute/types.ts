@@ -181,6 +181,33 @@ export interface ApplyConfigOptions {
    * REQUIRED for idempotency — pass a stable, deployment-specific path.
    */
   stateDir: string;
+  /**
+   * Optional list of step ids to FORCE re-execution for, even if they are
+   * already recorded as complete in the journal. Intended for one-click
+   * "re-apply" of a drifted step (live on-chain state no longer matches the
+   * declared spec) — see the config-drift-reapply feature.
+   *
+   * Semantics:
+   *   - A step whose id appears here executes exactly like a fresh
+   *     (non-journaled) step: its ref/read args are resolved, executor.execute()
+   *     is called, and — only on success — a FRESH completion record is
+   *     appended to the journal (the journal is append-only NDJSON and
+   *     `readCompletedStepIds` folds all records for an id into a Set, so a
+   *     duplicate id with a newer `completedAt` is safe; see journal.ts).
+   *   - Forced steps are reported in `executedStepIds`, never in
+   *     `skippedStepIds`.
+   *   - Ids listed here that do not match any step in the (validated) spec are
+   *     silently ignored — this keeps the option resilient to stale ids from a
+   *     previously-computed drift report referencing a spec that has since
+   *     changed.
+   *   - Forcing does NOT change ordering guarantees: `spec.steps` still run
+   *     before `spec.orderedSteps`, `orderedSteps` still run in strict array
+   *     order, and a forced step still blocks the next `orderedSteps` entry
+   *     until it completes (journal-before-next semantics).
+   *   - Omitting `forceStepIds` (or passing `undefined`) is byte-for-byte
+   *     behaviour-identical to today: every already-journaled step is skipped.
+   */
+  forceStepIds?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------

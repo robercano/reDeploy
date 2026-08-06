@@ -593,6 +593,14 @@ export function App() {
   const [applyConfigSuccess, setApplyConfigSuccess] = useState<string | null>(null);
   const [applyConfigSteps, setApplyConfigSteps] = useState<ApplyConfigStepResult[]>([]);
 
+  // Config-drift one-click re-apply (issue #153): when the user clicks
+  // "Re-apply" on a single drifted step's detail panel in the Inspector, we
+  // record WHICH step id here and reuse the SAME confirm modal / guard flow
+  // as the full "Apply config" button below — there is no separate
+  // unconfirmed write path. `null` means "no pending single-step re-apply" —
+  // a normal confirm applies the FULL current config as before.
+  const [pendingReapplyStepId, setPendingReapplyStepId] = useState<string | null>(null);
+
   // Provenance of `liveView`, tracked SEPARATELY from `viewKind` (bugfix,
   // issue #101 review). `viewKind` is the RENDER discriminator — it changes
   // to "plan" as soon as the user clicks Plan, even though `liveView` itself
@@ -1193,12 +1201,27 @@ export function App() {
   // (mirrors onOpenDeployModal above; broadcasts real transactions).
   const onOpenApplyConfigModal = useCallback(() => {
     if (applying) return;
+    setPendingReapplyStepId(null);
     setShowApplyConfigModal(true);
   }, [applying]);
 
   const onCancelApplyConfig = useCallback(() => {
     setShowApplyConfigModal(false);
+    setPendingReapplyStepId(null);
   }, []);
+
+  // "Re-apply" (issue #153 — config-drift one-click re-apply): invoked from
+  // the Inspector's per-step drift detail panel. Records the target step id
+  // and opens the SAME confirm modal used by the full "Apply config" button
+  // — this is a REAL on-chain write and must never bypass that guard.
+  const onReapplyStep = useCallback(
+    (stepId: string) => {
+      if (applying) return;
+      setPendingReapplyStepId(stepId);
+      setShowApplyConfigModal(true);
+    },
+    [applying],
+  );
 
   // "Apply config" (issue #151) — runs the current ConfigSpec's steps against
   // a REAL chain via POST /api/apply-config. Modeled on handleDeploy (real,
@@ -1207,17 +1230,27 @@ export function App() {
   // a different endpoint that actually broadcasts. On success, `liveView` is
   // refreshed from the server's post-apply DeploymentView so the Inspector's
   // config-step badges immediately reflect completion.
+  //
+  // Config-drift one-click re-apply (issue #153): when `pendingReapplyStepId`
+  // is set (via onReapplyStep, gated behind the SAME confirm modal as the
+  // full apply below), only that single step is forced to re-execute —
+  // forwarded as `forceStepIds: [pendingReapplyStepId]`. On a SUCCESSFUL
+  // forced re-apply we automatically re-run runVerifyConfig so the
+  // Inspector's drift badges refresh to reflect the newly-applied state,
+  // without requiring the user to click "Verify" again.
   const handleApplyConfig = useCallback(async () => {
     if (applying) return;
+    const forceStepIds = pendingReapplyStepId !== null ? [pendingReapplyStepId] : undefined;
     // Close the confirm modal immediately so a second confirm can't double-fire.
     setShowApplyConfigModal(false);
+    setPendingReapplyStepId(null);
     setApplying(true);
     setApplyConfigError(null);
     setApplyConfigSuccess(null);
     setApplyConfigSteps([]);
 
     try {
-      const result = await runApplyConfig(config, fetch, selectedNetwork ?? undefined);
+      const result = await runApplyConfig(config, fetch, selectedNetwork ?? undefined, forceStepIds);
 
       setApplyConfigSteps(result.steps);
 
@@ -1233,6 +1266,18 @@ export function App() {
         setApplyConfigSuccess(
           `Config applied — ${executed} step(s) executed, ${skipped} already up to date (skipped).`,
         );
+
+        // Re-apply refresh (issue #153): a forced re-apply just changed
+        // on-chain state for `forceStepIds`, so the drift badges computed
+        // from the PREVIOUS /api/verify/config run are now stale. Re-run it
+        // (best-effort — a failure here doesn't turn the successful apply
+        // into an error) so the badges immediately reflect the new state.
+        if (forceStepIds !== undefined) {
+          const driftOutcome = await runVerifyConfig(config);
+          if (driftOutcome.ok) {
+            setDriftResults(driftOutcome.result.results);
+          }
+        }
       } else {
         // Surface the failing step(s)' own message(s), when present, alongside
         // the generic banner — without breaking the rest of the UI.
@@ -1251,7 +1296,7 @@ export function App() {
     } finally {
       setApplying(false);
     }
-  }, [applying, config, selectedNetwork]);
+  }, [applying, config, selectedNetwork, pendingReapplyStepId]);
 
   const deployBtnStyle: React.CSSProperties = {
     ...btnStyle,
@@ -1530,17 +1575,30 @@ export function App() {
         <div style={deployModalOverlayStyle} data-testid="apply-config-modal">
           <div style={deployModalStyle}>
             <h3 style={{ margin: "0 0 12px", fontSize: 16, color: "var(--color-danger-text)" }}>
-              Confirm apply config
+              {pendingReapplyStepId !== null ? "Confirm re-apply step" : "Confirm apply config"}
             </h3>
-            <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
-              This will <strong>broadcast real transactions</strong> (setX /
-              grantRole / wire calls) against the persisted deployment on the
-              configured network. It is <strong>irreversible</strong> — gas
-              will be spent. Steps already applied in a previous run are
-              skipped, not re-run.
-            </p>
+            {pendingReapplyStepId !== null ? (
+              <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+                This will <strong>broadcast a real transaction</strong> for step{" "}
+                <strong data-testid="apply-config-reapply-step-id">{pendingReapplyStepId}</strong>{" "}
+                — FORCING it to re-run even though it was already applied
+                (config-drift re-apply). It is <strong>irreversible</strong> —
+                gas will be spent. All other steps are unaffected.
+              </p>
+            ) : (
+              <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+                This will <strong>broadcast real transactions</strong> (setX /
+                grantRole / wire calls) against the persisted deployment on the
+                configured network. It is <strong>irreversible</strong> — gas
+                will be spent. Steps already applied in a previous run are
+                skipped, not re-run.
+              </p>
+            )}
             <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5 }}>
-              Steps: <strong data-testid="apply-config-step-count">{configStepCount}</strong>
+              Steps:{" "}
+              <strong data-testid="apply-config-step-count">
+                {pendingReapplyStepId !== null ? 1 : configStepCount}
+              </strong>
               <br />
               Network:{" "}
               <strong data-testid="apply-config-network">
@@ -1570,7 +1628,7 @@ export function App() {
                 onClick={() => { void handleApplyConfig(); }}
                 data-testid="apply-config-confirm"
               >
-                Apply for real
+                {pendingReapplyStepId !== null ? "Re-apply for real" : "Apply for real"}
               </button>
             </div>
           </div>
@@ -1751,6 +1809,7 @@ export function App() {
             driftResults={driftResults ?? undefined}
             sourceVerifyResults={sourceVerifyResult?.results}
             applyConfigResults={applyConfigSteps.length > 0 ? applyConfigSteps : undefined}
+            onReapplyStep={onReapplyStep}
           />
         )}
 

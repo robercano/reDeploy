@@ -87,6 +87,37 @@
  *   wire      → target  = safeAddresses.get(step.into)
  *               function = step.function
  *               args     = [safeAddresses.get(step.source)]
+ *
+ * FORCING RE-EXECUTION (config-drift one-click re-apply)
+ * ========================================================
+ *
+ * `ApplyConfigOptions.forceStepIds` (optional) lets a caller force specific
+ * already-journaled steps to re-execute — e.g. a drift-detection UI found
+ * that a step's live on-chain state no longer matches the declared spec and
+ * the user clicked "re-apply".
+ *
+ *   - `forceStepIds` is folded into a `Set<string>` once, alongside
+ *     `safeAddresses`, at the top of `applyConfig`.
+ *   - `executeStep` treats a forced step exactly like a non-journaled step:
+ *     it is NOT skipped, so its refs/read args ARE resolved and
+ *     `executor.execute()` IS called even though `alreadyCompleted` already
+ *     contains its id.
+ *   - On success, a NEW completion record is appended to the journal for that
+ *     id. The journal is append-only NDJSON, and `readCompletedStepIds` folds
+ *     ALL lines (in file order) into a `Set<string>` of ids — duplicate ids
+ *     collapse harmlessly (the newer `completedAt` value is simply never read
+ *     back by anything other than external tooling inspecting the raw file),
+ *     so appending a second record for the same id is always safe. See
+ *     journal.ts's DESIGN and APPEND-ONLY DURABILITY sections.
+ *   - Forced steps land in `executedStepIds`, never in `skippedStepIds`.
+ *   - `forceStepIds` entries that don't match any step id in the (validated)
+ *     spec are silently ignored — a drift report may reference ids from a
+ *     spec that has since changed.
+ *   - Forcing never changes the two ordering guarantees above:
+ *     `spec.steps` still fully precedes `spec.orderedSteps`, and
+ *     `orderedSteps` still execute in strict array order with
+ *     journal-before-next semantics — a forced step still blocks the next
+ *     `orderedSteps` entry until its own execution (forced or not) completes.
  */
 
 import { validateConfig } from "../steps/validate.js";
@@ -310,7 +341,7 @@ async function buildConfigCall(
  *   wrapped.
  */
 export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyConfigResult> {
-  const { spec, deployedAddresses, executor, stateDir } = options;
+  const { spec, deployedAddresses, executor, stateDir, forceStepIds } = options;
 
   // --- 1. Build a safe address lookup (defence-in-depth) --------------------
   //
@@ -320,6 +351,12 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
   // Map and always raise UNKNOWN_REF rather than returning an inherited value.
   // The Map is built once here and passed down to all resolver helpers.
   const safeAddresses = new Map<string, string>(Object.entries(deployedAddresses));
+
+  // Fold forceStepIds (if any) into a Set once, up front. Ids that don't
+  // match any step in the spec are simply never looked up below — no
+  // validation or filtering against the spec is needed here (see FORCING
+  // RE-EXECUTION in the module doc comment above).
+  const forcedStepIds = new Set<string>(forceStepIds ?? []);
 
   // --- 2. Validate the spec FIRST (fail fast) --------------------------------
   //
@@ -346,20 +383,28 @@ export async function applyConfig(options: ApplyConfigOptions): Promise<ApplyCon
   const skippedStepIds: string[] = [];
 
   /**
-   * Execute a single step: skip if already journaled, otherwise resolve refs
-   * (including any `read` args, via executor.read()), call executor, and
-   * journal on success. Mutates `executedStepIds`, `skippedStepIds`, and
-   * `alreadyCompleted` in place.
+   * Execute a single step: skip if already journaled (and not forced),
+   * otherwise resolve refs (including any `read` args, via executor.read()),
+   * call executor, and journal on success. Mutates `executedStepIds`,
+   * `skippedStepIds`, and `alreadyCompleted` in place.
    *
    * IMPORTANT: the already-journaled check happens BEFORE `buildConfigCall`
-   * is called, so a skipped (already-complete) step's `read` args are NEVER
-   * resolved and `executor.read()` is NEVER invoked for it — resuming a
-   * partially-applied spec performs no reads for the steps it skips.
+   * is called, so a skipped (already-complete, non-forced) step's `read` args
+   * are NEVER resolved and `executor.read()` is NEVER invoked for it —
+   * resuming a partially-applied spec performs no reads for the steps it
+   * skips.
+   *
+   * A step whose id is in `forcedStepIds` is NEVER skipped, even if it is
+   * already in `alreadyCompleted` — it re-resolves refs/reads, re-calls
+   * executor.execute(), and (on success) appends a fresh journal record. See
+   * the FORCING RE-EXECUTION section of the module doc comment.
    */
   async function executeStep(step: ConfigStep): Promise<void> {
-    if (alreadyCompleted.has(step.id)) {
-      // Already journaled from a previous run — skip. No ref/read resolution
-      // and no executor call of any kind happens for a skipped step.
+    const forced = forcedStepIds.has(step.id);
+    if (alreadyCompleted.has(step.id) && !forced) {
+      // Already journaled from a previous run and not forced — skip. No
+      // ref/read resolution and no executor call of any kind happens for a
+      // skipped step.
       skippedStepIds.push(step.id);
       return;
     }

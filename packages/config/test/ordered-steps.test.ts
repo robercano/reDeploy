@@ -747,6 +747,109 @@ describe("applyConfig — orderedSteps resume semantics", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Execution: forceStepIds preserves ordering guarantees across both lists
+// ---------------------------------------------------------------------------
+
+describe("applyConfig — forceStepIds preserves ordering guarantees", () => {
+  it("forcing an unordered step still runs all steps before all orderedSteps", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        { kind: "setX", id: "u1", target: "feeController", function: "f" },
+        { kind: "setX", id: "u2", target: "token", function: "g" },
+      ],
+      orderedSteps: [
+        { kind: "wire", id: "o1", source: "token", into: "vault", function: "setToken" },
+        {
+          kind: "grantRole",
+          id: "o2",
+          target: "token",
+          role: "MINTER_ROLE",
+          account: { kind: "ref", contract: "minterContract" },
+        },
+      ],
+    };
+
+    // Full first run.
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(spec, executor1, stateDir));
+
+    // Force the first unordered step on the second run — steps must still
+    // run (conceptually) before orderedSteps, and orderedSteps must still be
+    // skipped (not forced) in strict order.
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(spec, executor2, stateDir),
+      forceStepIds: ["u1"],
+    });
+
+    expect(executor2.calls.map((c) => c.stepId)).toEqual(["u1"]);
+    expect(result2.executedStepIds).toEqual(["u1"]);
+    expect(result2.skippedStepIds).toEqual(["u2", "o1", "o2"]);
+  });
+
+  it("forcing an orderedSteps step re-executes it in place, without disturbing array order", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [{ kind: "setX", id: "u1", target: "feeController", function: "f" }],
+      orderedSteps: [
+        { kind: "setX", id: "o1", target: "token", function: "g" },
+        { kind: "setX", id: "o2", target: "vault", function: "h" },
+        { kind: "wire", id: "o3", source: "token", into: "vault", function: "setToken" },
+      ],
+    };
+
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(spec, executor1, stateDir));
+
+    // Force the MIDDLE ordered step ("o2"). It must execute again while "o1"
+    // and "o3" remain skipped — execution order (were it to run) is still
+    // steps-then-orderedSteps in strict array order.
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(spec, executor2, stateDir),
+      forceStepIds: ["o2"],
+    });
+
+    expect(executor2.calls.map((c) => c.stepId)).toEqual(["o2"]);
+    expect(result2.executedStepIds).toEqual(["o2"]);
+    expect(result2.skippedStepIds).toEqual(["u1", "o1", "o3"]);
+  });
+
+  it("forcing multiple steps across both lists re-executes each exactly once, in spec order", async () => {
+    const stateDir = await makeTempDir();
+    const spec: ConfigSpec = {
+      version: 1,
+      steps: [
+        { kind: "setX", id: "u1", target: "feeController", function: "f" },
+        { kind: "setX", id: "u2", target: "token", function: "g" },
+      ],
+      orderedSteps: [
+        { kind: "setX", id: "o1", target: "vault", function: "h" },
+        { kind: "setX", id: "o2", target: "registry", function: "i" },
+      ],
+    };
+
+    const executor1 = new FakeExecutor();
+    await applyConfig(makeOptions(spec, executor1, stateDir));
+
+    const executor2 = new FakeExecutor();
+    const result2 = await applyConfig({
+      ...makeOptions(spec, executor2, stateDir),
+      forceStepIds: ["u2", "o1"],
+    });
+
+    // Order of execution follows spec order (steps then orderedSteps), NOT
+    // the order ids were listed in forceStepIds.
+    expect(executor2.calls.map((c) => c.stepId)).toEqual(["u2", "o1"]);
+    expect(result2.executedStepIds).toEqual(["u2", "o1"]);
+    expect(result2.skippedStepIds).toEqual(["u1", "o2"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Execution: address references (RefArg) in orderedSteps
 // ---------------------------------------------------------------------------
 

@@ -181,26 +181,52 @@ export function parseApplyConfigFrame(frame: string): ApplyConfigEvent | null {
  * POST the config spec to /api/apply-config and stream the SSE response into
  * an ApplyConfigResult.
  *
- * @param config   - The ConfigSpec JSON object to send (as the bare request
- *                   body — no envelope, same convention as runVerifyConfig).
- * @param fetchFn  - The fetch implementation to use (defaults to global fetch;
- *                   accepted as a parameter for testability).
- * @param network  - Optional target network name (issue #139 convention),
- *                   sent as `?network=<name>` (URI-encoded). Omitted/undefined
- *                   ⇒ no query param at all — resolves to the deploy-server's
- *                   default network.
+ * @param config        - The ConfigSpec JSON object to send (as the bare
+ *                        request body — no envelope, same convention as
+ *                        runVerifyConfig).
+ * @param fetchFn       - The fetch implementation to use (defaults to global
+ *                        fetch; accepted as a parameter for testability).
+ * @param network       - Optional target network name (issue #139
+ *                        convention), sent as `?network=<name>`
+ *                        (URI-encoded). Omitted/undefined ⇒ no `network`
+ *                        query param at all — resolves to the deploy-server's
+ *                        default network.
+ * @param forceStepIds  - Optional list of step ids to force re-execution for,
+ *                        even if already journaled (config-drift one-click
+ *                        re-apply — issue #153). Sent as
+ *                        `?forceStepIds=<id1>,<id2>` (each id URI-encoded).
+ *                        Omitted/undefined/empty ⇒ no `forceStepIds` query
+ *                        param at all — identical to today's behaviour. See
+ *                        `apps/deploy-server/src/server.ts`'s
+ *                        `parseForceStepIds` for the server-side contract
+ *                        (comma-separated, trimmed, deduped, capped).
  */
 export async function runApplyConfig(
   config: unknown,
   fetchFn: typeof fetch = fetch,
   network?: string,
+  forceStepIds?: readonly string[],
 ): Promise<ApplyConfigResult> {
   let response: Response;
 
+  // Build the query string manually (not via URLSearchParams.toString(),
+  // which encodes spaces as "+" rather than "%20" and would change the
+  // wire format of the pre-existing `?network=` param) so `network` and
+  // `forceStepIds` compose correctly regardless of which are present.
+  // `forceStepIds` values are individually URI-encoded, then joined with a
+  // literal (unencoded) comma — matching the server's
+  // `?forceStepIds=<id1>,<id2>` contract (see `parseForceStepIds` in
+  // apps/deploy-server/src/server.ts, which decodes via URLSearchParams and
+  // then splits on ",").
+  const queryParts: string[] = [];
+  if (network !== undefined && network !== "") {
+    queryParts.push(`network=${encodeURIComponent(network)}`);
+  }
+  if (forceStepIds !== undefined && forceStepIds.length > 0) {
+    queryParts.push(`forceStepIds=${forceStepIds.map(encodeURIComponent).join(",")}`);
+  }
   const url =
-    network !== undefined && network !== ""
-      ? `/api/apply-config?network=${encodeURIComponent(network)}`
-      : "/api/apply-config";
+    queryParts.length > 0 ? `/api/apply-config?${queryParts.join("&")}` : "/api/apply-config";
 
   try {
     response = await fetchFn(url, {

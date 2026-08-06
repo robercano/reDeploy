@@ -151,6 +151,94 @@ function resolveNetworkForRequest(
   return { name: resolution.name, config: resolution.config };
 }
 
+/** Maximum number of ids accepted in a `?forceStepIds=` query param (issue #153). */
+const MAX_FORCE_STEP_IDS = 500;
+
+/** Maximum length (chars) of a single id within `?forceStepIds=` (issue #153). */
+const MAX_FORCE_STEP_ID_LENGTH = 256;
+
+/**
+ * Parse the OPTIONAL `?forceStepIds=<id1>,<id2>,...` query param for
+ * `POST /api/apply-config` (config-drift one-click re-apply — issue #153).
+ *
+ * IMPORTANT: `forceStepIds` is deliberately a QUERY PARAM, not a body field.
+ * `handleApplyConfig` passes the ENTIRE POST body as `spec` to `applyConfig()`
+ * (see its doc comment) — adding a sibling field to the body would corrupt
+ * spec validation and be a breaking wire-format change. The query string is
+ * the only place to carry this out-of-band control input.
+ *
+ * Format: a comma-separated list of step ids. Each id is trimmed; empty
+ * entries (from a leading/trailing/doubled comma, or the whole param being
+ * an empty string) are dropped silently — NOT an error. Duplicate ids (after
+ * trimming) are deduped. The list is capped at `MAX_FORCE_STEP_IDS` entries
+ * and each id at `MAX_FORCE_STEP_ID_LENGTH` characters — both violations are
+ * clean 400s.
+ *
+ * Ids that don't match any step in the spec are NOT validated here —
+ * `applyConfig()` silently ignores unknown forced ids (see
+ * `packages/config/src/execute/execute.ts`), which is exactly what we want
+ * for a drift report that may reference stale ids.
+ *
+ * On success: `{ ok: true, forceStepIds }` — `forceStepIds` is `undefined`
+ * when the param is absent OR present-but-empty-after-parsing (both mean "no
+ * forcing", matching `ApplyConfigOptions.forceStepIds`'s own
+ * omitted/empty-array equivalence).
+ *
+ * On failure: WRITES a 400 JSON response itself (mirroring
+ * `resolveNetworkForRequest`) and returns `{ ok: false }`. The error message
+ * is a FIXED string — the raw query value is never echoed back to the client.
+ *
+ * Callers MUST check `ok` and stop processing (the response may already be
+ * sent) — and MUST call this BEFORE opening the SSE stream, so a malformed
+ * value is a clean 400, not a `done` SSE frame.
+ */
+function parseForceStepIds(
+  req: IncomingMessage,
+  res: ServerResponse,
+): { ok: true; forceStepIds: string[] | undefined } | { ok: false } {
+  const raw = getQueryParam(req.url, "forceStepIds");
+  if (raw === undefined) {
+    return { ok: true, forceStepIds: undefined };
+  }
+
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id !== "");
+
+  if (ids.length === 0) {
+    // Empty string, or a string made up entirely of commas/whitespace — no
+    // ids to force. Not an error.
+    return { ok: true, forceStepIds: undefined };
+  }
+
+  if (ids.length > MAX_FORCE_STEP_IDS) {
+    const body = JSON.stringify({
+      error: `forceStepIds: too many ids (max ${MAX_FORCE_STEP_IDS})`,
+    });
+    res.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    return { ok: false };
+  }
+
+  if (ids.some((id) => id.length > MAX_FORCE_STEP_ID_LENGTH)) {
+    const body = JSON.stringify({
+      error: `forceStepIds: id exceeds max length (${MAX_FORCE_STEP_ID_LENGTH} chars)`,
+    });
+    res.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    return { ok: false };
+  }
+
+  return { ok: true, forceStepIds: [...new Set(ids)] };
+}
+
 /**
  * Read this package's `version` field, for stamping into deployment
  * snapshots as `toolVersion`. Never throws — falls back to
@@ -755,11 +843,23 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
  * come from the resolved network's config (server-side registry only — see
  * networks.ts), never from client input.
  *
+ * Forced re-apply (config-drift one-click re-apply — issue #153): accepts the
+ * OPTIONAL `?forceStepIds=<id1>,<id2>` query param (see `parseForceStepIds`),
+ * ALSO resolved/validated BEFORE the SSE stream opens so a malformed value
+ * (too many ids, or an id that's too long) yields a clean 400 rather than an
+ * SSE `done` frame. It is a query param, not a body field, because the whole
+ * POST body is already `spec` (see below) — adding a body field would corrupt
+ * spec validation. Parsed ids are forwarded to `applyConfig({ forceStepIds })`
+ * unchanged; ids that don't match any step in the spec are silently ignored
+ * by the engine (see `packages/config/src/execute/execute.ts`).
+ *
  * Idempotency / resumability: `stateDir` is set to the SAME
  * `deploymentDir` the network's deployment journal lives in, so
  * `applyConfig()`'s own `config-state.jsonl` journal makes a re-run of an
  * already-completed spec a no-op — every step comes back in
- * `skippedStepIds`, none in `executedStepIds`, and `success` is still `true`.
+ * `skippedStepIds`, none in `executedStepIds`, and `success` is still `true`
+ * — UNLESS its id is listed in `forceStepIds`, in which case it re-executes
+ * and lands in `executedStepIds` instead.
  *
  * Error handling around `applyConfig()`:
  *   - `ConfigExecError` — mapped exactly like `handleDeploy` maps
@@ -779,7 +879,8 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
  *
  * Error responses (non-SSE):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON, or an unknown `?network=` name
+ *   - 400  malformed JSON, an unknown `?network=` name, or an invalid
+ *          `?forceStepIds=` value (too many ids / an id too long)
  *   - 500  network configuration could not be loaded
  */
 async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -791,6 +892,11 @@ async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Pro
   // --- Resolve + validate the target network BEFORE opening the SSE stream -
   const network = resolveNetworkForRequest(req, res);
   if (network === undefined) return;
+
+  // --- Parse + validate forceStepIds BEFORE opening the SSE stream ---------
+  const forceStepIdsResult = parseForceStepIds(req, res);
+  if (!forceStepIdsResult.ok) return;
+  const { forceStepIds } = forceStepIdsResult;
 
   // --- Open SSE stream first so all outcomes flow through it ---------------
   res.writeHead(200, {
@@ -898,6 +1004,7 @@ async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Pro
       deployedAddresses,
       executor: wrappedExecutor,
       stateDir: deploymentDir,
+      forceStepIds,
     });
   } catch (caughtErr) {
     if (caughtErr instanceof ConfigExecError) {
@@ -1239,6 +1346,12 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  * these four. `GET /api/networks` takes no query params but is likewise
  * matched on `pathname` for consistency (harmless if a client appends one
  * anyway).
+ *
+ * `POST /api/apply-config` ALSO accepts an OPTIONAL `?forceStepIds=<id1>,<id2>`
+ * query param (see `parseForceStepIds`) that forces re-execution of specific
+ * already-journaled steps — the one-click config-drift re-apply (issue #153).
+ * It is a query param rather than a body field because the whole POST body is
+ * already the config spec (see `handleApplyConfig`'s doc comment).
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
