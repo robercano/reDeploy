@@ -181,26 +181,81 @@ export function parseApplyConfigFrame(frame: string): ApplyConfigEvent | null {
  * POST the config spec to /api/apply-config and stream the SSE response into
  * an ApplyConfigResult.
  *
- * @param config   - The ConfigSpec JSON object to send (as the bare request
- *                   body — no envelope, same convention as runVerifyConfig).
- * @param fetchFn  - The fetch implementation to use (defaults to global fetch;
- *                   accepted as a parameter for testability).
- * @param network  - Optional target network name (issue #139 convention),
- *                   sent as `?network=<name>` (URI-encoded). Omitted/undefined
- *                   ⇒ no query param at all — resolves to the deploy-server's
- *                   default network.
+ * @param config        - The ConfigSpec JSON object to send (as the bare
+ *                        request body — no envelope, same convention as
+ *                        runVerifyConfig).
+ * @param fetchFn       - The fetch implementation to use (defaults to global
+ *                        fetch; accepted as a parameter for testability).
+ * @param network       - Optional target network name (issue #139
+ *                        convention), sent as `?network=<name>`
+ *                        (URI-encoded). Omitted/undefined ⇒ no `network`
+ *                        query param at all — resolves to the deploy-server's
+ *                        default network.
+ * @param forceStepIds  - Optional list of step ids to force re-execution for,
+ *                        even if already journaled (config-drift one-click
+ *                        re-apply — issue #153). Sent as ONE REPEATED query
+ *                        param per id — `?forceStepIds=<id1>&forceStepIds=<id2>`
+ *                        (each id URI-encoded) — rather than a single
+ *                        comma-joined value. This avoids the comma round-trip
+ *                        bug where `encodeURIComponent(",")` (`%2C`) gets
+ *                        URL-DECODED back to a literal `,` by the server's
+ *                        `URLSearchParams` BEFORE the server splits on `,`,
+ *                        silently splitting a single id containing a comma
+ *                        into two ids (issue #153 review finding B5). Because
+ *                        of this, `,` is a RESERVED DELIMITER: no forced step
+ *                        id may contain one. Any id containing a comma is
+ *                        rejected HERE, client-side, before any request is
+ *                        sent (`ok: false`, no network call, no fetch made).
+ *                        Omitted/undefined/empty
+ *                        ⇒ no `forceStepIds` query param at all — identical
+ *                        to today's behaviour. See
+ *                        `apps/deploy-server/src/server.ts`'s
+ *                        `parseForceStepIds` for the server-side contract
+ *                        (repeated params AND the legacy comma-separated
+ *                        single-value form are both accepted and merged,
+ *                        then trimmed/deduped/capped).
  */
 export async function runApplyConfig(
   config: unknown,
   fetchFn: typeof fetch = fetch,
   network?: string,
+  forceStepIds?: readonly string[],
 ): Promise<ApplyConfigResult> {
   let response: Response;
 
+  // RESERVED DELIMITER guard (issue #153 review finding B5) — reject BEFORE
+  // building the URL / sending anything. See the `forceStepIds` param doc
+  // above for the full comma round-trip rationale.
+  if (forceStepIds !== undefined) {
+    const commaId = forceStepIds.find((id) => id.includes(","));
+    if (commaId !== undefined) {
+      return {
+        ok: false,
+        error: `forceStepIds: id "${commaId}" cannot contain a comma — "," is a reserved delimiter`,
+        steps: [],
+      };
+    }
+  }
+
+  // Build the query string manually (not via URLSearchParams.toString(),
+  // which encodes spaces as "+" rather than "%20" and would change the
+  // wire format of the pre-existing `?network=` param) so `network` and
+  // `forceStepIds` compose correctly regardless of which are present.
+  // Each `forceStepIds` id is sent as its OWN repeated `forceStepIds=<id>`
+  // query param (URI-encoded) — never comma-joined — matching the server's
+  // `getQueryParamAll`-based merge in `parseForceStepIds`
+  // (apps/deploy-server/src/server.ts).
+  const queryParts: string[] = [];
+  if (network !== undefined && network !== "") {
+    queryParts.push(`network=${encodeURIComponent(network)}`);
+  }
+  if (forceStepIds !== undefined && forceStepIds.length > 0) {
+    for (const id of forceStepIds) {
+      queryParts.push(`forceStepIds=${encodeURIComponent(id)}`);
+    }
+  }
   const url =
-    network !== undefined && network !== ""
-      ? `/api/apply-config?network=${encodeURIComponent(network)}`
-      : "/api/apply-config";
+    queryParts.length > 0 ? `/api/apply-config?${queryParts.join("&")}` : "/api/apply-config";
 
   try {
     response = await fetchFn(url, {

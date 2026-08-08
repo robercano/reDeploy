@@ -20,7 +20,7 @@
  * data constraint.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ReactFlow, Background, Controls } from "@xyflow/react";
 import type { NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -113,24 +113,98 @@ const failedBadgeStyle: React.CSSProperties = {
   color: "var(--color-danger-text)",
 };
 
+const driftDetailStyle: React.CSSProperties = {
+  marginTop: 6,
+  padding: 8,
+  borderRadius: 4,
+  background: "var(--color-bg-panel)",
+  border: "1px solid var(--color-border)",
+  fontSize: 11,
+};
+
+const driftDetailRowStyle: React.CSSProperties = {
+  marginBottom: 4,
+  wordBreak: "break-word",
+};
+
+const driftDetailLabelStyle: React.CSSProperties = {
+  fontWeight: 600,
+  color: "var(--color-text-secondary)",
+  marginRight: 4,
+};
+
+const reapplyButtonStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 11,
+  fontWeight: 600,
+  padding: "3px 8px",
+  borderRadius: 4,
+  border: "1px solid var(--color-danger-text)",
+  background: "var(--color-danger-bg)",
+  color: "var(--color-danger-text)",
+  cursor: "pointer",
+};
+
+/** Maximum length (chars) of a rendered expected/actual value before truncation. */
+const MAX_DRIFT_DETAIL_VALUE_LENGTH = 200;
+
+/**
+ * Safely stringify an `unknown` drift `expected`/`actual` value for display.
+ *
+ * - Strings render as-is (no extra quoting).
+ * - Everything else is JSON.stringify'd (falling back to String() if that
+ *   throws, e.g. for a value containing a BigInt or a circular reference).
+ * - Rendered via plain JSX text content ONLY (never dangerouslySetInnerHTML)
+ *   — React escapes it automatically.
+ * - Truncated to MAX_DRIFT_DETAIL_VALUE_LENGTH chars so a pathologically
+ *   large on-chain value never blows up the panel layout.
+ */
+function stringifyDriftValue(value: unknown): string {
+  let str: string;
+  if (value === undefined) {
+    str = "undefined";
+  } else if (typeof value === "string") {
+    str = value;
+  } else {
+    try {
+      str = JSON.stringify(value) ?? String(value);
+    } catch {
+      str = String(value);
+    }
+  }
+  return str.length > MAX_DRIFT_DETAIL_VALUE_LENGTH
+    ? `${str.slice(0, MAX_DRIFT_DETAIL_VALUE_LENGTH)}… (truncated)`
+    : str;
+}
+
+// Clickable badge base style (issue #153 review, non-blocking performance
+// note): the drift badge is always `role="button"`/clickable (toggles the
+// detail panel), so `cursor: "pointer"` is baked into every entry below AT
+// MODULE SCOPE — these are constant object references, never recreated per
+// render. Previously the render spread `{ ...DRIFT_BADGE_STYLES[status],
+// cursor: "pointer" }` inline in JSX, allocating a brand-new style object for
+// every badge on every render; baking the property in here restores a
+// constant reference (matching every other style constant in this file).
+const clickableBadgeBaseStyle: React.CSSProperties = { ...badgeBaseStyle, cursor: "pointer" };
+
 const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
   match: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-success-bg-strong)",
     color: "var(--color-success-text-strong)",
   },
   drift: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-danger-bg)",
     color: "var(--color-danger-text)",
   },
   error: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-warning-bg)",
     color: "var(--color-warning-text)",
   },
   skipped: {
-    ...badgeBaseStyle,
+    ...clickableBadgeBaseStyle,
     background: "var(--color-bg-elevated)",
     color: "var(--color-text-muted)",
   },
@@ -140,15 +214,33 @@ const DRIFT_BADGE_STYLES: Record<string, React.CSSProperties> = {
 // Sub-components
 // ---------------------------------------------------------------------------
 
+/** Drift statuses for which a one-click "Re-apply" is offered (issue #153). */
+const REAPPLIABLE_DRIFT_STATUSES: ReadonlySet<ConfigDriftResultEntry["status"]> = new Set([
+  "drift",
+  "error",
+]);
+
 function ConfigStepCard({
   step,
   drift,
   applyResult,
+  onReapplyStep,
 }: {
   step: ConfigStepStatus;
   drift?: ConfigDriftResultEntry;
   applyResult?: ApplyConfigStepResult;
+  /**
+   * Callback invoked with `step.id` when the user clicks "Re-apply" for a
+   * drifted/errored step (issue #153). The actual on-chain re-apply +
+   * confirmation flow lives in App.tsx — this component only surfaces the
+   * user's intent.
+   */
+  onReapplyStep?: (stepId: string) => void;
 }) {
+  // Detail panel expand/collapse state — local to this card, closed by
+  // default. Only meaningful when `drift` is defined (see the toggle below).
+  const [detailExpanded, setDetailExpanded] = useState(false);
+
   const badge = step.completed ? (
     <span
       style={completedBadgeStyle}
@@ -179,12 +271,33 @@ function ConfigStepCard({
         <span style={{ display: "flex", gap: 4 }}>
           {badge}
           {/* Config-drift badge (issue #138) — only rendered once a
-              /api/verify/config run has produced a result for this step. */}
+              /api/verify/config run has produced a result for this step.
+              Clickable (issue #153) to expand/collapse the expected-vs-actual
+              detail panel below. */}
           {drift !== undefined && (
             <span
-              style={DRIFT_BADGE_STYLES[drift.status] ?? badgeBaseStyle}
+              // Object.hasOwn guard (issue #153 review, security nit): plain
+              // object indexing by a server-supplied `drift.status` string
+              // would otherwise also match inherited keys like "constructor"
+              // / "toString", returning a prototype function instead of
+              // falling through to `clickableBadgeBaseStyle`.
+              style={
+                Object.hasOwn(DRIFT_BADGE_STYLES, drift.status)
+                  ? DRIFT_BADGE_STYLES[drift.status]
+                  : clickableBadgeBaseStyle
+              }
               data-testid={`config-step-${step.id}-drift`}
               title={drift.message}
+              role="button"
+              tabIndex={0}
+              aria-expanded={detailExpanded}
+              onClick={() => setDetailExpanded((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setDetailExpanded((v) => !v);
+                }
+              }}
             >
               {drift.status}
             </span>
@@ -211,6 +324,43 @@ function ConfigStepCard({
       {step.completedAt !== null && (
         <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>
           {step.completedAt}
+        </div>
+      )}
+      {/* Drift detail panel (issue #153) — expected vs actual + message,
+          revealed by clicking the drift badge above. Only rendered when a
+          drift result exists AND the panel is expanded. Values are rendered
+          as plain text (React-escaped, never dangerouslySetInnerHTML) and
+          defensively stringified/truncated via stringifyDriftValue. */}
+      {drift !== undefined && detailExpanded && (
+        <div style={driftDetailStyle} data-testid={`config-step-${step.id}-drift-detail`}>
+          <div style={driftDetailRowStyle} data-testid={`config-step-${step.id}-drift-expected`}>
+            <span style={driftDetailLabelStyle}>expected:</span>
+            {stringifyDriftValue(drift.expected)}
+          </div>
+          <div style={driftDetailRowStyle} data-testid={`config-step-${step.id}-drift-actual`}>
+            <span style={driftDetailLabelStyle}>actual:</span>
+            {stringifyDriftValue(drift.actual)}
+          </div>
+          {drift.message !== undefined && (
+            <div style={driftDetailRowStyle} data-testid={`config-step-${step.id}-drift-message`}>
+              <span style={driftDetailLabelStyle}>message:</span>
+              {drift.message}
+            </div>
+          )}
+          {/* Re-apply (issue #153) — only offered for a drifted/errored step;
+              a "match" step never gets a re-apply button. Only invokes the
+              callback — App.tsx owns the confirmation/guard flow before any
+              on-chain write actually happens. */}
+          {REAPPLIABLE_DRIFT_STATUSES.has(drift.status) && onReapplyStep !== undefined && (
+            <button
+              type="button"
+              style={reapplyButtonStyle}
+              data-testid={`config-step-${step.id}-reapply`}
+              onClick={() => onReapplyStep(step.id)}
+            >
+              Re-apply
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -259,6 +409,15 @@ export interface InspectorProps {
    * "failed" badge, it never overrides the completed/pending badge.
    */
   applyConfigResults?: ApplyConfigStepResult[];
+  /**
+   * Callback invoked with a step id when the user clicks "Re-apply" on a
+   * drifted/errored step's detail panel (issue #153 — config-drift one-click
+   * re-apply). Omitted => no Re-apply button is rendered at all (e.g. a
+   * read-only inspector view). The actual on-chain write, confirmation modal,
+   * and post-success drift refresh are owned by the parent (App.tsx) — this
+   * component only surfaces user intent.
+   */
+  onReapplyStep?: (stepId: string) => void;
 }
 
 export function Inspector({
@@ -268,6 +427,7 @@ export function Inspector({
   driftResults,
   sourceVerifyResults,
   applyConfigResults,
+  onReapplyStep,
 }: InspectorProps) {
   const { nodes, edges } = useMemo(
     () => deploymentViewToFlow(view, sourceVerifyResults),
@@ -324,6 +484,7 @@ export function Inspector({
               step={step}
               drift={driftById.get(step.id)}
               applyResult={applyResultById.get(step.id)}
+              onReapplyStep={onReapplyStep}
             />
           ))
         )}

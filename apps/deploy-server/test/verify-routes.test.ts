@@ -20,6 +20,7 @@ import * as path from "node:path";
 
 const getChainIdSpy = vi.fn();
 const readContractSpy = vi.fn();
+const httpSpy = vi.fn();
 
 vi.mock("viem", async (importOriginal) => {
   const original = await importOriginal<typeof import("viem")>();
@@ -29,7 +30,10 @@ vi.mock("viem", async (importOriginal) => {
       getChainId: (...args: unknown[]) => getChainIdSpy(...args),
       readContract: (...args: unknown[]) => readContractSpy(...args),
     })),
-    http: vi.fn((url: string) => ({ type: "http", url })),
+    http: vi.fn((url: string) => {
+      httpSpy(url);
+      return { type: "http", url };
+    }),
   };
 });
 
@@ -184,6 +188,7 @@ beforeEach(() => {
 
   getChainIdSpy.mockReset();
   readContractSpy.mockReset();
+  httpSpy.mockReset();
 });
 
 afterEach(() => {
@@ -392,6 +397,112 @@ describe("POST /api/verify/config", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body) as { results: Array<Record<string, unknown>> };
     expect(body.results[0]?.["actual"]).toEqual([{ $bigint: "1" }, { nested: { $bigint: "2" } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/verify/config — multi-network (?network=)
+//
+// issue #153 security review, finding H1: the drift check MUST read the
+// SELECTED network's deployment (not always the server's default env-based
+// one), the same way handleApplyConfig's forced re-apply already writes to
+// the selected network — otherwise a user could see drift computed against
+// one chain while one-click re-applying against another.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/verify/config — multi-network (?network=)", () => {
+  let networksTmpDir: string;
+  let savedNetworksConfig: string | undefined;
+
+  beforeEach(() => {
+    networksTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "redeploy-verify-config-networks-test-"));
+    savedNetworksConfig = process.env["NETWORKS_CONFIG"];
+  });
+
+  afterEach(() => {
+    fs.rmSync(networksTmpDir, { recursive: true, force: true });
+    if (savedNetworksConfig === undefined) {
+      delete process.env["NETWORKS_CONFIG"];
+    } else {
+      process.env["NETWORKS_CONFIG"] = savedNetworksConfig;
+    }
+  });
+
+  function writeNetworksConfig(config: unknown): void {
+    const configPath = path.join(networksTmpDir, "networks.json");
+    fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+    process.env["NETWORKS_CONFIG"] = configPath;
+  }
+
+  const ALPHA_ADDRESS = "0x3333333333333333333333333333333333333333";
+  const BETA_ADDRESS = "0x4444444444444444444444444444444444444444";
+  const NETWORK_SET_FEE_SPEC = JSON.stringify({
+    version: 1,
+    steps: [
+      {
+        kind: "setX",
+        id: "set-fee",
+        target: "feeController",
+        function: "setFee",
+        args: [{ kind: "literal", value: 500 }],
+      },
+    ],
+  });
+
+  function writeNetworkDeployment(dir: string, address: string): void {
+    fs.mkdirSync(dir, { recursive: true });
+    writeJournal(dir, [
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_INITIALIZE",
+        futureId: "Deployment#feeController",
+        contractName: "FeeController",
+        constructorArgs: [],
+        libraries: {},
+        dependencies: [],
+      },
+      {
+        type: "DEPLOYMENT_EXECUTION_STATE_COMPLETE",
+        futureId: "Deployment#feeController",
+        result: { type: "SUCCESS", address },
+      },
+    ]);
+    writeDeployedAddresses(dir, { "Deployment#feeController": address });
+  }
+
+  it("reads the SELECTED network's deployment, not the server's default", async () => {
+    const alphaDir = path.join(networksTmpDir, "alpha-journal");
+    const betaDir = path.join(networksTmpDir, "beta-journal");
+    writeNetworkDeployment(alphaDir, ALPHA_ADDRESS);
+    writeNetworkDeployment(betaDir, BETA_ADDRESS);
+    writeNetworksConfig({
+      networks: {
+        alpha: { rpcUrl: "http://alpha-rpc.internal.example.com", deploymentDir: alphaDir },
+        beta: { rpcUrl: "http://beta-rpc.internal.example.com", deploymentDir: betaDir },
+      },
+    });
+
+    readContractSpy.mockResolvedValue(500n);
+
+    const resAlpha = await doRequest(port, "POST", "/api/verify/config?network=alpha", NETWORK_SET_FEE_SPEC);
+    expect(resAlpha.statusCode).toBe(200);
+    expect(readContractSpy).toHaveBeenLastCalledWith(expect.objectContaining({ address: ALPHA_ADDRESS }));
+    expect(httpSpy).toHaveBeenLastCalledWith("http://alpha-rpc.internal.example.com");
+
+    const resBeta = await doRequest(port, "POST", "/api/verify/config?network=beta", NETWORK_SET_FEE_SPEC);
+    expect(resBeta.statusCode).toBe(200);
+    expect(readContractSpy).toHaveBeenLastCalledWith(expect.objectContaining({ address: BETA_ADDRESS }));
+    expect(httpSpy).toHaveBeenLastCalledWith("http://beta-rpc.internal.example.com");
+  });
+
+  it("an unknown ?network= value -> 400, the chain is never read", async () => {
+    const res = await doRequest(port, "POST", "/api/verify/config?network=nonexistent", NETWORK_SET_FEE_SPEC);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toBe("application/json");
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain("nonexistent");
+    expect(readContractSpy).not.toHaveBeenCalled();
   });
 });
 

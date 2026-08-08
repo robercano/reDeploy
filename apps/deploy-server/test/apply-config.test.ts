@@ -690,6 +690,312 @@ describe("POST /api/apply-config — secret leak prevention", () => {
 });
 
 // ---------------------------------------------------------------------------
+// forceStepIds query param (issue #153 — config-drift one-click re-apply)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/apply-config — forceStepIds", () => {
+  it("parses and forwards forceStepIds to applyConfig", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: ["set-fee"],
+      skippedStepIds: ["grant-minter"],
+      completedStepIds: ["set-fee", "grant-minter"],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee,grant-minter",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: ["set-fee", "grant-minter"] }),
+    );
+  });
+
+  it("composes correctly with ?network= (both params present)", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: ["set-fee"],
+      skippedStepIds: [],
+      completedStepIds: ["set-fee"],
+    });
+
+    const res = await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?network=default&forceStepIds=set-fee",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: ["set-fee"] }),
+    );
+  });
+
+  it("absent forceStepIds param → forwarded as undefined", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(port, "POST", "/api/apply-config", JSON.stringify(VALID_CONFIG_SPEC));
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: undefined }),
+    );
+  });
+
+  it("empty string forceStepIds param → treated as no ids (undefined)", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    const res = await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: undefined }),
+    );
+  });
+
+  it("a value made only of commas/whitespace → treated as no ids (undefined)", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=%20,,%20,",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: undefined }),
+    );
+  });
+
+  it("dedupes repeated ids (and trims whitespace) before forwarding", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee,%20set-fee%20,grant-minter,set-fee",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: ["set-fee", "grant-minter"] }),
+    );
+  });
+
+  it("over-cap id count → 400 Bad Request (non-SSE), applyConfig never called", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    const tooMany = Array.from({ length: 501 }, (_, i) => `s${i}`).join(",");
+
+    const res = await doRequest(
+      port,
+      "POST",
+      `/api/apply-config?forceStepIds=${tooMany}`,
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toBe("application/json");
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(configMod.applyConfig).not.toHaveBeenCalled();
+  });
+
+  it("an id exceeding the max length → 400 Bad Request (non-SSE), never echoes the value", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    const tooLongId = "a".repeat(257);
+
+    const res = await doRequest(
+      port,
+      "POST",
+      `/api/apply-config?forceStepIds=${tooLongId}`,
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(400);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(typeof body["error"]).toBe("string");
+    expect(res.body).not.toContain(tooLongId);
+    expect(configMod.applyConfig).not.toHaveBeenCalled();
+  });
+
+  it("a 400 from an invalid forceStepIds value happens BEFORE the SSE stream opens (no event-stream header)", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const tooLongId = "b".repeat(300);
+
+    const res = await doRequest(
+      port,
+      "POST",
+      `/api/apply-config?forceStepIds=${tooLongId}`,
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).not.toMatch(/text\/event-stream/);
+  });
+
+  it("max-length id (exactly 256 chars) is accepted", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+    const exactId = "c".repeat(256);
+
+    const res = await doRequest(
+      port,
+      "POST",
+      `/api/apply-config?forceStepIds=${exactId}`,
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: [exactId] }),
+    );
+  });
+
+  it("repeated ?forceStepIds= params MERGE (not just the first one) — issue #153 review finding B5", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee&forceStepIds=grant-minter",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ forceStepIds: ["set-fee", "grant-minter"] }),
+    );
+  });
+
+  it("a repeated param value can itself be comma-separated — both forms combine", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+
+    await doRequest(
+      port,
+      "POST",
+      "/api/apply-config?forceStepIds=set-fee,grant-minter&forceStepIds=wire-token-into-vault",
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(configMod.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceStepIds: ["set-fee", "grant-minter", "wire-token-into-vault"],
+      }),
+    );
+  });
+
+  it("max-count ids (exactly 500) is accepted", async () => {
+    process.env["DEPLOYER_PRIVATE_KEY"] =
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const configMod = vi.mocked(await import("@redeploy/config"));
+    configMod.applyConfig.mockResolvedValue({
+      success: true,
+      executedStepIds: [],
+      skippedStepIds: [],
+      completedStepIds: [],
+    });
+    const exactly500 = Array.from({ length: 500 }, (_, i) => `s${i}`).join(",");
+
+    const res = await doRequest(
+      port,
+      "POST",
+      `/api/apply-config?forceStepIds=${exactly500}`,
+      JSON.stringify(VALID_CONFIG_SPEC),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const callArgs = configMod.applyConfig.mock.calls[0]![0];
+    expect(callArgs.forceStepIds).toHaveLength(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Regression — existing routes unaffected
 // ---------------------------------------------------------------------------
 

@@ -76,6 +76,53 @@ describe("runVerifyConfig", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// runVerifyConfig — network param (issue #153 security review, finding H1:
+// the drift check MUST target the same network a subsequent forced re-apply
+// would write to, mirroring runApplyConfig's `?network=` convention).
+// ---------------------------------------------------------------------------
+
+describe("runVerifyConfig — network param", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("omitted network param → POSTs to /api/verify/config with no query string", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ clean: true, results: [] }), { status: 200 }));
+
+    await runVerifyConfig({}, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/verify/config", expect.anything());
+  });
+
+  it("a network name → POSTs to /api/verify/config?network=<name>", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ clean: true, results: [] }), { status: 200 }));
+
+    await runVerifyConfig({}, mockFetch, "sepolia");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/verify/config?network=sepolia", expect.anything());
+  });
+
+  it("a network name with special characters is URI-encoded", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ clean: true, results: [] }), { status: 200 }));
+
+    await runVerifyConfig({}, mockFetch, "my network/1");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/api/verify/config?network=${encodeURIComponent("my network/1")}`,
+      expect.anything(),
+    );
+  });
+
+  it("an empty-string network param is treated the same as omitted (no query string)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ clean: true, results: [] }), { status: 200 }));
+
+    await runVerifyConfig({}, mockFetch, "");
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/verify/config", expect.anything());
+  });
+});
+
 describe("runVerifySource", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

@@ -88,6 +88,25 @@ function getQueryParam(url: string | undefined, name: string): string | undefine
 }
 
 /**
+ * Like `getQueryParam`, but returns EVERY value of a repeated query param
+ * (`?name=a&name=b` → `["a", "b"]`) instead of only the first
+ * (`URLSearchParams.get` semantics). Returns `[]` when `url` is undefined,
+ * has no `?`, or the param is absent — never throws (same WHATWG-parser
+ * avoidance rationale as `getQueryParam`).
+ *
+ * Used by `parseForceStepIds` (issue #153 review, finding B5) so that
+ * `?forceStepIds=a&forceStepIds=b` MERGES both values instead of silently
+ * dropping all but the first, as a bare `.get()` would.
+ */
+function getQueryParamAll(url: string | undefined, name: string): string[] {
+  if (url === undefined) return [];
+  const qIdx = url.indexOf("?");
+  if (qIdx === -1) return [];
+  const queryString = url.slice(qIdx + 1).split("#")[0] ?? "";
+  return new URLSearchParams(queryString).getAll(name);
+}
+
+/**
  * Resolve the target network for an incoming request, from the OPTIONAL
  * `?network=<name>` query param — shared by `handleSimulate`, `handleDeploy`,
  * and `handleGetDeployment` so all three stay in sync (see networks.ts's
@@ -149,6 +168,112 @@ function resolveNetworkForRequest(
   }
 
   return { name: resolution.name, config: resolution.config };
+}
+
+/** Maximum number of ids accepted in a `?forceStepIds=` query param (issue #153). */
+const MAX_FORCE_STEP_IDS = 500;
+
+/** Maximum length (chars) of a single id within `?forceStepIds=` (issue #153). */
+const MAX_FORCE_STEP_ID_LENGTH = 256;
+
+/**
+ * Parse the OPTIONAL `?forceStepIds=<id1>,<id2>,...` query param for
+ * `POST /api/apply-config` (config-drift one-click re-apply — issue #153).
+ *
+ * IMPORTANT: `forceStepIds` is deliberately a QUERY PARAM, not a body field.
+ * `handleApplyConfig` passes the ENTIRE POST body as `spec` to `applyConfig()`
+ * (see its doc comment) — adding a sibling field to the body would corrupt
+ * spec validation and be a breaking wire-format change. The query string is
+ * the only place to carry this out-of-band control input.
+ *
+ * Format: BOTH forms are accepted and MERGED —
+ *   - a comma-separated list within a single value: `?forceStepIds=a,b`
+ *   - a repeated query param: `?forceStepIds=a&forceStepIds=b`
+ * `getQueryParamAll` collects every occurrence of the param (unlike a bare
+ * `URLSearchParams.get`, which silently keeps only the first), and each
+ * occurrence is then split on `,` — so `?forceStepIds=a,b&forceStepIds=c`
+ * yields `["a", "b", "c"]`. Each id is trimmed; empty entries (from a
+ * leading/trailing/doubled comma, or a value being an empty string) are
+ * dropped silently — NOT an error.
+ *
+ * ORDER OF CHECKS (matters for the cap): the `MAX_FORCE_STEP_IDS` count cap
+ * is enforced on the trimmed, non-empty id list BEFORE deduping — so, e.g.,
+ * 501 copies of the SAME id is a 400, even though it would collapse to a
+ * single id after dedup. This is a deliberate input-size guard (bounding the
+ * work done per request before any dedup pass), not a bug. The
+ * `MAX_FORCE_STEP_ID_LENGTH` per-id length cap is checked next, and
+ * duplicate ids (after trimming) are deduped only in the final returned
+ * list.
+ *
+ * RESERVED DELIMITER: because a single value is split on `,`, a step id
+ * containing a literal comma can never be forced via this param — it would
+ * always be split into two ids. `apply-config-client.ts`'s `runApplyConfig`
+ * enforces this client-side (rejecting such an id before sending) so this is
+ * a documented contract, not a silent footgun.
+ *
+ * Ids that don't match any step in the spec are NOT validated here —
+ * `applyConfig()` silently ignores unknown forced ids (see
+ * `packages/config/src/execute/execute.ts`), which is exactly what we want
+ * for a drift report that may reference stale ids.
+ *
+ * On success: `{ ok: true, forceStepIds }` — `forceStepIds` is `undefined`
+ * when the param is absent OR present-but-empty-after-parsing (both mean "no
+ * forcing", matching `ApplyConfigOptions.forceStepIds`'s own
+ * omitted/empty-array equivalence).
+ *
+ * On failure: WRITES a 400 JSON response itself (mirroring
+ * `resolveNetworkForRequest`) and returns `{ ok: false }`. The error message
+ * is a FIXED string — the raw query value is never echoed back to the client.
+ *
+ * Callers MUST check `ok` and stop processing (the response may already be
+ * sent) — and MUST call this BEFORE opening the SSE stream, so a malformed
+ * value is a clean 400, not a `done` SSE frame.
+ */
+function parseForceStepIds(
+  req: IncomingMessage,
+  res: ServerResponse,
+): { ok: true; forceStepIds: string[] | undefined } | { ok: false } {
+  const rawValues = getQueryParamAll(req.url, "forceStepIds");
+  if (rawValues.length === 0) {
+    return { ok: true, forceStepIds: undefined };
+  }
+
+  const ids = rawValues
+    .flatMap((raw) => raw.split(","))
+    .map((id) => id.trim())
+    .filter((id) => id !== "");
+
+  if (ids.length === 0) {
+    // Empty string, or a string made up entirely of commas/whitespace — no
+    // ids to force. Not an error.
+    return { ok: true, forceStepIds: undefined };
+  }
+
+  if (ids.length > MAX_FORCE_STEP_IDS) {
+    const body = JSON.stringify({
+      error: `forceStepIds: too many ids (max ${MAX_FORCE_STEP_IDS})`,
+    });
+    res.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    return { ok: false };
+  }
+
+  if (ids.some((id) => id.length > MAX_FORCE_STEP_ID_LENGTH)) {
+    const body = JSON.stringify({
+      error: `forceStepIds: id exceeds max length (${MAX_FORCE_STEP_ID_LENGTH} chars)`,
+    });
+    res.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
+    return { ok: false };
+  }
+
+  return { ok: true, forceStepIds: [...new Set(ids)] };
 }
 
 /**
@@ -755,11 +880,23 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
  * come from the resolved network's config (server-side registry only — see
  * networks.ts), never from client input.
  *
+ * Forced re-apply (config-drift one-click re-apply — issue #153): accepts the
+ * OPTIONAL `?forceStepIds=<id1>,<id2>` query param (see `parseForceStepIds`),
+ * ALSO resolved/validated BEFORE the SSE stream opens so a malformed value
+ * (too many ids, or an id that's too long) yields a clean 400 rather than an
+ * SSE `done` frame. It is a query param, not a body field, because the whole
+ * POST body is already `spec` (see below) — adding a body field would corrupt
+ * spec validation. Parsed ids are forwarded to `applyConfig({ forceStepIds })`
+ * unchanged; ids that don't match any step in the spec are silently ignored
+ * by the engine (see `packages/config/src/execute/execute.ts`).
+ *
  * Idempotency / resumability: `stateDir` is set to the SAME
  * `deploymentDir` the network's deployment journal lives in, so
  * `applyConfig()`'s own `config-state.jsonl` journal makes a re-run of an
  * already-completed spec a no-op — every step comes back in
- * `skippedStepIds`, none in `executedStepIds`, and `success` is still `true`.
+ * `skippedStepIds`, none in `executedStepIds`, and `success` is still `true`
+ * — UNLESS its id is listed in `forceStepIds`, in which case it re-executes
+ * and lands in `executedStepIds` instead.
  *
  * Error handling around `applyConfig()`:
  *   - `ConfigExecError` — mapped exactly like `handleDeploy` maps
@@ -779,7 +916,8 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
  *
  * Error responses (non-SSE):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON, or an unknown `?network=` name
+ *   - 400  malformed JSON, an unknown `?network=` name, or an invalid
+ *          `?forceStepIds=` value (too many ids / an id too long)
  *   - 500  network configuration could not be loaded
  */
 async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -791,6 +929,11 @@ async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Pro
   // --- Resolve + validate the target network BEFORE opening the SSE stream -
   const network = resolveNetworkForRequest(req, res);
   if (network === undefined) return;
+
+  // --- Parse + validate forceStepIds BEFORE opening the SSE stream ---------
+  const forceStepIdsResult = parseForceStepIds(req, res);
+  if (!forceStepIdsResult.ok) return;
+  const { forceStepIds } = forceStepIdsResult;
 
   // --- Open SSE stream first so all outcomes flow through it ---------------
   res.writeHead(200, {
@@ -898,6 +1041,7 @@ async function handleApplyConfig(req: IncomingMessage, res: ServerResponse): Pro
       deployedAddresses,
       executor: wrappedExecutor,
       stateDir: deploymentDir,
+      forceStepIds,
     });
   } catch (caughtErr) {
     if (caughtErr instanceof ConfigExecError) {
@@ -1065,13 +1209,22 @@ function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unk
 
 /**
  * Shared by both /api/verify/config and /api/verify/source: read the
- * persisted deployment from the server-resolved deploymentDir, treating a
- * fresh/never-deployed directory as the EMPTY_DEPLOYMENT_VIEW (not an error)
- * exactly like handleGetDeployment. On any other ReadError (or unexpected
- * error), writes a 500 response and returns `null` so the caller bails out.
+ * persisted deployment from a deploymentDir, treating a fresh/never-deployed
+ * directory as the EMPTY_DEPLOYMENT_VIEW (not an error) exactly like
+ * handleGetDeployment. On any other ReadError (or unexpected error), writes a
+ * 500 response and returns `null` so the caller bails out.
+ *
+ * `deploymentDir` defaults to the server-resolved (env-only) directory —
+ * /api/verify/source has no network selection, so it always uses the
+ * default. /api/verify/config instead passes the RESOLVED network's own
+ * `deploymentDir` (see handleVerifyConfig) so a drift check against a
+ * non-default network reads that network's deployment, not the default one.
  */
-function readPersistedDeploymentOr500(res: ServerResponse, logLabel: string): DeploymentView | null {
-  const deploymentDir = resolveDeploymentDir();
+function readPersistedDeploymentOr500(
+  res: ServerResponse,
+  logLabel: string,
+  deploymentDir: string = resolveDeploymentDir(),
+): DeploymentView | null {
   try {
     return readDeployment({ deploymentDir });
   } catch (err) {
@@ -1090,18 +1243,28 @@ function readPersistedDeploymentOr500(res: ServerResponse, logLabel: string): De
  *
  * Reads the JSON body as a ConfigSpec (structurally validated via
  * validateConfigSpecShape — a 400 for anything not shaped like
- * `{version, steps, orderedSteps?}`), reads the persisted deployment (server
- * env only — see readPersistedDeploymentOr500), builds a read-only
- * (never-signing) chain reader over RPC_URL/FOUNDRY_OUT, and runs
- * runConfigDrift() (see verify/run-config-drift.ts for the full
+ * `{version, steps, orderedSteps?}`), reads the persisted deployment for the
+ * RESOLVED network (see readPersistedDeploymentOr500), builds a read-only
+ * (never-signing) chain reader over that network's rpcUrl/FOUNDRY_OUT, and
+ * runs runConfigDrift() (see verify/run-config-drift.ts for the full
  * graceful-degradation contract: unresolvable refs and non-derivable getter
  * mappings become per-step "error"/"skipped" results, never a 500).
+ *
+ * Network selection: accepts the OPTIONAL `?network=<name>` query param (see
+ * `resolveNetworkForRequest`), mirroring `handleApplyConfig`. This MUST stay
+ * network-aware the same way the forced-re-apply write path is (issue #153
+ * security review, finding H1): drift badges gate a real one-click re-apply
+ * broadcast, so computing them against the wrong chain would let a user
+ * "fix" a mismatch that doesn't exist (or miss one that does) on the network
+ * actually being written to.
  *
  * Response: 200 `{ clean: boolean, results: ConfigDriftResultEntry[] }`.
  * Error responses (non-streaming JSON):
  *   - 413  body exceeds MAX_BODY_BYTES
- *   - 400  malformed JSON, or body not shaped like a ConfigSpec
- *   - 500  the persisted deployment could not be read
+ *   - 400  malformed JSON, body not shaped like a ConfigSpec, or an unknown
+ *          `?network=` name
+ *   - 500  network configuration could not be loaded, or the persisted
+ *          deployment could not be read
  */
 async function handleVerifyConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const bodyResult = await readAndParseBody(req, res);
@@ -1114,10 +1277,13 @@ async function handleVerifyConfig(req: IncomingMessage, res: ServerResponse): Pr
     return;
   }
 
-  const deployment = readPersistedDeploymentOr500(res, "verify/config");
+  const network = resolveNetworkForRequest(req, res);
+  if (network === undefined) return;
+
+  const deployment = readPersistedDeploymentOr500(res, "verify/config", network.config.deploymentDir);
   if (deployment === null) return;
 
-  const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+  const rpcUrl = network.config.rpcUrl;
   const outDir = process.env["FOUNDRY_OUT"] ?? DEFAULT_FOUNDRY_OUT;
 
   const addressToContractName = new Map<string, string>();
@@ -1232,13 +1398,19 @@ async function handleVerifySource(req: IncomingMessage, res: ServerResponse): Pr
  *   POST /api/verify/config   → 200 JSON { clean, results } (config-drift check)
  *   POST /api/verify/source   → 200 JSON { success, skipped, reason?, results } (Etherscan source verification)
  *
- * `GET /api/deployment`, `POST /api/simulate`, `POST /api/deploy`, and
- * `POST /api/apply-config` all accept an OPTIONAL `?network=<name>` query
- * param (see `resolveNetworkForRequest` / networks.ts) — hence routing
- * matches on `pathname` (query-string-stripped), not the raw `url`, for
- * these four. `GET /api/networks` takes no query params but is likewise
- * matched on `pathname` for consistency (harmless if a client appends one
- * anyway).
+ * `GET /api/deployment`, `POST /api/simulate`, `POST /api/deploy`,
+ * `POST /api/apply-config`, and `POST /api/verify/config` all accept an
+ * OPTIONAL `?network=<name>` query param (see `resolveNetworkForRequest` /
+ * networks.ts) — hence routing matches on `pathname` (query-string-stripped),
+ * not the raw `url`, for these five. `GET /api/networks` takes no query
+ * params but is likewise matched on `pathname` for consistency (harmless if
+ * a client appends one anyway).
+ *
+ * `POST /api/apply-config` ALSO accepts an OPTIONAL `?forceStepIds=<id1>,<id2>`
+ * query param (see `parseForceStepIds`) that forces re-execution of specific
+ * already-journaled steps — the one-click config-drift re-apply (issue #153).
+ * It is a query param rather than a body field because the whole POST body is
+ * already the config spec (see `handleApplyConfig`'s doc comment).
  */
 export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const { method, url } = req;
@@ -1340,8 +1512,12 @@ export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  if (method === "POST" && url === "/api/verify/config") {
+  if (method === "POST" && pathname === "/api/verify/config") {
     // handleVerifyConfig is async; fire-and-forget — errors are handled internally.
+    // Uses `pathname` (query-stripped), NOT `url`, because this route now
+    // accepts an optional `?network=` query param (issue #153 security
+    // review, finding H1) — matching the raw `url` would 404 any request
+    // that includes one.
     handleVerifyConfig(req, res).catch(() => {
       if (!res.headersSent) {
         writeJsonResponse(res, 500, { error: "Internal Server Error" });
